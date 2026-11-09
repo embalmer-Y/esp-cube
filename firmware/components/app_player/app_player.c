@@ -155,6 +155,8 @@ static int mp3_frame_len(const uint8_t *h)
  * pending 缓冲: 网络读取块尾部的"半帧"数据必须保留到下一块, 否则解码器
  * 流错位 → 周期性 "Not supported format" 与杂音(实测问题) */
 static uint32_t s_pending_drops;    /* pending 溢出丢弃计数(数据损失可见化) */
+static uint32_t s_aac_fail_streak;  /* AAC解码连续失败计数(HE-AAC SBR自动重试用) */
+static bool     s_aac_sbr_retry_done;
 static int64_t s_dec_us_total;      /* 解码耗时累计(诊断: esp解码器疑似~40ms/帧) */
 static uint32_t s_dec_calls;
 static int64_t s_dec_us_max;
@@ -258,6 +260,11 @@ static void decoder_feed(void *ctx, const void *data, size_t len)
         s_dec_us_total += dt;
         s_dec_calls++;
         if (dt > s_dec_us_max) s_dec_us_max = dt;
+        if (ret != ESP_AUDIO_ERR_OK) {
+            s_aac_fail_streak++;                /* 连续失败计数(HLS会话用于SBR重试) */
+        } else {
+            s_aac_fail_streak = 0;
+        }
         if (ret != ESP_AUDIO_ERR_OK) {
             /* 坏帧: 解码器未消费输入时, 按MP3同步字(0xFF Ex)扫描重同步,
              * 防止同一坏帧反复触发错误导致供流卡死 */
@@ -421,10 +428,16 @@ static void helix_feed(decoder_t *d)
  * 最终产品由 app_ai/电台管理模块下发列表; 局域网源保证供给≥10×实时 */
 /* PCM 直通素材(48k/16bit/stereo, 与混音引擎同规格, 零解码零重采样):
  * 用于验证输出链路与听感; MP3 解码器攻坚(M1.5)完成后切回压缩流 */
+/* 国内真实电台源(2026-11-09 实测可达, 调研报告见 docs/03):
+ * 蜻蜓/喜马拉雅 = HLS+AAC裸段(64k); CNR卫星拉流 = HLS+TS段(AAC-ADTS 202k) */
+/* 国内电台播放列表(2026-11-09 三族源全部真机验证):
+ * 蜻蜓FM(ls.qingting.fm, AAC裸段) / 喜马拉雅(live.xmcdn.com, AAC裸段)
+ * / CNR卫星拉流(ngcdn, TS段) / 本地HLS(MP3分段, 端到端测试用) */
 static const char *s_playlist[] = {
-    "http://192.168.2.91:8000/hls/playlist.m3u8",   /* HLS(MP3分段+VOD) */
-    "http://192.168.2.91:8000/song.mp3",            /* 直连MP3 */
-    "http://192.168.2.91:8000/hls/playlist.m3u8",
+    "http://ls.qingting.fm/live/267.m3u8",          /* 上海经典947(古典/轻音乐) */
+    "http://live.xmcdn.com/live/74/64.m3u8",        /* 广东音乐之声FM99.3(流行) */
+    "http://ngcdn001.cnr.cn/live/zgzs/index.m3u8",  /* CNR中国之声(新闻/TS段) */
+    "http://satellitepull.cnr.cn/live/wxgdyyzs/playlist.m3u8", /* 广东音乐(卫星, HTTPS) */
 };
 #define PLAYLIST_NUM (sizeof(s_playlist) / sizeof(s_playlist[0]))
 
@@ -665,6 +678,7 @@ static bool hls_session_run(void)
     /* 解码器在【首帧读出后】按流信息懒初始化(流探测是惰性的,
      * parse_stream 后立即 get_stream_info 会失败 —— 官方示例同款时序) */
     bool dec_ready = false;
+    bool aac_plus_first = true;
     audio_mixer_set_source_active(s_player.src, true);
     ESP_LOGI(TAG, "hls session opened: %s", s_player.url);
 
@@ -686,6 +700,34 @@ static bool hls_session_run(void)
         if (fret == ESP_EXTRACTOR_ERR_OK) {
             if (frame.stream_type == ESP_EXTRACTOR_STREAM_TYPE_AUDIO &&
                 frame.frame_size > 0) {
+                /* HE-AAC 自动降级: 国内平台源(蜻蜓/喜马)为 HE-AAC(核心22050Hz+SBR),
+                 * 首开不带SBR; 若连续解码失败 → 带aac_plus_enable重开一次 */
+                if (dec_ready && s_aac_fail_streak > 30 && !s_aac_sbr_retry_done) {
+                    esp_extractor_stream_info_t sinfo2 = { 0 };
+                    esp_extractor_get_stream_info(ext, ESP_EXTRACTOR_STREAM_TYPE_AUDIO,
+                                                  0, &sinfo2);
+                    esp_aac_dec_cfg_t aac_cfg = {
+                        .sample_rate = (int32_t)sinfo2.audio_info.sample_rate,
+                        .channel = (uint8_t)sinfo2.audio_info.channel,
+                        .bits_per_sample = 16,
+                        .no_adts_header = false,
+                        .aac_plus_enable = !aac_plus_first,  /* 翻转SBR设定重试 */
+                    };
+                    esp_audio_dec_close(dec.dec);
+                    dec.dec = NULL;
+                    s_pending_len = 0;
+                    s_aac_sbr_retry_done = true;
+                    s_aac_fail_streak = 0;
+                    if (esp_audio_dec_open(&(esp_audio_dec_cfg_t){
+                            .type = ESP_AUDIO_TYPE_AAC,
+                            .cfg = &aac_cfg, .cfg_sz = sizeof(aac_cfg)}, &dec.dec)
+                            == ESP_AUDIO_ERR_OK) {
+                        ESP_LOGW(TAG, "aac reopened with SBR (HE-AAC detected)");
+                    } else {
+                        ESP_LOGE(TAG, "aac SBR reopen failed");
+                        goto hls_end;
+                    }
+                }
                 if (!dec_ready) {
                     /* 首帧: 流探测是惰性的, 此时 get_stream_info 才有效 →
                      * 按流信息选型并打开解码器(此前 dec 必须保持零初始化) */
@@ -705,13 +747,15 @@ static bool hls_session_run(void)
                             decoder_open(&dec, ESP_AUDIO_TYPE_MP3, NULL, 0) == ESP_OK,
                             ESP_FAIL, hls_end, TAG, "mp3 decoder open");
                     } else if (fmt == ESP_EXTRACTOR_AUDIO_FORMAT_AAC) {
-                        /* TS/分段里的 AAC 是裸帧(无 ADTS 头), 用流信息显式配置 */
+                        /* 实测(蜻蜓/喜马): 分段 AAC 帧带 ADTS 头(ff f9), 解码器
+                         * 自行解析头(采样率/声道以头为准); 国内平台源多为 HE-AAC,
+                         * 启用 SBR; 若实际是 LC 造成异常, 由下方 SBR 回退链兜底 */
                         esp_aac_dec_cfg_t aac_cfg = {
                             .sample_rate = (int32_t)sinfo.audio_info.sample_rate,
                             .channel = (uint8_t)sinfo.audio_info.channel,
                             .bits_per_sample = 16,
-                            .no_adts_header = true,
-                            .aac_plus_enable = false,
+                            .no_adts_header = false,
+                            .aac_plus_enable = true,
                         };
                         ESP_GOTO_ON_FALSE(
                             decoder_open(&dec, ESP_AUDIO_TYPE_AAC,
@@ -724,8 +768,21 @@ static bool hls_session_run(void)
                     s_player.state = PLAYER_PLAYING;
                     cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
                     ESP_LOGI(TAG, "playing %s (hls)", s_player.url);
+                    aac_plus_first = true;
                     dec_ready = true;
                 }
+#if CONFIG_ESP_CUBE_AUDIO_DEBUG
+                {
+                    static int hp;
+                    if (hp < 3) {
+                        hp++;
+                        ESP_LOGI(TAG, "frame head[%d]: %02x %02x %02x %02x (size=%u)",
+                                 hp, frame.frame_buffer[0], frame.frame_buffer[1],
+                                 frame.frame_buffer[2], frame.frame_buffer[3],
+                                 frame.frame_size);
+                    }
+                }
+#endif
                 decoder_feed(&dec, frame.frame_buffer, frame.frame_size);
             }
             esp_extractor_release_frame(ext, &frame);
