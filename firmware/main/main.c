@@ -114,14 +114,20 @@ void app_main(void)
     }
 #endif
 
-    /* ---- 4. 音源(蓝牙 / 网络) ---- */
+    /* ---- 4. 音源(网络 / 蓝牙) ---- */
     ESP_ERROR_CHECK(app_player_init());     /* 订阅 BT 接管事件(须先于 BT 启动) */
+#if CONFIG_ESP_CUBE_ENABLE_NET
+    /* NET 先于 BT(2026-11-10 实机教训): WiFi 初始化需要大块连续内部 RAM
+     * (10×1700B 静态rx缓冲), 放在 BT(控制器+Bluedroid ~80KB)之后启动时
+     * 内存余量临界, 实机出现 malloc buffer fail → ESP_ERROR_CHECK abort
+     * → 开机循环(每秒功放"噗"声)。WiFi 需求最硬故最先初始化。
+     * 失败一律降级(蓝牙/本地仍可用), 绝不 abort。 */
+    esp_err_t nerr = app_net_start();
+    ESP_LOGI(TAG, "wifi: %s", nerr == ESP_OK ? "ok" : esp_err_to_name(nerr));
+#endif
 #if CONFIG_ESP_CUBE_ENABLE_BT
     esp_err_t berr = app_bt_start();
     ESP_LOGI(TAG, "A2DP sink: %s", berr == ESP_OK ? "ready" : esp_err_to_name(berr));
-#endif
-#if CONFIG_ESP_CUBE_ENABLE_NET
-    ESP_ERROR_CHECK(app_net_start());
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_BT && CONFIG_ESP_CUBE_ENABLE_NET
     /* 空口优先级(M1.8.4): WiFi/BT 共存调度默认均衡, 实测 A2DP 高码率流
