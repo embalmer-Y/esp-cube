@@ -15,6 +15,15 @@ extern "C" {
 /* 初始化并异步连接(不阻塞调用方) */
 esp_err_t app_net_start(void);
 
+/* BT 模式让出射频(M1.8.5): 停 WiFi(含重连抑制) / 恢复 WiFi 并重连。
+ * 由 CUBE_EVT_BT_AUDIO_ACTIVE 自动驱动; 也可显式调用。 */
+esp_err_t app_net_suspend(void);
+esp_err_t app_net_resume(void);
+
+/* STA 是否已获 IP(BT 恢复后播放器等网用) */
+bool app_net_is_up(void);
+esp_err_t app_net_wait_up(int timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif

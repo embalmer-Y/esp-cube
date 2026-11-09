@@ -7,6 +7,7 @@
  */
 #include "app_net.h"
 
+#include <stdbool.h>
 #include <esp_check.h>
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -14,6 +15,8 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "cubecore.h"
 
 static const char *TAG = "net";
@@ -24,6 +27,9 @@ static const char *TAG = "net";
 
 static esp_timer_handle_t s_reconnect_timer;
 static volatile int s_retry_count = 0;
+static volatile bool s_suspended;  /* BT 模式: WiFi 已停, 重连抑制 */
+static volatile bool s_got_ip;     /* STA 已获 IP(供播放器恢复时等待) */
+static volatile bool s_inited;
 
 /* esp_timer 回调上下文(定时器任务): 只做一次非阻塞 API 调用 */
 static void wifi_reconnect_cb(void *arg)
@@ -46,8 +52,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
                                                              : s_retry_count;
             int delay_ms = WIFI_RETRY_MS_BASE << shift;
             s_retry_count++;
-            ESP_LOGW(TAG, "disconnected, retry in %dms(#%d)", delay_ms, s_retry_count);
+            s_got_ip = false;
+            ESP_LOGW(TAG, "disconnected, retry in %dms(#%d)%s", delay_ms, s_retry_count,
+                     s_suspended ? " [suspended]" : "");
             cube_event_publish(CUBE_EVT_WIFI_DISCONNECTED, NULL, 0);
+            if (s_suspended) {
+                break;              /* BT 模式主动停网: 不安排重连 */
+            }
             /* 指数退避后重连(定时器回调, 不阻塞事件循环) */
             (void)esp_timer_stop(s_reconnect_timer);   /* 未激活时返回INVALID_STATE, 无害 */
             esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000);
@@ -60,7 +71,68 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&evt->ip_info.ip));
         s_retry_count = 0;
+        s_got_ip = true;
         cube_event_publish(CUBE_EVT_WIFI_CONNECTED, NULL, 0);
+    }
+}
+
+/* ================= BT 模式射频让渡(M1.8.5) =================
+ * 实测(用户听感+pcm flow 数据): WiFi/BT 共存调度下 A2DP 存在
+ * ①"劣化积累态"(首次卡顿后持续数秒一卡, 重连才恢复) ②3 米卡顿显著增多。
+ * 对策: BT 模式停 WiFi, 蓝牙独占射频; 断开蓝牙后重启 WiFi 并恢复电台。
+ * 代价: BT 播放期间无网络功能 —— M2 语音 AI 上线时需重新权衡
+ * (届时可做成运行时开关: "音质优先(关WiFi)" vs "AI 优先(共存)")。
+ */
+esp_err_t app_net_suspend(void)
+{
+    if (!s_inited || s_suspended) {
+        return ESP_OK;
+    }
+    s_suspended = true;
+    (void)esp_timer_stop(s_reconnect_timer);
+    esp_err_t err = esp_wifi_stop();           /* 阻塞 ~百毫秒, 事件由上方抑制 */
+    ESP_LOGI(TAG, "wifi suspended for BT (err=%s)", esp_err_to_name(err));
+    return err;
+}
+
+esp_err_t app_net_resume(void)
+{
+    if (!s_inited || !s_suspended) {
+        return ESP_OK;
+    }
+    s_suspended = false;
+    s_retry_count = 0;
+    esp_err_t err = esp_wifi_start();          /* STA_START 事件触发自动连接 */
+    ESP_LOGI(TAG, "wifi resumed (err=%s)", esp_err_to_name(err));
+    return err;
+}
+
+bool app_net_is_up(void)
+{
+    return s_got_ip;
+}
+
+esp_err_t app_net_wait_up(int timeout_ms)
+{
+    int waited = 0;
+    while (!s_got_ip && waited < timeout_ms) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        waited += 100;
+    }
+    return s_got_ip ? ESP_OK : ESP_ERR_TIMEOUT;
+}
+
+/* 事件总线订阅: BT 接管 → 停网; BT 释放 → 复网(播放器再等 IP 后恢复电台) */
+static void net_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
+{
+    (void)ctx;
+    if (id != CUBE_EVT_BT_AUDIO_ACTIVE || data == NULL || len != sizeof(bool)) {
+        return;                             /* 事件总线全量派发: 必须按 ID 过滤 */
+    }
+    if (*(const bool *)data) {
+        app_net_suspend();
+    } else {
+        app_net_resume();
     }
 }
 
@@ -108,5 +180,7 @@ esp_err_t app_net_start(void)
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
 
     ESP_LOGI(TAG, "wifi sta started, connecting to \"%s\"", CONFIG_ESP_CUBE_WIFI_SSID);
+    s_inited = true;
+    ESP_ERROR_CHECK(cube_event_subscribe(net_evt_cb, NULL));  /* BT 模式自动让渡射频 */
     return ESP_OK;
 }

@@ -25,6 +25,7 @@
                                  *   嵌入式栈过大静默崩溃(#117) 等已知问题;
                                  * - libhelix 定点实现, 社区实测 ESP32 44.1k/2ch 实时无压力 */
 #include "app_player.h"
+#include "app_net.h"       /* BT 释放后等 WiFi IP 再恢复电台 */
 
 #include <string.h>
 #include <strings.h>
@@ -134,6 +135,11 @@ static void bt_pause_gate(void)
         held = true;
     }
     if (held && !s_player.stop_req) {
+        /* BT 模式期间 WiFi 已被 app_net 停掉(BT 独占射频): 先等 IP
+         * 再重开会话, 否则首个连接烧掉宝贵的重试次数 */
+        if (app_net_wait_up(10000) != ESP_OK) {
+            ESP_LOGW(TAG, "wifi not up after BT release, retry loop will keep trying");
+        }
         audio_mixer_set_source_active(s_player.src, true);
         ESP_LOGI(TAG, "radio resumed (BT released)");
     }

@@ -47,6 +47,7 @@ static struct {
     uint32_t cb_count;          /* 数据流统计(5s 窗口) */
     uint32_t cb_bytes;
     int64_t stat_us;
+    uint32_t src_rate;          /* 当前假设的 SBC 输出采样率(协商事件自适应) */
     audio_source_handle_t src;
     cube_resampler_t rs;
     /* 重采样输入缓冲(回调上下文, BT栈任务) */
@@ -77,15 +78,21 @@ static void bt_a2d_data_cb(const uint8_t *data, uint32_t len)
         s_bt.cb_bytes = 0;
         s_bt.stat_us = now;
     }
-    size_t in_frames = len / 4;                     /* 16bit×2ch */
-    if (in_frames > BT_PCM_BUF_SAMPLES) in_frames = BT_PCM_BUF_SAMPLES;
-    memcpy(s_bt.in, data, in_frames * 4);
-
-    size_t out_frames = cube_resampler_process_stereo(
-            &s_bt.rs, s_bt.in, in_frames, s_bt.out, BT_PCM_BUF_SAMPLES);
-    if (out_frames > 0) {
-        audio_mixer_source_write(s_bt.src, s_bt.out,
-                                 out_frames * 2 * sizeof(int16_t), 0);
+    /* 分块循环: 单次回调可能 >4096B(重传聚合/大MTU), 旧实现静默截断
+     * 造成丢帧杂音; 每块 ≤1024 帧过重采样后入混音器 */
+    uint32_t frames_left = len / 4;                 /* 16bit×2ch */
+    while (frames_left > 0) {
+        size_t chunk = frames_left > BT_PCM_BUF_SAMPLES
+                       ? BT_PCM_BUF_SAMPLES : frames_left;
+        memcpy(s_bt.in, data, chunk * 4);
+        size_t out_frames = cube_resampler_process_stereo(
+                &s_bt.rs, s_bt.in, chunk, s_bt.out, BT_PCM_BUF_SAMPLES);
+        if (out_frames > 0) {
+            audio_mixer_source_write(s_bt.src, s_bt.out,
+                                     out_frames * 2 * sizeof(int16_t), 0);
+        }
+        data += chunk * 4;
+        frames_left -= chunk;
     }
 }
 
@@ -228,6 +235,29 @@ static void bt_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *user
 static void bt_a2d_evt_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
 {
     switch (event) {
+    case ESP_A2D_AUDIO_CFG_EVT: {
+        /* 编解码协商完成: 校验 SBC 采样率假设, 不符则重建重采样器
+         * (否则按错误比率换算 → 缓冲持续漂移满/空, 表现为"劣化积累,
+         * 重连才恢复"的卡顿; 事件先于数据流, 二者同在 BTC 任务无竞态) */
+        uint32_t sr = s_bt.src_rate;
+        switch (param->audio_cfg.mcc.cie.sbc_info.samp_freq) {
+        case ESP_A2D_SBC_CIE_SF_16K: sr = 16000; break;
+        case ESP_A2D_SBC_CIE_SF_32K: sr = 32000; break;
+        case ESP_A2D_SBC_CIE_SF_44K: sr = 44100; break;
+        case ESP_A2D_SBC_CIE_SF_48K: sr = 48000; break;
+        default: break;
+        }
+        if (sr != s_bt.src_rate) {
+            ESP_LOGW(TAG, "SBC negotiated %luHz != assumed %luHz, resampler re-init",
+                     (unsigned long)sr, (unsigned long)s_bt.src_rate);
+            s_bt.src_rate = sr;
+            cube_resampler_init(&s_bt.rs, (float)sr, (float)CONFIG_ESP_CUBE_MIXER_RATE);
+        } else {
+            ESP_LOGI(TAG, "A2DP SBC config: %luHz (assumption ok)",
+                     (unsigned long)sr);
+        }
+        break;
+    }
     case ESP_A2D_CONNECTION_STATE_EVT:
         if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
             s_bt.connected = true;
@@ -289,7 +319,8 @@ esp_err_t app_bt_start(void)
                                 .buffer_ms = 2000, .prefill_ms = 500 };
     s_bt.src = audio_mixer_add_source(&scfg);
     ESP_RETURN_ON_FALSE(s_bt.src != NULL, ESP_ERR_NO_MEM, TAG, "add source fail");
-    cube_resampler_init(&s_bt.rs, (float)BT_SRC_RATE, (float)CONFIG_ESP_CUBE_MIXER_RATE);
+    s_bt.src_rate = BT_SRC_RATE;                          /* 假设值, 协商事件纠正 */
+    cube_resampler_init(&s_bt.rs, (float)s_bt.src_rate, (float)CONFIG_ESP_CUBE_MIXER_RATE);
 
     /* ---- 控制器(纯经典蓝牙模式, 见 sdkconfig.defaults BTDM_CTRL_MODE) ----
      * 释放 BLE 独占内存: M1 无 BLE 需求, 给协议栈/音频腾内部 RAM */
