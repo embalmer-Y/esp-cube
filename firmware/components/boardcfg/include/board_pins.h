@@ -1,14 +1,13 @@
 /*
  * board_pins.h —— EspCube 全部引脚定义(全项目唯一引脚登记处)
  *
- * ⚠ 接线核对清单(详见 docs/03_接线与验证指南.md):
- *   [已确定] 外接屏幕: QSPI 引脚由本项目自由分配, 选用 J2 排针的
- *            SDIO 组(GPIO20-25, 疑似 GP-SPI IOMUX 域, 信号质量优);
- *            避开 strapping 引脚(GPIO33/34=USB, 36/37, 60/61)。
- *   [待核对] 板载音频(ES8311/功放/麦克风)的 GPIO 由开发板内部走线决定,
- *            以下带 ⚠ 的值基于乐鑫官方 ESP32-S31-Function-CoreBoard-1
- *            用户指南的常见布线习惯给出, 首次点亮前必须对照官方用户指南
- *            原理图核对后修改! I2C 总线可通过 i2c_scanner 快速验证。
+ * ✅ 2026-11-10 全面重核(官方 J2 表 + 原理图 PDF, 用户实物核对触发):
+ *   - 板上唯一 GPIO 排针 = J2(CON20X2, 40P)。GPIO20-25 是 SDIO 复用脚,
+ *     丝印为 D0/D1/D2/D3/CLK/CMD(非数字), 且连着板上 SD 卡座 → 弃用,
+ *     改用完全空闲且丝印为纯数字的 GPIO40/42/46-49 + 38/39。
+ *   - 板载音频 GPIO50-57 为 Codec 专线(不在排针上), 实机已验证, 不动。
+ *   - U0TXD=GPIO58 / U0RXD=GPIO59 / BOOT=GPIO61 / RGB LED=GPIO60(勿占用)。
+ *   详见 docs/03_接线与验证指南.md §2。
  */
 #pragma once
 
@@ -18,22 +17,24 @@
 extern "C" {
 #endif
 
-/* ===================== QSPI AMOLED(鱼鹰光电 2寸 460x460, CO5300) ===================== */
-#define BOARD_LCD_HOST           SPI2_HOST        /* GP-SPI2 */
-#define BOARD_PIN_LCD_CLK        GPIO_NUM_20      /* QSPI 时钟 */
-#define BOARD_PIN_LCD_CS         GPIO_NUM_21      /* QSPI 片选 */
-#define BOARD_PIN_LCD_D0         GPIO_NUM_22      /* QSPI 数据 0 (IO0) */
-#define BOARD_PIN_LCD_D1         GPIO_NUM_23      /* QSPI 数据 1 (IO1) */
-#define BOARD_PIN_LCD_D2         GPIO_NUM_24      /* QSPI 数据 2 (IO2) */
-#define BOARD_PIN_LCD_D3         GPIO_NUM_25      /* QSPI 数据 3 (IO3) */
-#define BOARD_PIN_LCD_RST        GPIO_NUM_38      /* 面板复位(高有效运行) */
-#define BOARD_PIN_LCD_TE         GPIO_NUM_39      /* Tearing Effect 同步(可选) */
+/* ===================== QSPI AMOLED(鱼鹰光电 2寸 460x460, CO5300) =====================
+ * 8 根信号全部集中在 J2 排针(pins 11/13/14/16/19/20/21/22), 丝印即数字 */
+#define BOARD_LCD_HOST           SPI2_HOST        /* GP-SPI2, 经 GPIO 矩阵路由 */
+#define BOARD_PIN_LCD_CLK        GPIO_NUM_42      /* J2-20(丝印 42) QSPI 时钟 */
+#define BOARD_PIN_LCD_CS         GPIO_NUM_40      /* J2-19(丝印 40) QSPI 片选 */
+#define BOARD_PIN_LCD_D0         GPIO_NUM_46      /* J2-16(丝印 46) 数据 IO0 */
+#define BOARD_PIN_LCD_D1         GPIO_NUM_47      /* J2-13(丝印 47) 数据 IO1 */
+#define BOARD_PIN_LCD_D2         GPIO_NUM_48      /* J2-14(丝印 48) 数据 IO2 */
+#define BOARD_PIN_LCD_D3         GPIO_NUM_49      /* J2-11(丝印 49) 数据 IO3 */
+#define BOARD_PIN_LCD_RST        GPIO_NUM_38      /* J2-22(丝印 38) 面板复位 */
+#define BOARD_PIN_LCD_TE         GPIO_NUM_39      /* J2-21(丝印 39) TE 同步(可选) */
 
-/* 触摸(带触摸批次启用, CST9220 族, I2C) */
-#define BOARD_PIN_TP_SDA         GPIO_NUM_41
-#define BOARD_PIN_TP_SCL         GPIO_NUM_42
-#define BOARD_PIN_TP_RST         GPIO_NUM_40
-#define BOARD_PIN_TP_INT         GPIO_NUM_35
+/* 触摸(带触摸批次启用, CST9220 族, I2C —— 占位: 屏幕批次无触摸;
+ * 注意避开 LCD 已占用的 40/42, 届时用空闲 GPIO 重排) */
+#define BOARD_PIN_TP_SDA         GPIO_NUM_43
+#define BOARD_PIN_TP_SCL         GPIO_NUM_44
+#define BOARD_PIN_TP_RST         GPIO_NUM_45
+#define BOARD_PIN_TP_INT         GPIO_NUM_2
 
 /* ===================== 板载音频(ES8311 + NS4150B + 模拟麦克风) =====================
  * ✅ 已核对: 来自乐鑫官方 esp32-s31-function-coreboard-1-schematics.pdf(2026-05-13, v1.0)
