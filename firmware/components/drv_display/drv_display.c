@@ -17,6 +17,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_co5300.h"          /* espressif/esp_lcd_co5300 组件 */
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "driver/spi_master.h"
 #include "board_pins.h"
 #include "esp_log.h"
@@ -26,6 +27,26 @@ static const char *TAG = "drv_display";
 static esp_lcd_panel_io_handle_t s_io = NULL;
 static esp_lcd_panel_handle_t s_panel = NULL;
 static drv_display_cfg_t s_cfg;
+
+/* 鱼鹰 AM200Q460460FLS1 官方初始化序列(2026-11-10 首亮攻坚):
+ * 组件默认序列按乐鑫自家 480x480 屏写(CASET 6..477/PASET 0..465),
+ * 与本面板不符。以下逐字节照搬鱼鹰 ESP32-S3 QSPI 例程:
+ * gitee.com/osptek/display-amoled-2inch-460x460 examples/
+ * esp32s3-idf5-co5300-qspi-lvgl-adapter-lvgl9/main/co5300_init_cmds.h */
+static const co5300_lcd_init_cmd_t s_osptek_init[] = {
+    {0xFE, (const uint8_t[]){0x00}, 1, 0},
+    {0x11, NULL, 0, 120},                   /* SLPOUT */
+    {0xFE, (const uint8_t[]){0x00}, 1, 0},
+    {0xC4, (const uint8_t[]){0x80}, 1, 0},
+    {0x3A, (const uint8_t[]){0x55}, 1, 0},  /* RGB565 */
+    {0x53, (const uint8_t[]){0x20}, 1, 0},  /* 显控开(无此命令屏不亮) */
+    {0x63, (const uint8_t[]){0xFF}, 1, 0},
+    {0x2A, (const uint8_t[]){0x00, 0x00, 0x01, 0xBF}, 4, 0},   /* CASET */
+    {0x2B, (const uint8_t[]){0x00, 0x00, 0x01, 0x6F}, 4, 0},   /* PASET */
+    {0x29, NULL, 0, 60},                    /* DISPON */
+    {0x51, (const uint8_t[]){0x00}, 1, 0},  /* 亮度(例程原值 0, UI 接管后设置) */
+    {0x58, (const uint8_t[]){0x07}, 1, 10},
+};
 
 esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
 {
@@ -38,7 +59,7 @@ esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
     /* ---- 1. RST/TE GPIO 初始化 ---- */
     const gpio_config_t rst_cfg = {
         .pin_bit_mask = 1ULL << BOARD_PIN_LCD_RST,
-        .mode = GPIO_MODE_OUTPUT_OD,    /* 开漏, 外部上拉, 面板不接时也不损伤 */
+        .mode = GPIO_MODE_OUTPUT,       /* 推挽(首亮期比开漏驱动更可靠) */
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };
     gpio_config(&rst_cfg);
@@ -65,14 +86,16 @@ esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BOARD_LCD_HOST,
                                                  &io_cfg, &s_io), TAG, "new panel IO failed");
 
-    /* ---- 3. 面板驱动对象(组件内置厂商初始化序列) ---- */
+    /* ---- 3. 面板驱动对象 ---- */
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num = BOARD_PIN_LCD_RST,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,           /* RGB565 */
     };
-    /* 厂商配置: 声明 QSPI 接口模式(组件按此切换命令集) */
+    /* 厂商配置: QSPI 接口 + 鱼鹰面板初始化序列(见文件头 s_osptek_init) */
     static co5300_vendor_config_t vendor_cfg = {
+        .init_cmds = s_osptek_init,
+        .init_cmds_size = sizeof(s_osptek_init) / sizeof(s_osptek_init[0]),
         .flags.use_qspi_interface = 1,
     };
     panel_cfg.vendor_config = &vendor_cfg;
@@ -82,6 +105,28 @@ esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
     ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
     esp_lcd_panel_disp_on_off(s_panel, true);
+
+    /* ---- 4. 首亮测试帧(纯红, PSRAM 直接 DMA) ----
+     * 判读: 红=链路通; 蓝=RGB565 字节序反(swap_bytes); 黑=数据未到面板
+     * (查接线/电源/地)。首亮验收后可移除。 */
+    {
+        size_t fb_bytes = (size_t)cfg->h_res * cfg->v_res * 2;
+        uint16_t *test_fb = heap_caps_aligned_alloc(64, fb_bytes,
+                                                    MALLOC_CAP_SPIRAM);
+        if (test_fb != NULL) {
+            for (size_t i = 0; i < cfg->h_res * cfg->v_res; i++) {
+                test_fb[i] = 0xF800;            /* RGB565 纯红 */
+            }
+            esp_err_t dret = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
+                                                       cfg->h_res - 1, cfg->v_res - 1,
+                                                       test_fb);
+            ESP_LOGI(TAG, "first-light test frame (red): %s",
+                     dret == ESP_OK ? "sent" : esp_err_to_name(dret));
+            heap_caps_free(test_fb);
+        } else {
+            ESP_LOGW(TAG, "test frame alloc fail (%u bytes)", (unsigned)fb_bytes);
+        }
+    }
 
     ESP_LOGI(TAG, "CO5300 QSPI AMOLED ready: %dx%d @%dHz",
              cfg->h_res, cfg->v_res, cfg->pixel_clock_hz);

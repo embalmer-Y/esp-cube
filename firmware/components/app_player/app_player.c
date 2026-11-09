@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include <esp_timer.h>
 #include "esp_http_client.h"
@@ -56,6 +57,7 @@ static const char *TAG = "player";
 
 #define PLAYER_MAX_RETRIES      5       /* 单次启播最大重连次数 */
 #define PLAYER_RETRY_STEP_MS    1000    /* 重连退避步进(线性: step×次数) */
+#define PLAYER_TASK_STACK       12288   /* 播放任务栈(字节; PSRAM 静态分配) */
 
 #define FEED_BUF_SIZE    4096                    /* 网络读块 */
 #define PCM_BUF_FRAMES   2048                    /* 解码输出缓冲(帧, 覆盖MP3/AAC最大帧) */
@@ -975,9 +977,28 @@ esp_err_t app_player_start(const char *url)
     strncpy(s_player.url, url, sizeof(s_player.url) - 1);
     s_player.stop_req = false;
     /* 解码任务放 core1: core0 被 mixer(20)/WiFi(23)/BT(23+) 高优任务占据,
-     * 解码(prio12)在 core0 抢不到 CPU → 实测供给仅 0.5×实时(40ms/帧) */
-    if (xTaskCreatePinnedToCore(player_task, "player", 12288, NULL, 12,
-                                &s_player.task, 1) != pdPASS) {
+     * 解码(prio12)在 core0 抢不到 CPU → 实测供给仅 0.5×实时(40ms/帧)。
+     * 栈放 PSRAM(静态创建, 2026-11-10): UI/LVGL 引入后内部 RAM 仅剩
+     * ~15KB 且碎片化, 动态创建 12KB 栈失败 → 电台无声; 网络/解码任务
+     * 对栈访问延迟不敏感, PSRAM 栈可行(SPIRAM_ALLOW_STACK_EXTERNAL=y)。
+     * 双槽轮换: 静态任务自删除后 TCB 须待 idle 清理, 立即复用同槽有
+     * 链表损坏风险; 轮换保证复用时 idle 必已处理(切台间隔远大于调度期)。 */
+    static StackType_t *s_stacks[2];
+    static StaticTask_t s_tcbs[2];
+    static int s_slot;
+    s_slot ^= 1;
+    if (s_stacks[s_slot] == NULL) {
+        s_stacks[s_slot] = heap_caps_malloc(PLAYER_TASK_STACK * sizeof(StackType_t),
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        ESP_RETURN_ON_FALSE(s_stacks[s_slot] != NULL, ESP_ERR_NO_MEM, TAG,
+                            "stack alloc(psram) fail");
+    }
+    s_player.task = xTaskCreateStaticPinnedToCore(
+            player_task, "player", PLAYER_TASK_STACK, NULL, 12,
+            s_stacks[s_slot], &s_tcbs[s_slot], 1);
+    if (s_player.task == NULL) {
+        ESP_LOGE(TAG, "player task create fail: internal free=%u",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         return ESP_FAIL;
     }
     return ESP_OK;
