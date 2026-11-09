@@ -14,21 +14,16 @@
 #include "esp_netif.h"
 #include "esp_event.h"
 #include "nvs_flash.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "cubecore.h"
 
 static const char *TAG = "net";
 
-#define WIFI_CONNECTED_BIT  BIT0
 /* 与蓝牙共存: 稍缓的重连节奏, 避免初始化风暴挤占 2.4G */
 #define WIFI_RETRY_MS_BASE  2000
 #define WIFI_RETRY_MAX_SHIFT 4      /* 最大退避 = 基准 × 2^4 = 32s */
 
-static EventGroupHandle_t s_evt_group;
 static esp_timer_handle_t s_reconnect_timer;
 static volatile int s_retry_count = 0;
-static volatile bool s_got_ip = false;
 
 /* esp_timer 回调上下文(定时器任务): 只做一次非阻塞 API 调用 */
 static void wifi_reconnect_cb(void *arg)
@@ -47,16 +42,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             esp_wifi_connect();             /* 事件驱动首次连接 */
             break;
         case WIFI_EVENT_STA_DISCONNECTED: {
-            s_got_ip = false;
-            int shift = s_retry_count > WIFI_RETRY_MAX_SHIFT ? WIFI_RETRY_MAX_SHIFT
+                int shift = s_retry_count > WIFI_RETRY_MAX_SHIFT ? WIFI_RETRY_MAX_SHIFT
                                                              : s_retry_count;
             int delay_ms = WIFI_RETRY_MS_BASE << shift;
             s_retry_count++;
             ESP_LOGW(TAG, "disconnected, retry in %dms(#%d)", delay_ms, s_retry_count);
-            xEventGroupClearBits(s_evt_group, WIFI_CONNECTED_BIT);
             cube_event_publish(CUBE_EVT_WIFI_DISCONNECTED, NULL, 0);
             /* 指数退避后重连(定时器回调, 不阻塞事件循环) */
-            esp_timer_stop(s_reconnect_timer);
+            (void)esp_timer_stop(s_reconnect_timer);   /* 未激活时返回INVALID_STATE, 无害 */
             esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000);
             break;
         }
@@ -67,8 +60,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip: " IPSTR, IP2STR(&evt->ip_info.ip));
         s_retry_count = 0;
-        s_got_ip = true;
-        xEventGroupSetBits(s_evt_group, WIFI_CONNECTED_BIT);
         cube_event_publish(CUBE_EVT_WIFI_CONNECTED, NULL, 0);
     }
 }
@@ -81,9 +72,6 @@ esp_err_t app_net_start(void)
         ESP_RETURN_ON_ERROR(nvs_flash_erase(), TAG, "nvs erase");
         ESP_RETURN_ON_ERROR(nvs_flash_init(), TAG, "nvs init");
     }
-
-    s_evt_group = xEventGroupCreate();
-    ESP_RETURN_ON_FALSE(s_evt_group != NULL, ESP_ERR_NO_MEM, TAG, "evt group");
 
     const esp_timer_create_args_t timer_args = {
         .callback = wifi_reconnect_cb,
@@ -119,9 +107,4 @@ esp_err_t app_net_start(void)
 
     ESP_LOGI(TAG, "wifi sta started, connecting to \"%s\"", CONFIG_ESP_CUBE_WIFI_SSID);
     return ESP_OK;
-}
-
-bool app_net_is_up(void)
-{
-    return s_got_ip;
 }

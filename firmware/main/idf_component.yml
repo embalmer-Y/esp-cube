@@ -13,10 +13,7 @@ dependencies:
   espressif/esp_audio_codec: "^2.6.0"
   # WebSocket 客户端(M2: xiaozhi 协议 / GLM-Realtime)
   espressif/esp_websocket_client: "^1.4.0"
-  # MP3 定点解码器(libhelix): esp_audio_codec 的 MP3 即闭源 minimp3,
-  # S31 上 23ms/帧(仅1.1x实时)+吞帧66%; libhelix 实测快一个量级(调研结论,
-  # 见 esp-adf-libs #85/#75 与 minimp3 #141/#117)
-  chmorgan/esp-libhelix-mp3: "^1.0.3"
+  # MP3 解码已 vendor 至 components/mp3_helix(-O3 编译), 不再用 registry 组件
   ## 里程碑2启用: esp-sr(唤醒词/AFE/AEC/MultiNet; 含模型二进制, 体积较大)
   ## 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / CONFIG_ESP_CUBE_ENABLE_AI
   # espressif/esp-sr: "^2.6.0"

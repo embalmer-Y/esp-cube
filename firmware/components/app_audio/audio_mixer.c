@@ -25,10 +25,10 @@ static const char *TAG = "mixer";
 
 /* ---- 常量(与设计文档 §3.1 契约一致) ---- */
 #define MIX_FRAME_MS            10
-#define MIX_MAX_SOURCES         4
 #define MIX_DUCK_DOWN_TICKS     30      /* 30×10ms = 300ms 下降 */
 #define MIX_DUCK_UP_TICKS       50      /* 50×10ms = 500ms 恢复 */
 #define MIX_DUCK_GAIN_Q15       6553    /* -14dB ≈ 0.2 */
+#define MIX_HEALTH_PERIOD_TICKS 1000    /* 健康心跳周期(×10ms = 10s) */
 
 /* ---- 音源对象 ---- */
 struct audio_source {
@@ -64,7 +64,7 @@ static struct {
 } s_mixer;
 
 /* 音源链表保护: add_source(生产侧)与混音任务遍历跨核并发。
- * 节点创建后永不释放(remove_source 未在运行时使用), 因此遍历侧只需
+ * 节点创建后永不释放(无 remove 接口, 见 audio_mixer.h), 因此遍历侧只需
  * 对【链表头快照】加临界区即可安全; 节点内部字段由各自使用方串行访问。 */
 static portMUX_TYPE s_list_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -126,22 +126,6 @@ audio_source_handle_t audio_mixer_add_source(const audio_source_cfg_t *cfg)
     s_mixer.sources = s;
     portEXIT_CRITICAL(&s_list_mux);
     return s;
-}
-
-void audio_mixer_remove_source(audio_source_handle_t *src)
-{
-    if (src == NULL || *src == NULL) return;
-    struct audio_source **pp = &s_mixer.sources;
-    while (*pp) {
-        if (*pp == *src) {
-            *pp = (*src)->next;
-            cube_ringbuf_destroy((*src)->rb);
-            free(*src);
-            *src = NULL;
-            return;
-        }
-        pp = &(*pp)->next;
-    }
 }
 
 size_t audio_mixer_source_write(audio_source_handle_t src,
@@ -276,7 +260,7 @@ static void mixer_tick(void)
     /* ---- 健康心跳(10秒一次, 非门控): 运行状态低频可观测 ---- */
     {
         static int hb_cnt;
-        if (++hb_cnt >= 1000) {
+        if (++hb_cnt >= MIX_HEALTH_PERIOD_TICKS) {
             hb_cnt = 0;
             int16_t peak = 0;
             for (int i = 0; i < frames * s_mixer.cfg.channels; i++) {

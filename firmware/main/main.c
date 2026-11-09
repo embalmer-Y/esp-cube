@@ -38,14 +38,25 @@
 
 static const char *TAG = "main";
 
+/* WiFi 就绪 → 启动播放列表(一次性任务: app_player_start 内含停止等待,
+ * 不可在事件循环任务里同步调用 —— 会阻塞所有事件分发) */
+static void player_start_task(void *arg)
+{
+    (void)arg;
+    app_player_start(NULL);         /* 无参 = 播放列表轮播 */
+    vTaskDelete(NULL);
+}
+
 /* ---- 演示事件观察者(仅日志; 正式功能由各模块自行订阅) ---- */
 static void demo_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)data; (void)len; (void)ctx;
     if (id == CUBE_EVT_WIFI_CONNECTED) {
         ESP_LOGI(TAG, "EVT: WiFi connected");
-        /* WiFi 就绪 → 播放默认电台(音频链路端到端验证入口) */
-        app_player_start(NULL);     /* 无参 = 播放列表轮播 */
+        BaseType_t r = xTaskCreate(player_start_task, "pstart", 4096, NULL, 8, NULL);
+        if (r != pdPASS) {
+            ESP_LOGE(TAG, "player start task create failed");
+        }
     }
 }
 

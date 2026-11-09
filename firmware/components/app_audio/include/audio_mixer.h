@@ -45,7 +45,7 @@ void audio_mixer_stop(void);
 
 /* ============ 音源管理 ============ */
 audio_source_handle_t audio_mixer_add_source(const audio_source_cfg_t *cfg);
-void audio_mixer_remove_source(audio_source_handle_t *src);
+/* 注: 音源节点创建后运行期不释放(无 remove 接口), 移除需整体 audio_mixer_stop 后重建 */
 
 /* 生产者推入 PCM(交错 int16, 已是主时钟采样率);返回实际接收字节数
  * 环形缓冲满时丢弃新数据(保护已缓冲内容), 返回值告知调用方 */

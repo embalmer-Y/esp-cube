@@ -45,6 +45,9 @@
 
 static const char *TAG = "player";
 
+#define PLAYER_MAX_RETRIES      5       /* 单次启播最大重连次数 */
+#define PLAYER_RETRY_STEP_MS    1000    /* 重连退避步进(线性: step×次数) */
+
 #define FEED_BUF_SIZE    4096                    /* 网络读块 */
 #define PCM_BUF_FRAMES   2048                    /* 解码输出缓冲(帧, 覆盖MP3/AAC最大帧) */
 
@@ -82,7 +85,6 @@ typedef struct {
     bool info_valid;
     cube_resampler_t rs;
     bool resample_needed;
-    bool first_peak_logged;
     bool is_mp3;            /* MP3: libhelix 定点解码路径 */
     bool is_raw;            /* RAW PCM 直通(无解码) */
     HMP3Decoder mp3;        /* libhelix 解码器句柄 */
@@ -488,7 +490,7 @@ static void player_task(void *arg)
     s_player.state = PLAYER_CONNECTING;
     cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
 
-    while (!s_player.stop_req && retries < 5) {
+    while (!s_player.stop_req && retries < PLAYER_MAX_RETRIES) {
         esp_http_client_config_t http_cfg = {
             .url = s_player.url,
             .timeout_ms = 6000,
@@ -508,7 +510,7 @@ static void player_task(void *arg)
             ESP_LOGW(TAG, "connect failed(%s), retry %d", esp_err_to_name(err), retries + 1);
             esp_http_client_cleanup(http);
             retries++;
-            vTaskDelay(pdMS_TO_TICKS(2000 * retries));      /* 线性退避 */
+            vTaskDelay(pdMS_TO_TICKS(PLAYER_RETRY_STEP_MS * 2 * retries));
             continue;
         }
         esp_http_client_fetch_headers(http);        /* 触发 ON_HEADER 事件流 */
@@ -562,11 +564,23 @@ static void player_task(void *arg)
                 break;
             }
             icy_feed_chunk(&icy, feed, (size_t)n, decoder_feed_sink, &dec);
+#if CONFIG_ESP_CUBE_AUDIO_DEBUG
+            {
+                static int probe;
+                if (++probe >= 40) {
+                    probe = 0;
+                    ESP_LOGI(TAG, "probe: dec_calls=%u dec_avg=%lldus pending=%u",
+                             (unsigned)s_dec_calls,
+                             s_dec_calls ? s_dec_us_total / s_dec_calls : 0,
+                             (unsigned)s_pending_len);
+                }
+            }
+#endif
         }
 
         /* ---- 清理本次连接 ---- */
         if (s_dec_calls > 0) {
-            ESP_LOGW(TAG, "decode timing: calls=%u avg=%lldus max=%lldus",
+            ESP_LOGD(TAG, "decode timing: calls=%u avg=%lldus max=%lldus",
                      s_dec_calls, s_dec_us_total / s_dec_calls, s_dec_us_max);
         }
         s_dec_us_total = 0; s_dec_calls = 0; s_dec_us_max = 0;
@@ -598,7 +612,7 @@ static void player_task(void *arg)
                 ESP_LOGW(TAG, "stream ended, reconnecting...");
                 retries++;
             }
-            vTaskDelay(pdMS_TO_TICKS(1000 * (retries > 0 ? retries : 1)));
+            vTaskDelay(pdMS_TO_TICKS(PLAYER_RETRY_STEP_MS * (retries > 0 ? retries : 1)));
         }
     }
 

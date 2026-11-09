@@ -15,9 +15,6 @@ extern "C" {
 /* 初始化并异步连接(不阻塞调用方) */
 esp_err_t app_net_start(void);
 
-/* 是否已获取 IP */
-bool app_net_is_up(void);
-
 #ifdef __cplusplus
 }
 #endif
