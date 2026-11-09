@@ -14,6 +14,8 @@ dependencies:
   # WebSocket 客户端(M2: xiaozhi 协议 / GLM-Realtime)
   espressif/esp_websocket_client: "^1.4.0"
   # MP3 解码已 vendor 至 components/mp3_helix(-O3 编译), 不再用 registry 组件
+  # HLS 直播/点播协议栈(国内电台主流): m3u8 解析/分段调度/AES-128 解密
+  espressif/esp_hls_stream: "^1.0.4"
   ## 里程碑2启用: esp-sr(唤醒词/AFE/AEC/MultiNet; 含模型二进制, 体积较大)
   ## 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / CONFIG_ESP_CUBE_ENABLE_AI
   # espressif/esp-sr: "^2.6.0"

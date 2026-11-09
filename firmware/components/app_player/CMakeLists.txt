@@ -2,6 +2,6 @@
 idf_component_register(
     SRCS "app_player.c" "icy_stream.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES cubecore app_audio espressif__esp_audio_codec mp3_helix esp_timer
+    PRIV_REQUIRES cubecore app_audio espressif__esp_audio_codec mp3_helix espressif__esp_hls_stream espressif__esp_extractor espressif__gmf_core espressif__gmf_io espressif__media_lib_sal esp_timer
         esp_http_client esp-tls
 )
