@@ -61,6 +61,9 @@ static void bt_a2d_data_cb(const uint8_t *data, uint32_t len)
     if (!s_bt.first_data_logged) {
         s_bt.first_data_logged = true;
         ESP_LOGI(TAG, "A2DP first audio data: %u bytes (stream flowing)", (unsigned)len);
+        /* 首次音频数据 = 手机真在放歌: 通知播放器让出电台(事件总线解耦) */
+        bool active = true;
+        cube_event_publish(CUBE_EVT_BT_AUDIO_ACTIVE, &active, sizeof(active));
     }
     size_t in_frames = len / 4;                     /* 16bit×2ch */
     if (in_frames > BT_PCM_BUF_SAMPLES) in_frames = BT_PCM_BUF_SAMPLES;
@@ -223,6 +226,8 @@ static void bt_a2d_evt_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
         } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
             s_bt.connected = false;
             ESP_LOGI(TAG, "A2DP disconnected");
+            bool active = false;
+            cube_event_publish(CUBE_EVT_BT_AUDIO_ACTIVE, &active, sizeof(active));
             cube_event_publish(CUBE_EVT_BT_DISCONNECTED, NULL, 0);
         }
         break;

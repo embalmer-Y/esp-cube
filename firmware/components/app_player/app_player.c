@@ -66,6 +66,7 @@ static struct {
     app_player_state_t state;
     TaskHandle_t task;
     volatile bool stop_req;
+    volatile bool bt_pause;                     /* BT 音乐接管: 挂起电台供流 */
     audio_source_handle_t src;
     /* HTTP 响应头捕获(HTTP_EVENT_ON_HEADER 上下文写入) */
     char content_type[64];
@@ -86,7 +87,57 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
     return ESP_OK;
 }
 
-/* ================= 解码器封装 ================= */
+/* ================= BT 音乐接管(电台让路) =================
+ * 手机蓝牙放歌时电台挂起, A2DP 断开后原地恢复(不拆任务/不换台)。
+ * 语义: 以"真实音频数据流入"为准(仅配对不触发), 以断开为恢复时机。
+ * 订阅回调可能在 BT 栈任务上下文执行 → 只做 volatile 写, 所有实际
+ * 动作(停读/关源/恢复)都由播放任务在 bt_pause_gate() 内完成。
+ */
+static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
+{
+    (void)ctx;
+    if (id != CUBE_EVT_BT_AUDIO_ACTIVE || data == NULL || len != sizeof(bool)) {
+        return;                             /* 事件总线全量派发: 必须按 ID 过滤 */
+    }
+    if (s_player.state == PLAYER_IDLE) {
+        return;                             /* 电台未运行: 无可让路, 也不登记暂停 */
+    }
+    bool active = *(const bool *)data;
+    if (active && !s_player.bt_pause) {
+        ESP_LOGI(TAG, "BT audio active -> radio suspend");
+    }
+    s_player.bt_pause = active;
+}
+
+esp_err_t app_player_init(void)
+{
+    static bool inited;
+    if (inited) {
+        return ESP_OK;
+    }
+    inited = true;
+    return cube_event_subscribe(player_evt_cb, NULL);
+}
+
+/* 播放任务内调用: BT 暂停期间在此驻留(不读网络→TCP背压, 不供混音器)。
+ * 恢复时重开源通道并返回; 暂停期间连接被服务器断开属预期(直播服务器
+ * 踢空闲连接), 由外层循环以"零失败"重开会话。 */
+static void bt_pause_gate(void)
+{
+    if (!s_player.bt_pause || s_player.src == NULL) {
+        return;
+    }
+    audio_mixer_set_source_active(s_player.src, false);
+    bool held = false;
+    while (s_player.bt_pause && !s_player.stop_req) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        held = true;
+    }
+    if (held && !s_player.stop_req) {
+        audio_mixer_set_source_active(s_player.src, true);
+        ESP_LOGI(TAG, "radio resumed (BT released)");
+    }
+}
 typedef struct {
     esp_audio_dec_handle_t dec;
     esp_audio_dec_info_t info;
@@ -556,6 +607,7 @@ static bool direct_stream_run(void)
     icy_state_t icy;
     icy_reset(&icy, s_player.icy_metaint);
     while (!s_player.stop_req) {
+        bt_pause_gate();                    /* BT 音乐接管: 挂起读流与供流 */
         int n = esp_http_client_read(http, (char *)feed, FEED_BUF_SIZE);
         total_read += (n > 0) ? n : 0;
         read_calls++;
@@ -684,6 +736,7 @@ static bool hls_session_run(void)
 
     /* ---- 帧循环: extractor 帧输出 → 解码 → 推混音器 ---- */
     while (!s_player.stop_req) {
+        bt_pause_gate();                    /* BT 音乐接管: 挂起读帧与供流 */
         esp_extractor_frame_info_t frame = { 0 };
         esp_extractor_err_t fret = esp_extractor_read_frame(ext, &frame);
 #if CONFIG_ESP_CUBE_AUDIO_DEBUG
@@ -846,6 +899,7 @@ static void player_task(void *arg)
     cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
 
     while (!s_player.stop_req && retries < PLAYER_MAX_RETRIES) {
+        bt_pause_gate();                    /* BT 接管期间在此驻留, 恢复后重开会话 */
         /* 按 URL 协议分派: m3u8 → HLS; 其余 → HTTP/ICY 直连 */
         bool eof_ok = strstr(s_player.url, ".m3u8")
                       ? hls_session_run()
@@ -853,6 +907,12 @@ static void player_task(void *arg)
         audio_mixer_set_source_active(s_player.src, false);
 
         if (!s_player.stop_req) {
+            /* BT 暂停期间会话被服务器断开属预期(踢空闲连接): 不计失败,
+             * 回到循环顶部的 gate 驻留, 直到 BT 释放后重开会话 */
+            if (s_player.bt_pause) {
+                retries = 0;
+                continue;
+            }
             /* EOF → 播放列表轮播下一首; 读取错误 → 原地重试同一URL */
             if (s_player.playlist_idx >= 0 && eof_ok) {
                 s_player.playlist_idx = (s_player.playlist_idx + 1) % PLAYLIST_NUM;
@@ -892,7 +952,9 @@ esp_err_t app_player_start(const char *url)
         audio_source_cfg_t scfg = {
             .name = "net",
             .type = AUDIO_SRC_NET,
-            .buffer_ms = 4000,      /* 4秒 PSRAM 环形缓冲(1.5MB): 吸收网络长时间停顿 */
+            .buffer_ms = 10000,     /* 10秒 PSRAM 环形缓冲(~2MB): 实测直播边缘下
+                                     * 4s 缓冲会被"分段发布等待"击穿(net_buf 周期性
+                                     * 归零→约3分钟一次的1秒卡顿), 见 docs/03 */
             .prefill_ms = CONFIG_ESP_CUBE_NET_PREFILL_MS,
             .blocking = true,       /* 播放任务可阻塞, 按实时节奏供给混音器 */
         };

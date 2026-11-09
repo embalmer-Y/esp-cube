@@ -114,6 +114,7 @@ void app_main(void)
 #endif
 
     /* ---- 4. 音源(蓝牙 / 网络) ---- */
+    ESP_ERROR_CHECK(app_player_init());     /* 订阅 BT 接管事件(须先于 BT 启动) */
 #if CONFIG_ESP_CUBE_ENABLE_BT
     esp_err_t berr = app_bt_start();
     ESP_LOGI(TAG, "A2DP sink: %s", berr == ESP_OK ? "ready" : esp_err_to_name(berr));

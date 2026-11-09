@@ -30,6 +30,7 @@ typedef enum {
     CUBE_EVT_BT_DISCONNECTED,
     CUBE_EVT_BT_META,        /* AVRCP 元数据, payload: cube_bt_meta_t */
     CUBE_EVT_BT_PLAY_STATE,  /* payload: bool(是否播放中) */
+    CUBE_EVT_BT_AUDIO_ACTIVE, /* BT音频流入=true(首次数据) / A2DP断开=false, payload: bool */
     /* 播放器 */
     CUBE_EVT_PLAYER_STATE,   /* payload: int(app_player_state_t) */
     CUBE_EVT_STREAM_TITLE,   /* ICY StreamTitle, payload: char*(临时) */

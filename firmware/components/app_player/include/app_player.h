@@ -24,6 +24,9 @@ typedef enum {
 /* 开始播放(url 为 http/https 流地址);已在播放时先切换 */
 esp_err_t app_player_start(const char *url);
 
+/* 初始化(订阅 BT 接管事件);幂等, 须在 app_bt_start 之前调用 */
+esp_err_t app_player_init(void);
+
 /* 停止播放 */
 esp_err_t app_player_stop(void);
 
