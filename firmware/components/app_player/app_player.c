@@ -485,10 +485,12 @@ static void helix_feed(decoder_t *d)
  * 蜻蜓FM(ls.qingting.fm, AAC裸段) / 喜马拉雅(live.xmcdn.com, AAC裸段)
  * / CNR卫星拉流(ngcdn, TS段) / 本地HLS(MP3分段, 端到端测试用) */
 static const char *s_playlist[] = {
-    "http://ls.qingting.fm/live/267.m3u8",          /* 上海经典947(古典/轻音乐) */
+    /* [0] 失真A/B测试台(M1.8.3): 202k AAC-LC TS段, 无SBR。若此台干净而
+     * [1] 仍失真 → 坐实蜻蜓64k HE-AAC源质量, 非解码器问题; A/B 结束后调回 */
+    "http://satellitepull.cnr.cn/live/wxgdyyzs/playlist.m3u8", /* 广东音乐之声(卫星,HTTPS) */
+    "http://ls.qingting.fm/live/267.m3u8",          /* 上海经典947(64k HE-AAC, 对照组) */
     "http://live.xmcdn.com/live/74/64.m3u8",        /* 广东音乐之声FM99.3(流行) */
     "http://ngcdn001.cnr.cn/live/zgzs/index.m3u8",  /* CNR中国之声(新闻/TS段) */
-    "http://satellitepull.cnr.cn/live/wxgdyyzs/playlist.m3u8", /* 广东音乐(卫星, HTTPS) */
 };
 #define PLAYLIST_NUM (sizeof(s_playlist) / sizeof(s_playlist[0]))
 

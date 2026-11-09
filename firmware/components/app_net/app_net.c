@@ -101,8 +101,10 @@ esp_err_t app_net_start(void)
     };
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg), TAG, "set config");
-    /* 流媒体场景关闭 modem-sleep: 省电模式会让 TCP 变成间歇突发, 造成播放缓冲频繁耗尽 */
-    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set ps");
+    /* WiFi modem-sleep(M1.8.3 改): 旧值 PS_NONE 让射频常驻 WiFi → BT(A2DP) 在
+     * 远距离重传压力大时抢不到空口时间, 实测手机离箱 >1m 即 3-5 秒卡顿一次。
+     * PS_MIN_MODEM 空闲期大幅让出空口; 电台场景 10s 缓冲不在乎突发延迟。 */
+    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_MIN_MODEM), TAG, "set ps");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
 
     ESP_LOGI(TAG, "wifi sta started, connecting to \"%s\"", CONFIG_ESP_CUBE_WIFI_SSID);

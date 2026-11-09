@@ -65,9 +65,6 @@ static void bt_a2d_data_cb(const uint8_t *data, uint32_t len)
     if (!s_bt.first_data_logged) {
         s_bt.first_data_logged = true;
         ESP_LOGI(TAG, "A2DP first audio data: %u bytes (stream flowing)", (unsigned)len);
-        /* 首次音频数据 = 手机真在放歌: 通知播放器让出电台(事件总线解耦) */
-        bool active = true;
-        cube_event_publish(CUBE_EVT_BT_AUDIO_ACTIVE, &active, sizeof(active));
     }
     /* 数据流统计(每5秒汇总一次): 排查 A2DP 流是否被 WiFi 共存抢占总线 */
     s_bt.cb_count++;
@@ -242,7 +239,11 @@ static void bt_a2d_evt_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
              * 此前从未开启 → 混音器 tick 永久跳过 bt 源 → 蓝牙一直无声。
              * 连接即激活(空 ring 由预填充门控自行拦截, 不会出杂音)。 */
             audio_mixer_set_source_active(s_bt.src, true);
-            ESP_LOGI(TAG, "A2DP connected");
+            /* 产品语义(M1.8.3, 用户确认): 连接蓝牙 = 立即切换 BT 模式,
+             * 电台立刻让路(不再等首包数据);断开 = 电台恢复 */
+            bool active = true;
+            cube_event_publish(CUBE_EVT_BT_AUDIO_ACTIVE, &active, sizeof(active));
+            ESP_LOGI(TAG, "A2DP connected -> BT mode (radio suspended)");
             cube_event_publish(CUBE_EVT_BT_CONNECTED, NULL, 0);
             /* 元数据/通知注册移至 AVRCP CT 连接事件(bt_avrc_refresh_track) */
         } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
