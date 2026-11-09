@@ -50,8 +50,7 @@ static struct {
     uint32_t src_rate;          /* 当前假设的 SBC 输出采样率(协商事件自适应) */
     audio_source_handle_t src;
     /* ---- 链路监视与自愈(M1.8.6) ---- */
-    esp_bd_addr_t remote_bda;   /* 对端地址(断开/读RSSI用) */
-    int8_t  rssi;               /* 最近一次 ACL 实测 RSSI(GAP 异步事件更新) */
+    esp_bd_addr_t remote_bda;   /* 对端地址(断开用) */
     bool    playing;            /* AVRCP 播放状态(判别"卡死"还是"暂停") */
     int64_t last_data_us;       /* 最近一次 PCM 数据到达时刻 */
     int     stall_sec;          /* 连续"播放中但无数据"秒数 */
@@ -81,8 +80,8 @@ static void bt_a2d_data_cb(const uint8_t *data, uint32_t len)
     int64_t now = esp_timer_get_time();
     s_bt.last_data_us = now;
     if (now - s_bt.stat_us >= 5000000LL) {
-        ESP_LOGI(TAG, "pcm flow: %u cbs / %u KB in 5s (rssi=%d)",
-                 s_bt.cb_count, (unsigned)(s_bt.cb_bytes / 1024), s_bt.rssi);
+        ESP_LOGI(TAG, "pcm flow: %u cbs / %u KB in 5s",
+                 s_bt.cb_count, (unsigned)(s_bt.cb_bytes / 1024));
         s_bt.cb_count = 0;
         s_bt.cb_bytes = 0;
         s_bt.stat_us = now;
@@ -312,12 +311,6 @@ static void bt_gap_evt_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
         ESP_LOGI(TAG, "auth complete: %s, status=%d",
                  param->auth_cmpl.device_name, param->auth_cmpl.stat);
         break;
-    case ESP_BT_GAP_READ_RSSI_DELTA_EVT:
-        /* 链路监视定时器发起的异步读回(RSSI 相对黄金接收功率的差值) */
-        if (param->read_rssi_delta.stat == ESP_BT_STATUS_SUCCESS) {
-            s_bt.rssi = param->read_rssi_delta.rssi_delta;
-        }
-        break;
     case ESP_BT_GAP_DISC_RES_EVT:
         /* 设备发现(日志级调试, M1 不处理具体发现流程) */
         ESP_LOGD(TAG, "disc res, %d results", param->disc_res.num_prop);
@@ -341,18 +334,20 @@ static void bt_link_timer_cb(void *arg)
         s_bt.stall_sec = 0;
         return;
     }
-    esp_bt_gap_read_rssi_delta(s_bt.remote_bda);      /* 异步, GAP 事件回填 */
+    /* 注: RSSI 轮询已移除(M1.8.6 回归) —— esp_bt_gap_read_rssi_delta 在
+     * S31 预览库上事件从不返回(全程 rssi=0)且 1Hz 轮询与流媒体并发时
+     * 实测引发连接初期数据骤降(864→164KB/5s), 恢复满速后仍属干扰源 */
     if (s_bt.playing && s_bt.last_data_us > 0 &&
         esp_timer_get_time() - s_bt.last_data_us > 3000000LL) {
         s_bt.stall_sec++;
         if (s_bt.stall_sec == 4) {
-            ESP_LOGW(TAG, "link stall: playing but no pcm for %ds (rssi=%d)",
-                     s_bt.stall_sec, s_bt.rssi);
+            ESP_LOGW(TAG, "link stall: playing but no pcm for %ds",
+                     s_bt.stall_sec);
         }
         if (s_bt.stall_sec >= 8) {
             s_bt.heals++;
-            ESP_LOGW(TAG, "stuck link -> auto disconnect #%u (rssi=%d)",
-                     (unsigned)s_bt.heals, s_bt.rssi);
+            ESP_LOGW(TAG, "stuck link -> auto disconnect #%u",
+                     (unsigned)s_bt.heals);
             esp_a2d_sink_disconnect(s_bt.remote_bda);
             s_bt.stall_sec = 0;
         }
