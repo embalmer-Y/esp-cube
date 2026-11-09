@@ -7,5 +7,5 @@ idf_component_register(
         drv_display drv_audio
         app_audio app_player app_net app_ui
         app_bt app_voice app_ai_session
-        nvs_flash esp_wifi esp_event esp_netif esp_timer
+        nvs_flash esp_wifi esp_event esp_netif esp_timer esp_coex
 )

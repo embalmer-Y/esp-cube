@@ -21,6 +21,7 @@
 #include "cubecore.h"
 #include "board_config.h"
 #include "nvs_flash.h"
+#include "esp_coexist.h"
 #include "drv_audio.h"
 #include "drv_display.h"
 #include "audio_mixer.h"
@@ -121,6 +122,14 @@ void app_main(void)
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_NET
     ESP_ERROR_CHECK(app_net_start());
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_BT && CONFIG_ESP_CUBE_ENABLE_NET
+    /* 空口优先级(M1.8.4): WiFi/BT 共存调度默认均衡, 实测 A2DP 高码率流
+     * 会被 WiFi 间歇挤占(远距离重传放大), 数秒断流直至手机放弃断开。
+     * 显式声明 BT 优先 + WiFi 保持 PS_NONE(实测 PS_MIN_MODEM 的周期唤醒
+     * 反而使干扰均匀化, 远近距离都卡)。语音 AI 上线后如需再平衡再调。 */
+    esp_err_t cerr = esp_coex_preference_set(ESP_COEX_PREFER_BT);
+    ESP_LOGI(TAG, "coex prefer BT: %s", cerr == ESP_OK ? "ok" : esp_err_to_name(cerr));
 #endif
 
     /* ---- 5. 语音 AI(里程碑2, Kconfig 启用) ---- */
