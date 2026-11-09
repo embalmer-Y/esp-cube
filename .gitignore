@@ -1,0 +1,12 @@
+# ESP-IDF 构建产物与组件缓存(可再生成)
+firmware/build/
+firmware/managed_components/
+firmware/dependencies.lock
+# 本地配置: 含真实 WiFi 凭据, 不入库(经 menuconfig 填写)
+firmware/sdkconfig
+firmware/sdkconfig.old
+# 测试音频素材(大体积二进制, 脚本可再生)
+testaudio/
+# 系统杂物
+*.swp
+.DS_Store

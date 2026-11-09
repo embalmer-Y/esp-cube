@@ -1,0 +1,128 @@
+/*
+ * main.c —— EspCube 装配层
+ *
+ * 只负责模块初始化顺序(依赖关系见《02_详细设计.md》§2), 不含业务逻辑。
+ *
+ * 初始化顺序(关键约束):
+ *   1. cubecore 事件总线(最先, 其余模块靠它解耦);
+ *   2. drv_audio(codec 就绪, 静音态) → audio_mixer(混音任务=节拍源);
+ *   3. app_ui(显示; 独立失败域, 屏幕异常不阻断音频);
+ *   4. app_net(WiFi 异步连接) / app_bt(蓝牙可连接态) —— 二者共存;
+ *   5. WiFi 就绪后启动默认网络电台(演示入口)。
+ */
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
+
+#include "cubecore.h"
+#include "board_config.h"
+#include "nvs_flash.h"
+#include "drv_audio.h"
+#include "drv_display.h"
+#include "audio_mixer.h"
+#include "app_player.h"
+#include "app_net.h"
+#include "app_ui.h"
+#include "app_bt.h"
+
+#if CONFIG_ESP_CUBE_ENABLE_VOICE
+#include "app_voice.h"
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_AI
+#include "ai_session.h"
+#endif
+
+static const char *TAG = "main";
+
+/* ---- 演示事件观察者(仅日志; 正式功能由各模块自行订阅) ---- */
+static void demo_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
+{
+    (void)data; (void)len; (void)ctx;
+    if (id == CUBE_EVT_WIFI_CONNECTED) {
+        ESP_LOGI(TAG, "EVT: WiFi connected");
+        /* WiFi 就绪 → 播放默认电台(音频链路端到端验证入口) */
+        app_player_start(NULL);     /* 无参 = 播放列表轮播 */
+    }
+}
+
+static void app_start_delay_hint(void)
+{
+    ESP_LOGI(TAG, "=================================================");
+    ESP_LOGI(TAG, " EspCube cube-speaker prototype");
+    ESP_LOGI(TAG, " MCU : %s (16MB Flash + %dMB PSRAM)", "ESP32-S31-WROOM-3", BOARD_PSRAM_SIZE_MB);
+    ESP_LOGI(TAG, " Audio: %s + %s (board builtin)", BOARD_AUDIO_DAC, BOARD_AUDIO_AMP);
+    ESP_LOGI(TAG, " BT  : A2DP sink \"EspCube\" | NET: %s", CONFIG_ESP_CUBE_WIFI_SSID);
+    ESP_LOGI(TAG, "=================================================");
+}
+
+void app_main(void)
+{
+    app_start_delay_hint();
+
+    /* ---- 1. 公共设施: 事件总线为静态实现; NVS 最先(WiFi/BT 都依赖) ---- */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ESP_ERROR_CHECK(nvs_flash_init());
+    }
+
+    /* ---- 2. 音频链路(核心) ---- */
+    drv_audio_cfg_t acfg = {
+        .sample_rate = CONFIG_ESP_CUBE_MIXER_RATE,
+        .channels = 2,
+        .mic_sample_rate = CONFIG_ESP_CUBE_MIXER_RATE,  /* 全双工同 LRCK, 上层降采样 */
+    };
+    ESP_ERROR_CHECK(drv_audio_init(&acfg));
+    audio_mixer_cfg_t mcfg = {
+        .sample_rate = CONFIG_ESP_CUBE_MIXER_RATE,
+        .channels = 2,
+    };
+    ESP_ERROR_CHECK(audio_mixer_init(&mcfg));
+    audio_mixer_set_master_volume(CONFIG_ESP_CUBE_DEFAULT_VOLUME);
+    ESP_ERROR_CHECK(drv_audio_pa_set(true));            /* codec 就绪后再开功放(防爆音) */
+    ESP_ERROR_CHECK(audio_mixer_start());
+
+#if CONFIG_ESP_CUBE_ENABLE_UI
+    /* ---- 3. 显示(独立失败域) ---- */
+    drv_display_cfg_t dcfg = {
+        .pixel_clock_hz = CONFIG_ESP_CUBE_LCD_PIXEL_CLOCK_HZ,
+        .h_res = CONFIG_ESP_CUBE_LCD_H_RES,
+        .v_res = CONFIG_ESP_CUBE_LCD_V_RES,
+        .use_te = false,                                /* M3 启用 TE 同步 */
+    };
+    esp_err_t derr = drv_display_init(&dcfg);
+    if (derr == ESP_OK) {
+        ESP_ERROR_CHECK(app_ui_start());
+    } else {
+        ESP_LOGE(TAG, "display init failed(%s), audio-only mode", esp_err_to_name(derr));
+    }
+#endif
+
+    /* ---- 4. 音源(蓝牙 / 网络) ---- */
+#if CONFIG_ESP_CUBE_ENABLE_BT
+    esp_err_t berr = app_bt_start();
+    ESP_LOGI(TAG, "A2DP sink: %s", berr == ESP_OK ? "ready" : esp_err_to_name(berr));
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_NET
+    ESP_ERROR_CHECK(app_net_start());
+#endif
+
+    /* ---- 5. 语音 AI(里程碑2, Kconfig 启用) ---- */
+#if CONFIG_ESP_CUBE_ENABLE_VOICE
+    ESP_ERROR_CHECK(app_voice_start());
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_AI
+    ESP_ERROR_CHECK(ai_session_start());
+#endif
+
+    /* ---- 6. 演示观察者 ---- */
+    cube_event_subscribe(demo_evt_cb, NULL);
+
+    ESP_LOGI(TAG, "startup complete, free heap=%u / psram=%u",
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}

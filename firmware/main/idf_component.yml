@@ -1,0 +1,22 @@
+## EspCube 主组件依赖(ESP Component Registry)
+## 版本策略: 以 IDF v6.1 兼容线为准; 编译解析失败时按 registry 实际版本调整。
+dependencies:
+  idf: ">=6.0,<7.0"
+  # QSPI AMOLED 驱动 IC CO5300(鱼鹰光电 2寸 460x460 面板)
+  espressif/esp_lcd_co5300: "^2.0.0"
+  # LVGL9 移植层(任务/缓冲/刷新管理)
+  espressif/esp_lvgl_port: "^2.0.0"
+  # codec 统一抽象(ES8311 播放+录音, 板载 Function CoreBoard-1)
+  # 2.0.0-beta5 = IDF 6.x 适配线(IDF 5.x 用 1.6.x 线)
+  espressif/esp_codec_dev: "==2.0.0-beta5"
+  # 软件编解码(MP3/AAC 网络流解码; Opus 编解码供 M2 语音 AI)
+  espressif/esp_audio_codec: "^2.6.0"
+  # WebSocket 客户端(M2: xiaozhi 协议 / GLM-Realtime)
+  espressif/esp_websocket_client: "^1.4.0"
+  # MP3 定点解码器(libhelix): esp_audio_codec 的 MP3 即闭源 minimp3,
+  # S31 上 23ms/帧(仅1.1x实时)+吞帧66%; libhelix 实测快一个量级(调研结论,
+  # 见 esp-adf-libs #85/#75 与 minimp3 #141/#117)
+  chmorgan/esp-libhelix-mp3: "^1.0.3"
+  ## 里程碑2启用: esp-sr(唤醒词/AFE/AEC/MultiNet; 含模型二进制, 体积较大)
+  ## 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / CONFIG_ESP_CUBE_ENABLE_AI
+  # espressif/esp-sr: "^2.6.0"

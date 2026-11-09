@@ -1,0 +1,95 @@
+menu "EspCube Configuration"
+
+    # ============ 功能开关(里程碑式启用) ============
+    config ESP_CUBE_ENABLE_BT
+        bool "启用蓝牙 A2DP Sink(手机蓝牙音乐)"
+        default y
+
+    config ESP_CUBE_ENABLE_NET
+        bool "启用 WiFi + 网络电台播放"
+        default y
+
+    config ESP_CUBE_ENABLE_UI
+        bool "启用 AMOLED UI(LVGL)"
+        default y
+
+    config ESP_CUBE_ENABLE_VOICE
+        bool "启用语音前端(esp-sr: 唤醒/AEC/命令词)[里程碑2]"
+        default n
+        help
+          需要先在 main/idf_component.yml 中取消 esp-sr 依赖注释,
+          并烧录 model 分区(srmodels)。详见 docs/02_详细设计.md §5。
+
+    config ESP_CUBE_ENABLE_AI
+        bool "启用 AI 会话客户端(xiaozhi 协议)[里程碑2]"
+        default n
+        depends on ESP_CUBE_ENABLE_VOICE
+
+    # ============ 网络 ============
+    config ESP_CUBE_WIFI_SSID
+        string "WiFi SSID(原型期经 menuconfig 填写; 凭据不入库, M3 改为配网)"
+        default "your-ssid"
+
+    config ESP_CUBE_WIFI_PASSWORD
+        string "WiFi 密码"
+        default "your-password"
+
+    config ESP_CUBE_DEFAULT_STATION
+        string "默认网络电台 URL"
+        default "http://ice1.somafm.com/indiepop-128-mp3"
+        help
+          MP3 128k 流, 用于 M1 验证网络音频链路。
+
+    # ============ 音频 ============
+    config ESP_CUBE_TEST_TONE
+        bool "播放440Hz测试音(绕过解码器, 验证DAC/功放/喇叭链路)"
+        default n
+        help
+          注意: LUT 相位步进有已知笔误, 实际输出频率约 10kHz 而非 440Hz,
+          仅用于链路通断验证, 不要长开。
+
+    config ESP_CUBE_AUDIO_DEBUG
+        bool "音频链路调试日志(输出幅度/音源缓冲水位/读取探针)"
+        default n
+
+    config ESP_CUBE_MIXER_RATE
+        int "混音引擎采样率(Hz)"
+        default 48000
+        range 16000 96000
+
+    config ESP_CUBE_BT_SRC_RATE
+        int "蓝牙A2DP解码输出采样率(Hz)"
+        default 44100
+        range 16000 48000
+        help
+          Bluedroid 内置 SBC 解码器输出采样率(手机默认协商 44100)。
+          若实测发现手机协商 48k, 此处改为 48000;
+          M2 将切换为外置 SBC 解码模式, 从协商参数自动获取。
+
+    config ESP_CUBE_NET_PREFILL_MS
+        int "网络音源预填充时长(ms)"
+        default 1000
+        help
+          解码余量充足(约26倍实时)时 1000ms 即可平滑;
+          若换回慢源(如跨境电台)建议 3000。
+
+    config ESP_CUBE_DEFAULT_VOLUME
+        int "默认音量(0-100)"
+        default 45
+
+    # ============ 显示 ============
+    config ESP_CUBE_LCD_PIXEL_CLOCK_HZ
+        int "QSPI 像素时钟(Hz)"
+        default 80000000
+        help
+          CO5300 QSPI: 理论 80MHz; 首次点亮建议先用 40MHz 排除时序问题。
+
+    config ESP_CUBE_LCD_H_RES
+        int "面板水平分辨率"
+        default 460
+
+    config ESP_CUBE_LCD_V_RES
+        int "面板垂直分辨率"
+        default 460
+
+endmenu
