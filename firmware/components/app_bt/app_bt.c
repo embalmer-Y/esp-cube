@@ -22,6 +22,7 @@
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_bt_device.h"
+#include "esp_timer.h"
 #include "esp_gap_bt_api.h"
 #include "esp_a2dp_api.h"
 #include "esp_avrc_api.h"
@@ -43,6 +44,9 @@ static struct {
     bool connected;
     bool first_data_logged;     /* 本次连接是否已记录首包(每次连接复位) */
     bool vol_notify_pending;    /* 手机已注册音量通知, 允许回传一次 CHANGED */
+    uint32_t cb_count;          /* 数据流统计(5s 窗口) */
+    uint32_t cb_bytes;
+    int64_t stat_us;
     audio_source_handle_t src;
     cube_resampler_t rs;
     /* 重采样输入缓冲(回调上下文, BT栈任务) */
@@ -64,6 +68,17 @@ static void bt_a2d_data_cb(const uint8_t *data, uint32_t len)
         /* 首次音频数据 = 手机真在放歌: 通知播放器让出电台(事件总线解耦) */
         bool active = true;
         cube_event_publish(CUBE_EVT_BT_AUDIO_ACTIVE, &active, sizeof(active));
+    }
+    /* 数据流统计(每5秒汇总一次): 排查 A2DP 流是否被 WiFi 共存抢占总线 */
+    s_bt.cb_count++;
+    s_bt.cb_bytes += len;
+    int64_t now = esp_timer_get_time();
+    if (now - s_bt.stat_us >= 5000000LL) {
+        ESP_LOGI(TAG, "pcm flow: %u cbs / %u KB in 5s",
+                 s_bt.cb_count, (unsigned)(s_bt.cb_bytes / 1024));
+        s_bt.cb_count = 0;
+        s_bt.cb_bytes = 0;
+        s_bt.stat_us = now;
     }
     size_t in_frames = len / 4;                     /* 16bit×2ch */
     if (in_frames > BT_PCM_BUF_SAMPLES) in_frames = BT_PCM_BUF_SAMPLES;
@@ -220,11 +235,19 @@ static void bt_a2d_evt_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
         if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
             s_bt.connected = true;
             s_bt.first_data_logged = false;
+            s_bt.cb_count = 0;
+            s_bt.cb_bytes = 0;
+            s_bt.stat_us = esp_timer_get_time();
+            /* 【M1.8.2 根修】音源 active 默认 false("由使用方开启"),
+             * 此前从未开启 → 混音器 tick 永久跳过 bt 源 → 蓝牙一直无声。
+             * 连接即激活(空 ring 由预填充门控自行拦截, 不会出杂音)。 */
+            audio_mixer_set_source_active(s_bt.src, true);
             ESP_LOGI(TAG, "A2DP connected");
             cube_event_publish(CUBE_EVT_BT_CONNECTED, NULL, 0);
             /* 元数据/通知注册移至 AVRCP CT 连接事件(bt_avrc_refresh_track) */
         } else if (param->conn_stat.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
             s_bt.connected = false;
+            audio_mixer_set_source_active(s_bt.src, false);
             ESP_LOGI(TAG, "A2DP disconnected");
             bool active = false;
             cube_event_publish(CUBE_EVT_BT_AUDIO_ACTIVE, &active, sizeof(active));
