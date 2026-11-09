@@ -49,6 +49,14 @@ static struct {
     int64_t stat_us;
     uint32_t src_rate;          /* 当前假设的 SBC 输出采样率(协商事件自适应) */
     audio_source_handle_t src;
+    /* ---- 链路监视与自愈(M1.8.6) ---- */
+    esp_bd_addr_t remote_bda;   /* 对端地址(断开/读RSSI用) */
+    int8_t  rssi;               /* 最近一次 ACL 实测 RSSI(GAP 异步事件更新) */
+    bool    playing;            /* AVRCP 播放状态(判别"卡死"还是"暂停") */
+    int64_t last_data_us;       /* 最近一次 PCM 数据到达时刻 */
+    int     stall_sec;          /* 连续"播放中但无数据"秒数 */
+    uint32_t heals;             /* 自愈(主动断开)次数 */
+    esp_timer_handle_t link_timer;
     cube_resampler_t rs;
     /* 重采样输入缓冲(回调上下文, BT栈任务) */
     int16_t in[BT_PCM_BUF_SAMPLES * 2];
@@ -71,9 +79,10 @@ static void bt_a2d_data_cb(const uint8_t *data, uint32_t len)
     s_bt.cb_count++;
     s_bt.cb_bytes += len;
     int64_t now = esp_timer_get_time();
+    s_bt.last_data_us = now;
     if (now - s_bt.stat_us >= 5000000LL) {
-        ESP_LOGI(TAG, "pcm flow: %u cbs / %u KB in 5s",
-                 s_bt.cb_count, (unsigned)(s_bt.cb_bytes / 1024));
+        ESP_LOGI(TAG, "pcm flow: %u cbs / %u KB in 5s (rssi=%d)",
+                 s_bt.cb_count, (unsigned)(s_bt.cb_bytes / 1024), s_bt.rssi);
         s_bt.cb_count = 0;
         s_bt.cb_bytes = 0;
         s_bt.stat_us = now;
@@ -165,6 +174,7 @@ static void bt_avrc_ct_cb(esp_avrc_ct_cb_event_t event, esp_avrc_ct_cb_param_t *
         if (param->change_ntf.event_id == ESP_AVRC_RN_PLAY_STATUS_CHANGE) {
             bool playing = (param->change_ntf.event_parameter.playback ==
                             ESP_AVRC_PLAYBACK_PLAYING);
+            s_bt.playing = playing;        /* 链路看门狗区分"卡死"与"暂停" */
             cube_event_publish(CUBE_EVT_BT_PLAY_STATE, &playing, sizeof(playing));
             /* 通知为一次性: 触发后重注册, 否则后续播放状态变化收不到 */
             esp_avrc_ct_send_register_notification_cmd(1,
@@ -265,6 +275,10 @@ static void bt_a2d_evt_cb(esp_a2d_cb_event_t event, esp_a2d_cb_param_t *param)
             s_bt.cb_count = 0;
             s_bt.cb_bytes = 0;
             s_bt.stat_us = esp_timer_get_time();
+            memcpy(s_bt.remote_bda, param->conn_stat.remote_bda, sizeof(esp_bd_addr_t));
+            s_bt.last_data_us = 0;
+            s_bt.stall_sec = 0;
+            s_bt.playing = false;
             /* 【M1.8.2 根修】音源 active 默认 false("由使用方开启"),
              * 此前从未开启 → 混音器 tick 永久跳过 bt 源 → 蓝牙一直无声。
              * 连接即激活(空 ring 由预填充门控自行拦截, 不会出杂音)。 */
@@ -298,12 +312,52 @@ static void bt_gap_evt_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *pa
         ESP_LOGI(TAG, "auth complete: %s, status=%d",
                  param->auth_cmpl.device_name, param->auth_cmpl.stat);
         break;
+    case ESP_BT_GAP_READ_RSSI_DELTA_EVT:
+        /* 链路监视定时器发起的异步读回(RSSI 相对黄金接收功率的差值) */
+        if (param->read_rssi_delta.stat == ESP_BT_STATUS_SUCCESS) {
+            s_bt.rssi = param->read_rssi_delta.rssi_delta;
+        }
+        break;
     case ESP_BT_GAP_DISC_RES_EVT:
         /* 设备发现(日志级调试, M1 不处理具体发现流程) */
         ESP_LOGD(TAG, "disc res, %d results", param->disc_res.num_prop);
         break;
     default:
         break;
+    }
+}
+
+/* ================= 链路监视与自愈(M1.8.6) =================
+ * 用户实测(开发板 PCB 天线, 关 WiFi 后): >2m 出现"一次严重卡顿后永久
+ * 卡顿, 仅断开可恢复"(RST/换供电无效) —— 链路边际化后控制器无法自愈。
+ * 看门狗(1s): 连接中 && AVRCP 报播放中 && PCM 数据断流 >3s 判定卡死;
+ * 持续 8s 后主动断开 A2DP(把人工"断开重连"自动化, 手机侧通常会自动回连,
+ * 音箱侧电台先行恢复兜底)。顺带每秒读一次 ACL 实测 RSSI 做遥测。
+ */
+static void bt_link_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!s_bt.connected) {
+        s_bt.stall_sec = 0;
+        return;
+    }
+    esp_bt_gap_read_rssi_delta(s_bt.remote_bda);      /* 异步, GAP 事件回填 */
+    if (s_bt.playing && s_bt.last_data_us > 0 &&
+        esp_timer_get_time() - s_bt.last_data_us > 3000000LL) {
+        s_bt.stall_sec++;
+        if (s_bt.stall_sec == 4) {
+            ESP_LOGW(TAG, "link stall: playing but no pcm for %ds (rssi=%d)",
+                     s_bt.stall_sec, s_bt.rssi);
+        }
+        if (s_bt.stall_sec >= 8) {
+            s_bt.heals++;
+            ESP_LOGW(TAG, "stuck link -> auto disconnect #%u (rssi=%d)",
+                     (unsigned)s_bt.heals, s_bt.rssi);
+            esp_a2d_sink_disconnect(s_bt.remote_bda);
+            s_bt.stall_sec = 0;
+        }
+    } else {
+        s_bt.stall_sec = 0;
     }
 }
 
@@ -350,6 +404,21 @@ esp_err_t app_bt_start(void)
 
     /* 本地音量变化(语音/UI) → AVRCP CHANGED 回传手机 */
     ESP_RETURN_ON_ERROR(cube_event_subscribe(bt_evt_cb, NULL), TAG, "subscribe vol");
+
+    /* BR/EDR 功率(M1.8.6): S31 无公开 setter(仅 range getter), 启动时
+     * 记录芯片实际支持的发射功率范围, 供链路问题定位参考 */
+    int8_t pmin = 0, pmax = 0;
+    if (esp_bredr_tx_power_range_get(&pmin, &pmax) == ESP_OK) {
+        ESP_LOGI(TAG, "bredr tx power range: %+ddBm..%+ddBm", pmin, pmax);
+    }
+
+    /* 链路看门狗(1s): RSSI 遥测 + 卡死粘滞态自动断开自愈 */
+    const esp_timer_create_args_t lt_args = {
+        .callback = bt_link_timer_cb,
+        .name = "bt_link",
+    };
+    ESP_RETURN_ON_ERROR(esp_timer_create(&lt_args, &s_bt.link_timer), TAG, "lt create");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_bt.link_timer, 1000000), TAG, "lt start");
 
     /* 可连接+可发现: 等待手机配对连接 */
     ESP_RETURN_ON_ERROR(esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE,
