@@ -60,9 +60,11 @@ static lv_obj_t *s_lbl_brand;               /* 待机品牌标 */
 static lv_obj_t *s_lbl_station;             /* 电台名(toast) */
 static lv_obj_t *s_lbl_title;               /* 底部标题 */
 static lv_obj_t *s_lbl_artist;              /* 底部艺术家/专辑 */
-static lv_obj_t *s_lbl_lyr_cur;             /* 歌词当前行(飞入后停在中心) */
+static lv_obj_t *s_lbl_lyr_src;             /* 歌词排版源(离屏, 只供 snapshot) */
 static lv_obj_t *s_lbl_lyr_next;            /* 歌词下一行(预示, 固定水平) */
-static lv_obj_t *s_lbl_lyr_out;             /* 旧句克隆(向边缘加速飞离) */
+static lv_obj_t *s_img_lyr_cur;             /* 当前句(快照 image, 飞入动画) */
+static lv_obj_t *s_img_lyr_out;             /* 旧句(快照 image, 飞离动画) */
+static lv_draw_buf_t *s_dsc_cur, *s_dsc_out;   /* 快照数据(lv_snapshot_take 返回) */
 
 /* 歌词飞行动画状态 */
 static int  s_lyr_angle;                    /* 当前句倾角(0.1° 单位) */
@@ -447,7 +449,7 @@ static void scene_apply(int scene)
     if (scene == SCENE_IDLE) {
         fade_in(s_lbl_brand, 6, 300);
         if (prev == SCENE_LYRICS) lyric_fly_out();   /* 尾句飞离 */
-        else fade_out(s_lbl_lyr_cur, 260);
+        else lv_obj_add_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN);
         fade_out(s_lbl_lyr_next, 260);
         fade_out(s_lbl_title, 260);
         fade_out(s_lbl_artist, 260);
@@ -465,7 +467,7 @@ static void scene_apply(int scene)
             lv_obj_set_style_opa(s_lbl_lyr_next, 255, 0);
         } else {
             if (prev == SCENE_LYRICS) lyric_fly_out();   /* 切纯音乐: 句尾飞离 */
-            else fade_out(s_lbl_lyr_cur, 260);
+            else lv_obj_add_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN);
             fade_out(s_lbl_lyr_next, 260);
         }
     }
@@ -499,29 +501,33 @@ static int lyr_clamp_y(int y)
 static void lyric_out_anim_done_cb(lv_anim_t *a)
 {
     (void)a;
-    lv_obj_set_style_opa(s_lbl_lyr_out, 0, 0);       /* 到边缘即隐(非动画) */
+    lv_obj_add_flag(s_img_lyr_out, LV_OBJ_FLAG_HIDDEN);  /* 到边缘即隐 */
 }
 
+/* 旧句飞离: img_out 接管当前句快照, 沿同方向 ease_in 加速飞向对侧边缘 */
 static void lyric_fly_out(void)
 {
-    /* 无旧句在中心则忽略 */
-    if ((int)lv_obj_get_style_opa(s_lbl_lyr_cur, 0) == 0) return;
+    /* 无旧句(img_cur 隐藏=屏上无句)则忽略 */
+    if (lv_obj_has_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN)) return;
 
-    /* 克隆旧句(文本/倾角/位置), 沿同方向加速飞离 */
-    lv_label_set_text(s_lbl_lyr_out, lv_label_get_text(s_lbl_lyr_cur));
-    lv_obj_set_style_transform_rotation(s_lbl_lyr_out, s_lyr_angle, 0);
-    lv_obj_set_style_opa(s_lbl_lyr_out, LV_OPA_COVER, 0);
-    lv_obj_set_pos(s_lbl_lyr_out, s_lyr_rest_x, s_lyr_rest_y);
+    /* 快照交接: out 拿 cur 的内容与倾角, cur 稍后换新 */
+    if (s_dsc_out != NULL) lv_draw_buf_destroy(s_dsc_out);   /* 上上句释放 */
+    s_dsc_out = s_dsc_cur;
+    s_dsc_cur = NULL;
+    lv_image_set_src(s_img_lyr_out, s_dsc_out);
+    lv_image_set_rotation(s_img_lyr_out, s_lyr_angle);
+    lv_obj_set_pos(s_img_lyr_out, s_lyr_rest_x, s_lyr_rest_y);
+    lv_obj_remove_flag(s_img_lyr_out, LV_OBJ_FLAG_HIDDEN);
+
     int ex = lyr_clamp_x(s_lyr_rest_x + (int)(s_lyr_dir_x * LYR_FLY_DIST));
     int ey = lyr_clamp_y(s_lyr_rest_y + (int)(s_lyr_dir_y * LYR_FLY_DIST));
 
-    /* 只做位移(至边缘即隐); rotation+opa 组合会触发 9.6.0
-     * 离屏 layer 渲染缺陷, 勿加淡出 */
-    lv_anim_del(s_lbl_lyr_out, anim_x_cb);
-    lv_anim_del(s_lbl_lyr_out, anim_y_cb);
+    /* 只做位移(至边缘即隐); 不叠 opa 动画(离屏 layer 渲染缺陷) */
+    lv_anim_del(s_img_lyr_out, anim_x_cb);
+    lv_anim_del(s_img_lyr_out, anim_y_cb);
     lv_anim_t a;
     lv_anim_init(&a);
-    lv_anim_set_var(&a, s_lbl_lyr_out);
+    lv_anim_set_var(&a, s_img_lyr_out);
     lv_anim_set_exec_cb(&a, anim_x_cb);
     lv_anim_set_values(&a, s_lyr_rest_x, ex);
     lv_anim_set_duration(&a, LYR_FLY_OUT_MS);
@@ -533,38 +539,46 @@ static void lyric_fly_out(void)
     lv_anim_start(&a);
 
     /* 当前句立刻让位, 等新句飞入 */
-    lv_anim_del(s_lbl_lyr_cur, anim_x_cb);
-    lv_anim_del(s_lbl_lyr_cur, anim_y_cb);
-    lv_obj_set_style_opa(s_lbl_lyr_cur, 0, 0);
+    lv_anim_del(s_img_lyr_cur, anim_x_cb);
+    lv_anim_del(s_img_lyr_cur, anim_y_cb);
+    lv_obj_add_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void lyric_fly_in(const char *text)
 {
-    lv_label_set_text(s_lbl_lyr_cur, text);
-
     /* 随机倾角 ±4~13°(0.1° 单位) */
     int deg = 40 + rand() % 90;                  /* 40..130 = 4..13° */
     s_lyr_angle = (rand() % 2 ? 1 : -1) * deg;
-    lv_obj_set_style_transform_rotation(s_lbl_lyr_cur, s_lyr_angle, 0);
 
     /* 随机飞入方向(单位向量) */
     float ang = (float)(rand() % 360) * (float)M_PI / 180.0f;
     s_lyr_dir_x = cosf(ang);
     s_lyr_dir_y = sinf(ang);
 
+    /* 排版源更新文本 → 快照成 ARGB image(倾斜由 image 承担:
+     * label 旋转的渲染路径在 9.6.0 缺失, 见 lv_conf.h 注) */
+    lv_label_set_text(s_lbl_lyr_src, text);
+    lv_obj_update_layout(s_lbl_lyr_src);
+    lv_draw_buf_t *dsc = lv_snapshot_take(s_lbl_lyr_src, LV_COLOR_FORMAT_ARGB8888);
+    if (dsc == NULL) return;
+
     /* ease_out 飞入: 边缘 → 中心(越接近越慢)。
-     * 只做位移不叠 opa 动画(rotation+opa 组合触发 9.6.0 离屏
-     * layer 渲染缺陷); 出发点在屏外, 入场感由位移本身提供 */
+     * 只做位移不叠 opa 动画; 出发点钳制屏内(见 lyr_clamp_*) */
     int sx = lyr_clamp_x(s_lyr_rest_x - (int)(s_lyr_dir_x * LYR_FLY_DIST));
     int sy = lyr_clamp_y(s_lyr_rest_y - (int)(s_lyr_dir_y * LYR_FLY_DIST));
-    lv_obj_set_pos(s_lbl_lyr_cur, sx, sy);
-    lv_obj_set_style_opa(s_lbl_lyr_cur, LV_OPA_COVER, 0);
+    lv_image_set_src(s_img_lyr_cur, dsc);
+    lv_image_set_rotation(s_img_lyr_cur, s_lyr_angle);
+    lv_image_set_antialias(s_img_lyr_cur, true);
+    lv_obj_set_pos(s_img_lyr_cur, sx, sy);
+    lv_obj_remove_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN);
+    if (s_dsc_cur != NULL) lv_draw_buf_destroy(s_dsc_cur);   /* 上句(未飞离场景) */
+    s_dsc_cur = dsc;
 
-    lv_anim_del(s_lbl_lyr_cur, anim_x_cb);
-    lv_anim_del(s_lbl_lyr_cur, anim_y_cb);
+    lv_anim_del(s_img_lyr_cur, anim_x_cb);
+    lv_anim_del(s_img_lyr_cur, anim_y_cb);
     lv_anim_t a;
     lv_anim_init(&a);
-    lv_anim_set_var(&a, s_lbl_lyr_cur);
+    lv_anim_set_var(&a, s_img_lyr_cur);
     lv_anim_set_exec_cb(&a, anim_x_cb);
     lv_anim_set_values(&a, sx, s_lyr_rest_x);
     lv_anim_set_duration(&a, LYR_FLY_IN_MS);
@@ -821,26 +835,23 @@ void ui_pages_create(int w, int h)
     s_screen_h = h;
     s_lyr_rest_x = (w - 430) / 2;                /* 中心静止位(label 左上角) */
     s_lyr_rest_y = 172;
-    s_lbl_lyr_cur = label_make(s_scr_main, FONT_CJK24, C_TXT);
-    lv_obj_set_size(s_lbl_lyr_cur, 430, 34);     /* 固定高: 旋转 layer 的
-                                                 bbox 依赖内容高, LV_SIZE_CONTENT
-                                                 在 DOT/空文本时可为 0 → 分配失败 */
-    lv_label_set_long_mode(s_lbl_lyr_cur, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(s_lbl_lyr_cur, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_opa(s_lbl_lyr_cur, 0, 0);
-    /* 旋转轴心 = label 几何中心(倾斜绕中心, 不绕左上角甩尾) */
-    lv_obj_set_style_transform_pivot_x(s_lbl_lyr_cur, 215, 0);
-    lv_obj_set_style_transform_pivot_y(s_lbl_lyr_cur, 17, 0);
-    lv_obj_set_pos(s_lbl_lyr_cur, s_lyr_rest_x, s_lyr_rest_y);
-    /* 旧句克隆: 只做飞离动画, 常态隐藏 */
-    s_lbl_lyr_out = label_make(s_scr_main, FONT_CJK24, C_TXT);
-    lv_obj_set_size(s_lbl_lyr_out, 430, 34);
-    lv_label_set_long_mode(s_lbl_lyr_out, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(s_lbl_lyr_out, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_transform_pivot_x(s_lbl_lyr_out, 215, 0);
-    lv_obj_set_style_transform_pivot_y(s_lbl_lyr_out, 17, 0);
-    lv_obj_set_style_opa(s_lbl_lyr_out, 0, 0);
-    lv_obj_set_pos(s_lbl_lyr_out, s_lyr_rest_x, s_lyr_rest_y);
+    /* 挂 lv_layer_top(系统置顶层): 主屏上带 pivot/rotation 的 label
+     * 在 9.6.0 某些状态下不参与渲染(状态正确却不上屏, 已实测);
+     * layer_top 与 overlay 同层, 渲染路径独立且可靠 */
+    /* 排版源 label(离屏, 屏外坐标, 只供 snapshot; 不参与渲染) */
+    s_lbl_lyr_src = label_make(lv_layer_top(), FONT_CJK24, C_TXT);
+    lv_label_set_text(s_lbl_lyr_src, " ");
+    lv_obj_set_size(s_lbl_lyr_src, 430, 34);
+    lv_label_set_long_mode(s_lbl_lyr_src, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_lbl_lyr_src, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_lbl_lyr_src, -600, -600);
+    /* 当前句/旧句: 快照 image(旋转走 image transform 成熟路径) */
+    s_img_lyr_cur = lv_image_create(lv_layer_top());
+    lv_image_set_antialias(s_img_lyr_cur, true);
+    lv_obj_add_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN);
+    s_img_lyr_out = lv_image_create(lv_layer_top());
+    lv_image_set_antialias(s_img_lyr_out, true);
+    lv_obj_add_flag(s_img_lyr_out, LV_OBJ_FLAG_HIDDEN);
     s_lbl_lyr_next = label_make(s_scr_main, FONT_CJK, 0x5E6C80);
     lv_obj_set_width(s_lbl_lyr_next, 430);
     lv_label_set_long_mode(s_lbl_lyr_next, LV_LABEL_LONG_DOT);

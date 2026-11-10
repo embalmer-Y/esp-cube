@@ -289,17 +289,31 @@ typedef struct {
     int act;                                 /* sim_action_t / DEMO_* */
     const char *shot;
 } demo_step_t;
+/* 连拍时间线: 覆盖各动画中间过程(review 用)
+ *   歌词切句发生在 14401ms(track0=10201 + 第二句 4200ms),
+ *   fly_in 480ms / fly_out 420ms → 14450..14930 密集连拍 */
 static const demo_step_t s_demo_steps[] = {
     { 1200,  DEMO_NONE,              "01_splash" },
     { 3600,  SIM_ACT_TOGGLE_PLAY,    NULL },         /* 开电台(仅一次) */
     { 5000,  DEMO_NONE,              "02_radio_connecting" },
-    { 8600,  DEMO_NONE,              "03_radio_line" },
+    /* 直线频谱跳动连拍(8600 起每 120ms) */
+    { 8600,  DEMO_NONE,              "10_line_a" },
+    { 8720,  DEMO_NONE,              "10_line_b" },
+    { 8840,  DEMO_NONE,              "10_line_c" },
+    { 8960,  DEMO_NONE,              "10_line_d" },
     { 9200,  SIM_ACT_NEXT_STATION,   NULL },
-    { 9700,  DEMO_NONE,              "04_station_toast" },
+    /* toast 滑入连拍(动作后 80/200ms) */
+    { 9280,  DEMO_NONE,              "11_toast_a" },
+    { 9420,  DEMO_NONE,              "11_toast_b" },
     { 10200, SIM_ACT_BT_TOGGLE,      NULL },         /* BT 接管: 晴天(歌词) */
     { 11200, DEMO_NONE,              "05_bt_lyrics" },
-    { 14560, DEMO_NONE,              "06_lyrics_flying" },   /* 切句后160ms: 交叉飞行中 */
-    { 15400, DEMO_NONE,              "06b_lyrics_settled" },
+    /* 歌词切句(14401)交叉飞行连拍: 飞入 480ms / 飞离 420ms */
+    { 14450, DEMO_NONE,              "12_fly_050ms" },
+    { 14550, DEMO_NONE,              "12_fly_150ms" },
+    { 14650, DEMO_NONE,              "12_fly_250ms" },
+    { 14750, DEMO_NONE,              "12_fly_350ms" },
+    { 14850, DEMO_NONE,              "12_fly_450ms" },
+    { 15300, DEMO_NONE,              "12_fly_settled" },
     { 15600, SIM_ACT_BT_META,        NULL },         /* 切纯音乐 Summer */
     { 16600, DEMO_NONE,              "07_bt_instrumental" },
     { 17200, SIM_ACT_VOL_DOWN,       NULL },
