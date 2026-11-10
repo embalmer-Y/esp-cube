@@ -3,5 +3,5 @@
 idf_component_register(
     SRCS "ai_session.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES cubecore app_audio drv_audio speech_provider
+    PRIV_REQUIRES cubecore app_audio speech_provider
 )

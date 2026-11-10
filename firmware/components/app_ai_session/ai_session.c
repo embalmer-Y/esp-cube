@@ -12,12 +12,16 @@
  *
  * 线程模型:
  *   session_task —— 会话编排(LLM 阻塞调用也在此任务)
- *   mic_task     —— LISTENING 期采集(drv_audio_mic_read→ASR feed)
- *   tts_task     —— TTS PCM 环形缓冲 → 重采样 → mixer(阻塞 pacing)
+ *   mic_task     —— LISTENING 期采集(audio_mic_read_16k → ASR feed)
+ *   tts_task     —— TTS PCM 环形缓冲 → 重采样 → mixer(阻塞 pacing);
+ *                   兼任排空检测: 缓冲空 && TTS 已收口 → EVT_TTS_DONE
  *   ks_ 回调在网络任务上下文, 一律投队列/写环形缓冲, 不持锁不阻塞
  *
- * 触发: ai_session_on_wake() —— 唤醒词(app_voice)/调试事件均可调。
+ * 触发: 自订阅 CUBE_EVT_WAKE_DETECTED(app_voice 唤醒词)或直调
+ *       ai_session_on_wake()。
  * 打断: SPEAKING/LISTENING 中再次唤醒 → abort → 重开 LISTENING。
+ * 麦克风所有权(docs/06 §3): 本组件只在 LISTENING 读麦克风,
+ * 其余时间由 app_voice 常开(WakeNet barge-in)。
  */
 #include "ai_session.h"
 
@@ -31,7 +35,7 @@
 #include "esp_heap_caps.h"
 #include "cubecore.h"
 #include "audio_mixer.h"
-#include "drv_audio.h"
+#include "audio_mic.h"
 #include "speech_provider.h"
 #include "sdkconfig.h"
 
@@ -64,19 +68,24 @@ static QueueHandle_t s_evtq;
 static TaskHandle_t s_task, s_mic_task, s_tts_task;
 static char s_last_asr[128];
 
-/* TTS 播放桥: 网络回调 → 环形缓冲(mono 16k) → 重采样 → mixer */
-#define TTS_RING_FRAMES    (AI_TTS_RATE * 4)        /* 4s */
+/* TTS 播放桥: 网络回调 → 环形缓冲(mono 16k) → 重采样 → mixer。
+ * 二次幂容量, 索引运算走掩码(免逐样本取模)。 */
+#define TTS_RING_SHIFT     16
+#define TTS_RING_FRAMES    (1 << TTS_RING_SHIFT)   /* 65536 ≈ 4.1s@16k */
+#define TTS_RING_MASK      (TTS_RING_FRAMES - 1)
 static int16_t *s_ring;
 static volatile size_t s_ring_r, s_ring_w;    /* 单写单读 */
 static cube_resampler_t s_rs;
 static audio_source_handle_t s_tts_src;
 static volatile bool s_abort_req;
+static volatile bool s_tts_closed;            /* TTS 会话已收口(排空判定) */
 
 /* 事件 */
 enum {
     EVT_WAKE = 1,
     EVT_ASR_TEXT,          /* payload: char*(堆, 消费方释放) */
     EVT_MIC_DONE,
+    EVT_TTS_DONE,          /* TTS 缓冲排空且已收口(tts_task 发) */
 };
 
 /* 队列元素(带指针的事件) */
@@ -122,19 +131,23 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
     return true;
 }
 
-/* ---- TTS PCM 回调(网络任务) → 环形缓冲 ---- */
+/* ---- TTS PCM 回调(网络任务) → 环形缓冲。
+ * 环满即丢弃并计数: 播放跟不上时旧数据已无意义, 且网络回调里
+ * 自旋等待会卡死 WS 客户端任务(旧实现最多阻塞 2s, 已废除)。 ---- */
 static void on_tts_pcm(void *user, const uint8_t *pcm, size_t len)
 {
     (void)user;
     const int16_t *in = (const int16_t *)pcm;
     for (size_t i = 0; i < len / 2; i++) {
-        size_t next = (s_ring_w + 1) % TTS_RING_FRAMES;
-        int guard = 0;
-        while (next == s_ring_r && !s_abort_req && guard++ < 200) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            next = (s_ring_w + 1) % TTS_RING_FRAMES;
+        size_t next = (s_ring_w + 1) & TTS_RING_MASK;
+        if (next == s_ring_r) {
+            static uint32_t drop_cnt;
+            if ((drop_cnt++ & 0x3F) == 0) {
+                ESP_LOGW(TAG, "tts ring full, dropped x%u",
+                         (unsigned)(drop_cnt + 63));
+            }
+            return;                       /* 丢弃剩余整段 */
         }
-        if (next == s_ring_r) return;             /* 打断: 丢弃剩余 */
         s_ring[s_ring_w] = in[i];
         s_ring_w = next;
     }
@@ -146,21 +159,35 @@ static void on_tts_err(void *user, int stage, int code)
     ESP_LOGW(TAG, "tts err stage=%d code=%d", stage, code);
 }
 
-/* ---- TTS 播放任务: 环形缓冲 → 重采样 48k stereo → mixer ---- */
+/* ---- TTS 播放任务: 环形缓冲 → 重采样 48k stereo → mixer;
+ * 兼任排空检测(缓冲空 && 已收口 && SPEAKING → 上报 EVT_TTS_DONE,
+ * 取代旧实现的 800ms 魔法延时窗口)。 ---- */
 static void tts_task(void *arg)
 {
     (void)arg;
     int16_t in_mono[320];                        /* 20ms@16k */
     int16_t out48[320 * 3 * 2];
+    bool drain_reported = true;                  /* 开机不报 */
     while (1) {
-        if (s_ring_r == s_ring_w || s_state != AI_SPEAKING) {
+        if (s_ring_r == s_ring_w) {
+            if (!drain_reported && s_tts_closed &&
+                s_state == AI_SPEAKING && !s_abort_req) {
+                session_evt_t e = { .id = EVT_TTS_DONE };
+                xQueueSend(s_evtq, &e, 0);
+                drain_reported = true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        drain_reported = false;
+        if (s_state != AI_SPEAKING || s_abort_req) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
         int n = 0;
         while (n < 320 && s_ring_r != s_ring_w) {
             in_mono[n++] = s_ring[s_ring_r];
-            s_ring_r = (s_ring_r + 1) % TTS_RING_FRAMES;
+            s_ring_r = (s_ring_r + 1) & TTS_RING_MASK;
         }
         size_t of = cube_resampler_process_mono_to_stereo(
             &s_rs, in_mono, n, out48, sizeof(out48) / sizeof(out48[0]) / 2);
@@ -172,17 +199,17 @@ static void tts_task(void *arg)
     }
 }
 
-/* ---- 录音任务: mic 16k → ASR feed; 能量 VAD 断句 ---- */
+/* ---- 录音任务: mic 16k 单声道(L2 服务) → ASR feed; 能量 VAD 断句 ---- */
 static void mic_task(void *arg)
 {
     (void)arg;
-    int16_t pcm[320];                            /* 20ms@16k */
+    int16_t pcm[320];                            /* 20ms@16k 单声道 */
     while (1) {
         vTaskSuspend(NULL);                      /* 由 session 唤醒 */
         int silence_ms = 0, speech_ms = 0, total_ms = 0;
         bool had_speech = false;
         while (s_state == AI_LISTENING && !s_abort_req) {
-            int n = drv_audio_mic_read(pcm, 320);
+            int n = audio_mic_read_16k(pcm, 320);
             if (n <= 0) continue;
             int64_t sq = 0;
             for (int i = 0; i < n; i++) sq += (int64_t)pcm[i] * pcm[i];
@@ -232,9 +259,8 @@ static void run_round(void)
     }
     ks_tts_feed("", true, 5000);                 /* TTS 收口 */
     ks_tts_close();
-    /* TODO(M2.3): TTS 源耗尽检测→连续对话; 现为单轮后回 IDLE */
-    vTaskDelay(pdMS_TO_TICKS(800));              /* 尾句播放窗口(粗略) */
-    if (!s_abort_req) set_state(AI_IDLE);
+    s_tts_closed = true;                         /* tts_task 排空后回 IDLE */
+    /* TODO(M2.3): 连续对话; 现为单轮, 排空事件驱动回 IDLE */
 }
 
 /* ---- 会话任务 ---- */
@@ -255,7 +281,7 @@ static void session_task(void *arg)
             ks_asr_close();
             s_ring_r = s_ring_w;
             s_abort_req = false;
-            audio_mixer_set_source_active(s_tts_src, true);
+            s_tts_closed = false;
             cube_resampler_init(&s_rs, AI_TTS_RATE, 48000);
             audio_mixer_set_source_active(s_tts_src, true);
 
@@ -297,6 +323,12 @@ static void session_task(void *arg)
             run_round();
             break;
 
+        case EVT_TTS_DONE:                       /* 播放排空 → 本轮结束 */
+            if (s_state == AI_SPEAKING && !s_abort_req) {
+                set_state(AI_IDLE);
+            }
+            break;
+
         case EVT_ASR_TEXT: {
             char *text = (char *)e.payload;
             ESP_LOGI(TAG, "asr: %s", text);
@@ -309,6 +341,16 @@ static void session_task(void *arg)
         default:
             break;
         }
+    }
+}
+
+/* ---- 唤醒事件桥(总线回调, 发布者任务上下文; 仅投队列) ---- */
+static void ai_evt_cb(cube_evt_id_t id, const void *data, size_t len,
+                      void *ctx)
+{
+    (void)data; (void)len; (void)ctx;
+    if (id == CUBE_EVT_WAKE_DETECTED) {
+        ai_session_on_wake();
     }
 }
 
@@ -327,6 +369,9 @@ esp_err_t ai_session_start(void)
     };
     s_tts_src = audio_mixer_add_source(&scfg);
     ESP_RETURN_ON_FALSE(s_tts_src != NULL, ESP_FAIL, TAG, "tts src");
+
+    ESP_RETURN_ON_ERROR(cube_event_subscribe(ai_evt_cb, NULL), TAG,
+                        "evt subscribe");
 
     BaseType_t ok = xTaskCreatePinnedToCore(session_task, "aisess", 8192,
                                             NULL, 5, &s_task, 0) == pdPASS &&

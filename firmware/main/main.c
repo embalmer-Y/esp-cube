@@ -48,15 +48,11 @@ static void player_start_task(void *arg)
     vTaskDelete(NULL);
 }
 
-/* ---- 演示事件观察者(仅日志; 正式功能由各模块自行订阅) ---- */
+/* ---- 演示事件观察者(仅策略与日志; 跨模块功能由各模块自订阅,
+ *      如唤醒→AI 会话由 ai_session 自订阅 CUBE_EVT_WAKE_DETECTED) ---- */
 static void demo_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)data; (void)len; (void)ctx;
-#if CONFIG_ESP_CUBE_ENABLE_AI
-    if (id == CUBE_EVT_WAKE_DETECTED) {
-        ai_session_on_wake();                    /* 唤醒 → 开启一轮会话 */
-    }
-#endif
     if (id == CUBE_EVT_WIFI_CONNECTED) {
         ESP_LOGI(TAG, "EVT: WiFi connected");
         BaseType_t r = xTaskCreate(player_start_task, "pstart", 4096, NULL, 8, NULL);

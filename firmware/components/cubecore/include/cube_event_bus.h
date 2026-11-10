@@ -50,6 +50,16 @@ typedef struct {
     char album[64];
 } cube_bt_meta_t;
 
+/* AI 会话状态(CUBE_EVT_AI_STATE payload)。定义在总线侧: app_voice 订阅
+ * 此事件做麦克风所有权切换(docs/06 §3), 免依赖 app_ai_session 头。 */
+typedef enum {
+    AI_IDLE = 0,
+    AI_WAKE,
+    AI_LISTENING,
+    AI_THINKING,
+    AI_SPEAKING,
+} ai_state_t;
+
 /* 事件回调原型: data 生命周期仅限回调期间 */
 typedef void (*cube_evt_cb_t)(cube_evt_id_t id, const void *data, size_t len, void *user_ctx);
 

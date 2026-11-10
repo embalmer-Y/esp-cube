@@ -7,8 +7,9 @@
  *     IDLE → LISTENING(录音+ASR 流) → THINKING(LLM 流式)
  *          → SPEAKING(TTS→重采样→mixer "tts" 源) → IDLE
  *   打断(barge-in): 任意状态再收唤醒 → abort → 重开 LISTENING
- *   事件: CUBE_EVT_AI_STATE / CUBE_EVT_AI_TEXT
- *   触发: ai_session_on_wake() —— app_voice 唤醒词 / 调试事件
+ *   事件: CUBE_EVT_AI_STATE / CUBE_EVT_AI_TEXT(状态枚举 ai_state_t
+ *         定义在 cube_event_bus.h, 供 app_voice 所有权切换免依赖本头)
+ *   触发: 自订阅 CUBE_EVT_WAKE_DETECTED(app_voice 唤醒词)或本函数直调
  */
 #pragma once
 
@@ -18,18 +19,11 @@
 extern "C" {
 #endif
 
-typedef enum {
-    AI_IDLE = 0,
-    AI_WAKE,
-    AI_LISTENING,
-    AI_THINKING,
-    AI_SPEAKING,
-} ai_state_t;
-
-/* 启动会话状态机(依赖 speech_provider/混音器/drv_audio; VOICE=y 时另需 app_voice 唤醒) */
+/* 启动会话状态机(依赖 speech_provider/app_audio 麦克风服务;
+ * VOICE=y 时另需 app_voice 唤醒) */
 esp_err_t ai_session_start(void);
 
-/* 唤醒入口(由 app_voice 的唤醒事件驱动) */
+/* 唤醒入口(正常由事件总线驱动, 亦可供调试直调) */
 void ai_session_on_wake(void);
 
 #ifdef __cplusplus

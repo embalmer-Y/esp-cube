@@ -4,5 +4,5 @@
 idf_component_register(
     SRCS "app_voice.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES cubecore boardcfg drv_audio app_audio espressif__esp-sr
+    PRIV_REQUIRES cubecore app_audio espressif__esp-sr
 )

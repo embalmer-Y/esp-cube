@@ -9,8 +9,10 @@
  *   - 阈值 0.60 实测无虚警(正式参数量产标定)
  *   - 采集分片续读 + DMA 自愈(int16 推理负载下 I2S 会部分超时)
  *
- * 管线: drv_audio_mic_read(48k→16k 单麦) → AFE("M") → WakeNet
- *       → 唤醒事件 CUBE_EVT_WAKE_DETECTED → ai_session_on_wake()
+ * 管线: audio_mic_read_16k(L2 麦克风服务) → AFE("M") → WakeNet
+ *       → 唤醒事件 CUBE_EVT_WAKE_DETECTED → ai_session(自订阅)
+ * 麦克风所有权(docs/06 §3): AI_LISTENING 期间暂停读取让渡给 ASR,
+ * 其余状态常开(保 SPEAKING 期 barge-in 再唤醒打断)。
  * AEC 参考(放歌打断场景)与 MultiNet 命令词留 M2.2+; 单麦无 BSS。
  */
 #include "app_voice.h"
@@ -21,7 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "cubecore.h"
-#include "drv_audio.h"
+#include "audio_mic.h"
 #include "esp_afe_sr_iface.h"
 #include "esp_afe_sr_models.h"
 
@@ -33,6 +35,18 @@ static TaskHandle_t s_task;
 static volatile bool s_running;
 static const esp_afe_sr_iface_t *s_afe;
 static esp_afe_sr_data_t *s_afe_data;
+static volatile bool s_mic_yield;          /* AI_LISTENING 期让渡麦克风 */
+
+/* ---- 麦克风所有权切换: 订阅 AI 会话状态(docs/06 §3) ---- */
+static void voice_evt_cb(cube_evt_id_t id, const void *data, size_t len,
+                         void *ctx)
+{
+    (void)len; (void)ctx;
+    if (id == CUBE_EVT_AI_STATE && data != NULL) {
+        s_mic_yield = (*(const int *)data == AI_LISTENING);
+        ESP_LOGI(TAG, "mic %s", s_mic_yield ? "yield → asr" : "resume");
+    }
+}
 
 /* ---- 唤醒前端任务 ---- */
 static void voice_task(void *arg)
@@ -45,36 +59,28 @@ static void voice_task(void *arg)
     ESP_LOGI(TAG, "AFE chunk=%d feed_ch=%d rate=%d", chunk, ch_num,
              s_afe->get_samp_rate(s_afe_data));
 
-    const int frame_frames = chunk * ch_num;     /* feed 需要的 16k 帧数 */
-    int16_t *feed_buf = malloc(frame_frames * 2);
-    ESP_RETURN_ON_FALSE(feed_buf != NULL, , TAG, "feed buf");
+    const int frame_frames = chunk * ch_num;     /* feed 需要的 16k 样本数 */
+    int16_t *feed_buf = malloc(frame_frames * sizeof(int16_t));
+    if (feed_buf == NULL) {
+        ESP_LOGE(TAG, "feed buf oom");
+        vTaskDelete(NULL);                       /* 任务禁止 return */
+        return;
+    }
 
     int detect_count = 0;
     TickType_t last_hb = xTaskGetTickCount();
     int reads = 0;
     for (;;) {
         if (!s_running) break;
-        /* 采集: 分片续读(部分数据不丢); 顽固失败重启 DMA(V-04 补丁) */
-        /* drv_audio_mic_read 读到 48k 立体声(与播放同 LRCK);
-         * 3:1 均值抽取 → AFE 需要的 16k 单声道 */
-        int frames48 = frame_frames * 3;
-        int16_t *buf48 = malloc((size_t)frames48 * 2 * 2);
-        if (buf48 == NULL) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
-        int got48 = drv_audio_mic_read(buf48, frames48);
-        int got = 0;
-        if (got48 > 0) {
-            for (int i = 0, o = 0; i + 2 < got48; i += 3, o++) {
-                int32_t acc = (int32_t)buf48[i * 2] + buf48[(i + 1) * 2] +
-                              buf48[(i + 2) * 2];
-                if (o < frame_frames) feed_buf[o] = (int16_t)(acc / 3);
-                got = o + 1 <= frame_frames ? o + 1 : got;
-            }
+        if (s_mic_yield) {                       /* 所有权让渡期 */
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
         }
-        free(buf48);
+        int got = audio_mic_read_16k(feed_buf, frame_frames);
         if (got < frame_frames) {
             consec_fail++;
             if (consec_fail % 20 == 1) {
-                ESP_LOGE(TAG, "mic starved x%d (got48=%d)", consec_fail, got48);
+                ESP_LOGE(TAG, "mic starved x%d (got=%d)", consec_fail, got);
             }
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
@@ -132,6 +138,9 @@ esp_err_t app_voice_start(void)
     ESP_LOGW(TAG, "add_wakenet_model(wn10_hilexin) → %d", rc);
     s_afe->print_pipeline(s_afe_data);
     s_afe->set_wakenet_threshold(s_afe_data, 1, 0.60);
+
+    ESP_RETURN_ON_ERROR(cube_event_subscribe(voice_evt_cb, NULL), TAG,
+                        "evt subscribe");
 
     s_running = true;
     BaseType_t ok = xTaskCreatePinnedToCore(voice_task, "voice", 8192, NULL,
