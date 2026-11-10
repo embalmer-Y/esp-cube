@@ -52,10 +52,7 @@ esp_err_t app_ui_start(void)
     lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
     ESP_RETURN_ON_FALSE(disp != NULL, ESP_FAIL, TAG, "add disp");
 
-    /* ---- 3. 初始亮度 ---- */
-    drv_display_set_brightness(80);
-
-    /* ---- 4. 页面构建 ---- */
+    /* ---- 3. 页面构建 ---- */
     lvgl_port_lock(0);
     ui_pages_create(w, h);
     lvgl_port_unlock();

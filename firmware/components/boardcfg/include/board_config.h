@@ -11,6 +11,10 @@ extern "C" {
 #define BOARD_FLASH_SIZE_MB    16
 #define BOARD_PSRAM_SIZE_MB    16
 
+/* AM200Q460460FLS1 有效显示区域在 CO5300 GRAM 中的偏移 */
+#define BOARD_LCD_X_GAP        10
+#define BOARD_LCD_Y_GAP        0
+
 /* 音频链路能力 */
 #define BOARD_AUDIO_DAC        "ES8311"
 #define BOARD_AUDIO_AMP        "NS4150B"   /* 3W @4Ω/5V, 喇叭座 1.25mm 4Ω */

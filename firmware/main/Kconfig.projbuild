@@ -80,9 +80,10 @@ menu "EspCube Configuration"
     # ============ 显示 ============
     config ESP_CUBE_LCD_PIXEL_CLOCK_HZ
         int "QSPI 像素时钟(Hz)"
-        default 80000000
+        default 40000000
         help
-          CO5300 QSPI: 理论 80MHz; 首次点亮建议先用 40MHz 排除时序问题。
+          厂商示例使用 40MHz; 首次点亮可先用 10MHz 排除时序问题。
+          CO5300 数据手册的写时钟周期至少为 20ns。
 
     config ESP_CUBE_LCD_H_RES
         int "面板水平分辨率"

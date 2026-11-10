@@ -10,7 +10,7 @@
  */
 #include "drv_display.h"
 
-#include <string.h>
+#include <limits.h>
 #include "esp_check.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
@@ -18,7 +18,10 @@
 #include "esp_lcd_co5300.h"          /* espressif/esp_lcd_co5300 组件 */
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "driver/spi_master.h"
+#include "board_config.h"
 #include "board_pins.h"
 #include "esp_log.h"
 
@@ -26,7 +29,6 @@ static const char *TAG = "drv_display";
 
 static esp_lcd_panel_io_handle_t s_io = NULL;
 static esp_lcd_panel_handle_t s_panel = NULL;
-static drv_display_cfg_t s_cfg;
 
 /* 鱼鹰 AM200Q460460FLS1 官方初始化序列(2026-11-10 首亮攻坚):
  * 组件默认序列按乐鑫自家 480x480 屏写(CASET 6..477/PASET 0..465),
@@ -54,37 +56,43 @@ esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
         return ESP_OK;                  /* 幂等 */
     }
     ESP_RETURN_ON_FALSE(cfg != NULL, ESP_ERR_INVALID_ARG, TAG, "cfg is NULL");
-    s_cfg = *cfg;
+    ESP_RETURN_ON_FALSE(cfg->h_res > 0 && cfg->h_res <= INT_MAX / 8 &&
+                        cfg->h_res % 2 == 0 && cfg->v_res > 0 &&
+                        cfg->v_res % 2 == 0 && cfg->pixel_clock_hz > 0 &&
+                        (size_t)cfg->h_res <= SIZE_MAX / (size_t)cfg->v_res / sizeof(uint16_t),
+                        ESP_ERR_INVALID_ARG, TAG, "invalid or unaligned display dimensions or clock");
 
-    /* ---- 1. RST/TE GPIO 初始化 ---- */
+    esp_err_t ret = ESP_OK;
+    bool bus_initialized = false;
+    esp_lcd_panel_io_handle_t io = NULL;
+    esp_lcd_panel_handle_t panel = NULL;
+    uint16_t *test_fb = NULL;
+
+    /* ---- 1. RST GPIO 初始化 ---- */
     const gpio_config_t rst_cfg = {
         .pin_bit_mask = 1ULL << BOARD_PIN_LCD_RST,
         .mode = GPIO_MODE_OUTPUT,       /* 推挽(首亮期比开漏驱动更可靠) */
         .pull_up_en = GPIO_PULLUP_ENABLE,
     };
-    gpio_config(&rst_cfg);
-    gpio_set_level(BOARD_PIN_LCD_RST, 1);
+    ESP_GOTO_ON_ERROR(gpio_config(&rst_cfg), err, TAG, "configure reset GPIO");
+    ESP_GOTO_ON_ERROR(gpio_set_level(BOARD_PIN_LCD_RST, 1), err, TAG, "release reset GPIO");
 
-    /* ---- 2. SPI 总线 + QSPI 面板 IO ----
-     * CO5300 组件提供两组宏: 总线配置(CO5300_PANEL_BUS_QSPI_CONFIG)与
-     * 面板 IO 配置(CO5300_PANEL_IO_QSPI_CONFIG, 默认40MHz, 此后覆盖时钟)。 */
+    /* ---- 2. SPI 总线 + QSPI 面板 IO ---- */
     spi_bus_config_t bus_cfg = CO5300_PANEL_BUS_QSPI_CONFIG(
             BOARD_PIN_LCD_CLK, BOARD_PIN_LCD_D0, BOARD_PIN_LCD_D1,
             BOARD_PIN_LCD_D2, BOARD_PIN_LCD_D3,
-            s_cfg.h_res * 8);               /* 单次传输8行(7.3KB): 吞吐~74fps且内部DMA
-                                             * 私有缓冲小, 避开BT/WiFi初始化期的内存竞争 */
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(BOARD_LCD_HOST, &bus_cfg, SPI_DMA_CH_AUTO),
-                        TAG, "spi bus init");
+            cfg->h_res * 8);                /* 约 4 行 RGB565, IDF 按 DMA 描述符取整 */
+    ESP_GOTO_ON_ERROR(spi_bus_initialize(BOARD_LCD_HOST, &bus_cfg, SPI_DMA_CH_AUTO),
+                      err, TAG, "spi bus init");
+    bus_initialized = true;
 
     esp_lcd_panel_io_spi_config_t io_cfg = CO5300_PANEL_IO_QSPI_CONFIG(
             BOARD_PIN_LCD_CS, NULL, NULL);
-    io_cfg.pclk_hz = cfg->pixel_clock_hz;   /* 覆盖默认40MHz(点亮稳定后提80MHz) */
-    /* 关键: LVGL 全帧缓冲在 PSRAM —— 打开 PSRAM 直接 DMA(GDMA-AXI 可达 PSRAM),
-     * 零拷贝;否则每笔传输要从内部 DMA 堆临时分配 bounce 缓冲,
-     * 在 BT/WiFi 初始化后会因内部内存碎片化而失败(实测)。 */
+    io_cfg.pclk_hz = cfg->pixel_clock_hz;
+    /* PSRAM 缓冲优先直接 DMA; 不满足对齐要求时 IDF 仍可能分配临时缓冲。 */
     io_cfg.flags.psram_dma_direct = 1;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BOARD_LCD_HOST,
-                                                 &io_cfg, &s_io), TAG, "new panel IO failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BOARD_LCD_HOST,
+                                               &io_cfg, &io), err, TAG, "new panel IO failed");
 
     /* ---- 3. 面板驱动对象 ---- */
     esp_lcd_panel_dev_config_t panel_cfg = {
@@ -99,38 +107,78 @@ esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
         .flags.use_qspi_interface = 1,
     };
     panel_cfg.vendor_config = &vendor_cfg;
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_co5300(s_io, &panel_cfg, &s_panel),
-                        TAG, "new co5300 panel failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_co5300(io, &panel_cfg, &panel),
+                      err, TAG, "new co5300 panel failed");
 
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
-    esp_lcd_panel_disp_on_off(s_panel, true);
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(panel), err, TAG, "panel reset");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(panel), err, TAG, "panel init");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_set_gap(panel, BOARD_LCD_X_GAP, BOARD_LCD_Y_GAP),
+                      err, TAG, "panel gap");
 
-    /* ---- 4. 首亮测试帧(纯红, PSRAM 直接 DMA) ----
-     * 判读: 红=链路通; 蓝=RGB565 字节序反(swap_bytes); 黑=数据未到面板
-     * (查接线/电源/地)。首亮验收后可移除。 */
-    {
-        size_t fb_bytes = (size_t)cfg->h_res * cfg->v_res * 2;
-        uint16_t *test_fb = heap_caps_aligned_alloc(64, fb_bytes,
-                                                    MALLOC_CAP_SPIRAM);
-        if (test_fb != NULL) {
-            for (size_t i = 0; i < cfg->h_res * cfg->v_res; i++) {
-                test_fb[i] = 0xF800;            /* RGB565 纯红 */
+    /* ---- 4. 首亮测试帧: 白/红/绿/蓝/黑/白 ---- */
+    size_t fb_bytes = (size_t)cfg->h_res * cfg->v_res * sizeof(uint16_t);
+    test_fb = heap_caps_aligned_alloc(64, fb_bytes, MALLOC_CAP_SPIRAM);
+    if (test_fb != NULL) {
+        static const uint16_t bands[] = {
+            0xFFFF, 0xF800, 0x07E0, 0x001F, 0x0000, 0xFFFF,
+        };
+        for (int y = 0; y < cfg->v_res; y++) {
+            size_t band = (size_t)((int64_t)y * 6 / cfg->v_res);
+            uint16_t color = bands[band];
+            uint16_t wire_color = (uint16_t)((color << 8) | (color >> 8));
+            for (int x = 0; x < cfg->h_res; x++) {
+                test_fb[(size_t)y * cfg->h_res + x] = wire_color;
             }
-            esp_err_t dret = esp_lcd_panel_draw_bitmap(s_panel, 0, 0,
-                                                       cfg->h_res - 1, cfg->v_res - 1,
-                                                       test_fb);
-            ESP_LOGI(TAG, "first-light test frame (red): %s",
-                     dret == ESP_OK ? "sent" : esp_err_to_name(dret));
-            heap_caps_free(test_fb);
-        } else {
-            ESP_LOGW(TAG, "test frame alloc fail (%u bytes)", (unsigned)fb_bytes);
         }
+        ESP_GOTO_ON_ERROR(esp_lcd_panel_draw_bitmap(panel, 0, 0, cfg->h_res, cfg->v_res,
+                                                   test_fb), err, TAG, "first-light draw");
+    } else {
+        ESP_LOGW(TAG, "test frame alloc fail (%u bytes)", (unsigned)fb_bytes);
     }
 
+    /* 显示开启命令会等待先前的异步彩条传输完成, 再释放帧缓冲。 */
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_disp_on_off(panel, true), err, TAG, "panel display on");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_co5300_set_brightness(panel, 80),
+                      err, TAG, "panel brightness");
+    ESP_LOGI(TAG, "panel brightness 80%%: ok");
+    if (test_fb != NULL) {
+        ESP_LOGI(TAG, "first-light color bars: transferred (%dx%d)", cfg->h_res, cfg->v_res);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        heap_caps_free(test_fb);
+        test_fb = NULL;
+    }
+
+    s_io = io;
+    s_panel = panel;
     ESP_LOGI(TAG, "CO5300 QSPI AMOLED ready: %dx%d @%dHz",
              cfg->h_res, cfg->v_res, cfg->pixel_clock_hz);
     return ESP_OK;
+
+err:
+    if (panel != NULL) {
+        esp_err_t cleanup_err = esp_lcd_panel_del(panel);
+        if (cleanup_err != ESP_OK) {
+            ESP_LOGE(TAG, "panel cleanup failed: %s", esp_err_to_name(cleanup_err));
+        }
+    }
+    if (io != NULL) {
+        esp_err_t cleanup_err = esp_lcd_panel_io_del(io);
+        if (cleanup_err != ESP_OK) {
+            ESP_LOGE(TAG, "panel IO cleanup failed; retaining DMA buffer and SPI bus: %s",
+                     esp_err_to_name(cleanup_err));
+            return ret;
+        }
+    }
+    if (test_fb != NULL) {
+        heap_caps_free(test_fb);
+    }
+    if (bus_initialized) {
+        esp_err_t cleanup_err = spi_bus_free(BOARD_LCD_HOST);
+        if (cleanup_err != ESP_OK) {
+            ESP_LOGE(TAG, "SPI bus cleanup failed: %s", esp_err_to_name(cleanup_err));
+        }
+    }
+    return ret;
 }
 
 esp_lcd_panel_io_handle_t drv_display_get_io(void)
@@ -143,24 +191,16 @@ esp_lcd_panel_handle_t drv_display_get_panel(void)
     return s_panel;
 }
 
-/* CO5300 亮度寄存器 0x51(Brightness), 0-255 —— 与 SH8601 族一致, 带上电时序由面板 init 保证 */
 esp_err_t drv_display_set_brightness(int percent)
 {
-    if (s_io == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    ESP_RETURN_ON_FALSE(s_panel != NULL, ESP_ERR_INVALID_STATE, TAG, "panel not initialized");
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-    uint8_t val = (uint8_t)(percent * 255 / 100);
-    /* TODO(点亮核对): 若带显示异常, 对照鱼鹰 CO5300 datasheet 确认亮度命令码 */
-    return esp_lcd_panel_io_tx_param(s_io, 0x51, (const uint8_t[]){ val }, 1);
+    return esp_lcd_panel_co5300_set_brightness(s_panel, (uint8_t)percent);
 }
 
 esp_err_t drv_display_sleep(bool sleep)
 {
-    if (s_panel == NULL) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    /* 深度待机: AMOLED 全黑且内部 boost 关闭, 电流降至 µA 级 */
-    return esp_lcd_panel_io_tx_param(s_io, sleep ? 0x28 : 0x29, NULL, 0);  /* 28h=Display Off 29h=On */
+    ESP_RETURN_ON_FALSE(s_panel != NULL, ESP_ERR_INVALID_STATE, TAG, "panel not initialized");
+    return esp_lcd_panel_disp_on_off(s_panel, !sleep);
 }

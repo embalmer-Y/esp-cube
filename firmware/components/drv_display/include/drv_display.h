@@ -17,7 +17,7 @@ extern "C" {
 #endif
 
 typedef struct {
-    int pixel_clock_hz;      /* QSPI 时钟(建议首次点亮用 40MHz, 稳定后 80MHz) */
+    int pixel_clock_hz;      /* QSPI 时钟(首次点亮建议 10MHz, 稳定后 40MHz) */
     int h_res;
     int v_res;
     bool use_te;             /* 是否启用 TE 撕裂同步 */
@@ -33,7 +33,7 @@ esp_lcd_panel_handle_t drv_display_get_panel(void);
 /* 亮度(0-100, AMOLED 无背光, 写 CO5300 亮度寄存器) */
 esp_err_t drv_display_set_brightness(int percent);
 
-/* 睡眠控制(省电/待机) */
+/* 显示关闭/恢复(不进入深度睡眠) */
 esp_err_t drv_display_sleep(bool sleep);
 
 #ifdef __cplusplus
