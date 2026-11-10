@@ -5,7 +5,7 @@ ESP32-S31(乐鑫 2026)+ 鱼鹰光电 2寸 QSPI AMOLED(460×460,CO5300)+ Peerless
 
 ## 当前状态(2026-11-09)
 
-- **M1 音频+UI 闭环已完成**:输出链路(ES8311→NS4150B→喇叭)真实录音验收;MP3 连续播放(libhelix 解码);蓝牙 A2DP Sink 就绪;WiFi + 播放列表轮播。
+- **M1 音频链路已验证,屏幕显示待实机验收**:输出链路(ES8311→NS4150B→喇叭)真实录音验收;MP3 连续播放(libhelix 解码);蓝牙 A2DP Sink 就绪;WiFi + 播放列表轮播。
 - **MP3 解码选型**:`chmorgan/esp-libhelix-mp3`(esp_audio_codec 的 MP3 即闭源 minimp3 派生,S31 上慢且吞帧,详见 docs/01 §网络音频栈)。
 - 固件 `idf.py build` 通过,app ~3.0MB(factory 4MB,余 25%)。
 - 下一步:国内电台源+HLS → M2 语音 AI(esp-sr + 自建 GLM 服务端)。
