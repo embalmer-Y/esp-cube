@@ -16,6 +16,7 @@ dependencies:
   # MP3 解码已 vendor 至 components/mp3_helix(-O3 编译), 不再用 registry 组件
   # HLS 直播/点播协议栈(国内电台主流): m3u8 解析/分段调度/AES-128 解密
   espressif/esp_hls_stream: "^1.0.4"
-  ## 里程碑2启用: esp-sr(唤醒词/AFE/AEC/MultiNet; 含模型二进制, 体积较大)
-  ## 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / CONFIG_ESP_CUBE_ENABLE_AI
-  # espressif/esp-sr: "^2.6.0"
+  # esp-sr: 离线唤醒(V-04 S31 实测: 唯一可用 wn10_hilexin_int16;
+  # Kconfig SR_WN_WN10_HILEXIN_INT16 + MODEL_IN_FLASH 必开)
+  # 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / ENABLE_AI
+  espressif/esp-sr: "^2.6.0"

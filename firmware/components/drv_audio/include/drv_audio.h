@@ -33,7 +33,8 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg);
  * 混音器以本函数为节拍: DMA 缓冲欠载时阻塞, 天然形成 10ms  pacing */
 int drv_audio_output(const int16_t *samples, int frames);
 
-/* 录音读取(交错 int16; 与播放共用 I2S 时钟) */
+/* 录音读取(交错 int16 立体声, 与播放同 LRCK=48k; 返回帧数 0=失败)。
+ * 16k 单声道降采样由语音前端自理(app_voice/ai_session)。 */
 int drv_audio_mic_read(int16_t *buf, int frames);
 
 /* 音量(0-100): codec 数字音量 + PA 增益预留 */

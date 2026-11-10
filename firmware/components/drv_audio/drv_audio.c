@@ -19,6 +19,8 @@
 #include "driver/i2c_master.h"
 #include "board_pins.h"
 #include "esp_codec_dev.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_codec_dev_defaults.h"
 
 static const char *TAG = "drv_audio";
@@ -180,3 +182,5 @@ esp_err_t drv_audio_pa_set(bool on)
     ESP_LOGI(TAG, "PA %s", on ? "ON" : "OFF");
     return ret;
 }
+
+

@@ -52,6 +52,11 @@ static void player_start_task(void *arg)
 static void demo_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)data; (void)len; (void)ctx;
+#if CONFIG_ESP_CUBE_ENABLE_AI
+    if (id == CUBE_EVT_WAKE_DETECTED) {
+        ai_session_on_wake();                    /* 唤醒 → 开启一轮会话 */
+    }
+#endif
     if (id == CUBE_EVT_WIFI_CONNECTED) {
         ESP_LOGI(TAG, "EVT: WiFi connected");
         BaseType_t r = xTaskCreate(player_start_task, "pstart", 4096, NULL, 8, NULL);
