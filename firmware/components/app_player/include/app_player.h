@@ -21,7 +21,7 @@ typedef enum {
     PLAYER_ERROR,
 } app_player_state_t;
 
-/* 开始播放(url 为 http/https 流地址);已在播放时先切换 */
+/* 开始播放(url 为 http/https 流地址; 传 NULL = 按内部播放列表轮播) */
 esp_err_t app_player_start(const char *url);
 
 /* 初始化(订阅 BT 接管事件);幂等, 须在 app_bt_start 之前调用 */
@@ -29,6 +29,12 @@ esp_err_t app_player_init(void);
 
 /* 停止播放 */
 esp_err_t app_player_stop(void);
+
+/* ---- 播放列表(电台单一来源; UI/装配层经此枚举, 不自带列表副本) ---- */
+int app_player_station_num(void);               /* 列表长度(≥1) */
+const char *app_player_station_name(int idx);   /* 台名; NULL=越界 */
+int app_player_station_idx(void);               /* 当前下标; -1=列表外单次播放 */
+esp_err_t app_player_play_index(int idx);       /* 播放列表指定项(越界回绕) */
 
 /* 当前状态与元数据 */
 app_player_state_t app_player_get_state(void);

@@ -1,11 +1,11 @@
 # EspCube 分区表(16MB Flash, ESP32-S31-WROOM-3)
-# - model: esp-sr 唤醒/命令词模型分区(里程碑2启用, esp-sr 要求分区名为 "model")
-# - ota_0/ota_1: 预留双 OTA(最终产品需要;原型期仅用 factory)
-# Name,    Type, SubType, Offset,   Size,     Flags
-nvs,      data, nvs,     0x9000,   0x6000,
-phy_init, data, phy,     0xf000,   0x1000,
-factory,  app,  factory, 0x10000,  0x400000,
-ota_0,    app,  ota_0,   0x410000, 0x400000,
-ota_1,    app,  ota_1,   0x810000, 0x400000,
-model,    data, spiffs,  0xC10000, 0x380000,
-storage,  data, spiffs,  0xF90000, 0x70000,
+# - factory 10MB: 新氛围 UI 携带全 GB2312 CJK 字库×2(~5.5MB rodata),
+#   原型期单分区; OTA 双分区在字库瘦身上线后再恢复(最终产品需要)
+# - model: esp-sr 唤醒/命令词模型分区(esp-sr 要求分区名为 "model")
+# - storage: NVS 之外的杂项(NVS 备份/资产, 当前预留)
+# Name,    Type, SubType, Offset,    Size,      Flags
+nvs,      data, nvs,     0x9000,    0x6000,
+phy_init, data, phy,     0xf000,    0x1000,
+factory,  app,  factory, 0x10000,   0xA00000,
+model,    data, spiffs,  0xA10000,  0x380000,
+storage,  data, spiffs,  0xD90000,  0x70000,

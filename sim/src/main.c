@@ -138,7 +138,7 @@ static void overlay_create(void)
         "空格: 播放/停止\n"
         "N / P: 下一曲 / 上一曲\n"
         "B: 蓝牙连接切换  M: BT切歌\n"
-        "T: 电台标题刷新\n"
+        "T: 电台标题刷新  A: AI会话演示\n"
         "↑/↓: 音量  F: 帧率\n"
         "S: 截图  H: 帮助  ESC: 退出");
 }
@@ -165,6 +165,7 @@ static void handle_key(SDL_Keycode key)
     case SDLK_t: mock_app_action(SIM_ACT_ICY_TITLE); return;
     case SDLK_UP: mock_app_action(SIM_ACT_VOL_UP); return;
     case SDLK_DOWN: mock_app_action(SIM_ACT_VOL_DOWN); return;
+    case SDLK_a: mock_app_action(SIM_ACT_AI_ASK); return;
     default: return;
     }
 }

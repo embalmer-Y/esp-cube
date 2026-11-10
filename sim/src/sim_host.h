@@ -23,6 +23,7 @@ typedef enum {
     SIM_ACT_ICY_TITLE,          /* 电台 StreamTitle 刷新 */
     SIM_ACT_VOL_UP,
     SIM_ACT_VOL_DOWN,
+    SIM_ACT_AI_ASK,            /* 演示一轮 AI 会话(聆听→思考→回答) */
 } sim_action_t;
 
 /* mock_app.c 实现 */

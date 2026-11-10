@@ -43,6 +43,15 @@ typedef enum {
     UI_PLAYER_ERROR,
 } ui_player_state_t;
 
+/* ---- AI 会话状态(与 ai_state_t 值对齐, 不引固件头) ---- */
+typedef enum {
+    UI_AI_IDLE = 0,
+    UI_AI_WAKE,
+    UI_AI_LISTENING,
+    UI_AI_THINKING,
+    UI_AI_SPEAKING,
+} ui_ai_state_t;
+
 #define UI_STR_LEN     64
 #define UI_SUB_LEN     96
 #define UI_MAX_STATIONS 8
@@ -74,6 +83,10 @@ typedef struct {
     bool has_lyrics;
     char lyric_cur[UI_SUB_LEN];    /* 当前行 */
     char lyric_next[UI_SUB_LEN];   /* 下一行(可为空) */
+
+    /* 语音 AI(状态驱动极简提示: 聆听中/思考中…; 文本暂存字幕位) */
+    ui_ai_state_t ai_state;
+    char ai_text[UI_SUB_LEN];      /* 最近一次 ASR/AI 文本 */
 
     /* 杂项 */
     char fw_info[32];              /* 版本/构建信息 */

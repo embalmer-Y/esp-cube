@@ -58,6 +58,7 @@ static lv_obj_t *s_scr_main, *s_scr_splash;
 static lv_obj_t *s_canvas_line;             /* ARGB 画布(音频直线) */
 static lv_obj_t *s_lbl_brand;               /* 待机品牌标 */
 static lv_obj_t *s_lbl_station;             /* 电台名(toast) */
+static lv_obj_t *s_lbl_ai;                  /* AI 会话状态提示 */
 static lv_obj_t *s_lbl_title;               /* 底部标题 */
 static lv_obj_t *s_lbl_artist;              /* 底部艺术家/专辑 */
 static lv_obj_t *s_lbl_lyr_src;             /* 歌词排版源(离屏, 只供 snapshot) */
@@ -111,6 +112,7 @@ static int  s_last_volume = -1;
 static int  s_last_station = -1;
 static int  s_last_station_num = -1;
 static int  s_last_source = -1, s_last_player = -1;
+static int  s_last_ai_state = -1;
 
 /* ================= 手势(轴向锁定) ================= */
 static lv_point_t s_press_p0;
@@ -615,7 +617,7 @@ static void info_apply(const ui_model_t *m)
         lv_label_set_text(s_lbl_title, ti[0] ? ti : " ");
     }
     /* 底部第二行: BT=艺术家·专辑; 电台=空(台名走 toast) */
-    char line[UI_STR_LEN + 8];
+    char line[UI_STR_LEN * 2 + 8];    /* 容纳 artist+"·"+album 全长不截断 */
     if (m->source == UI_SRC_BT) {
         snprintf(line, sizeof(line), "%s%s%s", m->artist,
                  m->album[0] ? " · " : "", m->album);
@@ -646,6 +648,28 @@ static void info_apply(const ui_model_t *m)
     if (m->player != s_last_player) s_last_player = m->player;
 }
 
+/* ---- AI 会话状态提示(极简: 顶部第二行点标文字) ---- */
+static void ai_apply(const ui_model_t *m)
+{
+    if ((int)m->ai_state == s_last_ai_state) return;
+    s_last_ai_state = (int)m->ai_state;
+    switch (m->ai_state) {
+    case UI_AI_LISTENING:
+        lv_label_set_text(s_lbl_ai, "· 聆听中 ·");
+        fade_in(s_lbl_ai, 8, 260);
+        break;
+    case UI_AI_THINKING:
+        lv_label_set_text(s_lbl_ai, "· 思考中 ·");
+        break;                              /* 已亮, 仅换字 */
+    case UI_AI_SPEAKING:
+        lv_label_set_text(s_lbl_ai, "· 回答中 ·");
+        break;
+    default:
+        fade_out(s_lbl_ai, 300);
+        break;
+    }
+}
+
 static void model_sync(const ui_model_t *m)
 {
     bool playing = m->player == UI_PLAYER_PLAYING ||
@@ -656,6 +680,7 @@ static void model_sync(const ui_model_t *m)
     scene_apply(scene);
     info_apply(m);
     lyrics_apply(m);
+    ai_apply(m);
     volume_sync(m->volume);
 }
 
@@ -829,6 +854,11 @@ void ui_pages_create(int w, int h)
     s_lbl_station = label_make(s_scr_main, FONT_CJK, C_TXT2);
     lv_obj_set_style_opa(s_lbl_station, 0, 0);
     lv_obj_align(s_lbl_station, LV_ALIGN_TOP_MID, 0, 26);
+
+    /* AI 会话状态提示(顶部第二行, 点标文字; 见 ai_apply) */
+    s_lbl_ai = label_make(s_scr_main, FONT_CJK, 0x7FD4A8);
+    lv_obj_set_style_opa(s_lbl_ai, 0, 0);
+    lv_obj_align(s_lbl_ai, LV_ALIGN_TOP_MID, 0, 56);
 
     /* 歌词(当前行 24px, 飞行/倾斜; 下一行 18px 暗色预示, 固定水平) */
     s_screen_w = w;

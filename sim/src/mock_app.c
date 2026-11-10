@@ -225,6 +225,9 @@ int ui_audio_take_pcm(int16_t *stereo, int frames)
 }
 
 /* ================= 键盘动作 ================= */
+static uint32_t s_ai_t0;                     /* AI 演示脚本起点 */
+static bool s_ai_active;
+
 void mock_app_action(sim_action_t a)
 {
     switch (a) {
@@ -255,6 +258,30 @@ void mock_app_action(sim_action_t a)
         break;
     case SIM_ACT_VOL_UP:        ui_ctl_set_volume(s_model.volume + 5); break;
     case SIM_ACT_VOL_DOWN:      ui_ctl_set_volume(s_model.volume - 5); break;
+    case SIM_ACT_AI_ASK:
+        s_ai_active = true;                 /* 脚本一轮: 聆听→思考→回答→IDLE */
+        s_ai_t0 = s_now;
+        printf("[mock] AI session demo\n");
+        break;
+    }
+}
+
+/* ================= AI 会话演示脚本(状态时间线) ================= */
+static void ai_demo_tick(void)
+{
+    if (!s_ai_active) return;
+    uint32_t el = s_now - s_ai_t0;
+    ui_ai_state_t st = el < 1200  ? UI_AI_LISTENING
+                     : el < 2200  ? UI_AI_THINKING
+                     : el < 4600  ? UI_AI_SPEAKING
+                     : UI_AI_IDLE;
+    if (st != s_model.ai_state) {
+        s_model.ai_state = st;
+        if (st == UI_AI_SPEAKING) {
+            snprintf(s_model.ai_text, UI_SUB_LEN, "%s",
+                     "今天天气不错，适合听点音乐。");
+        }
+        if (st == UI_AI_IDLE) s_ai_active = false;
     }
 }
 
@@ -322,7 +349,13 @@ static const demo_step_t s_demo_steps[] = {
     { 18000, SIM_ACT_BT_TOGGLE,      NULL },         /* 断 BT → 电台恢复 */
     { 18600, SIM_ACT_TOGGLE_PLAY,    NULL },         /* 停电台 → 待机 */
     { 19800, DEMO_NONE,              "09_idle" },
-    { 20200, DEMO_END,               NULL },
+    /* AI 会话演示: 聆听(20300+0)/思考(+1200)/回答(+2200)/回 IDLE(+4600) */
+    { 20300, SIM_ACT_AI_ASK,         NULL },
+    { 20600, DEMO_NONE,              "13_ai_listening" },
+    { 21900, DEMO_NONE,              "13_ai_thinking" },
+    { 23000, DEMO_NONE,              "13_ai_speaking" },
+    { 24900, DEMO_NONE,              "13_ai_idle" },
+    { 25200, DEMO_END,               NULL },
 };
 static int s_demo_idx;
 
@@ -391,6 +424,7 @@ void mock_app_periodic(uint32_t now_ms_val)
     }
 
     lyrics_tick();
+    ai_demo_tick();
 
     if (s_demo) demo_tick();
 }

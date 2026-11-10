@@ -37,6 +37,9 @@
 #include "ai_session.h"
 #endif
 
+/* ui_model.h 设备后端(本目录 ui_port_esp.c, L5 实现 docs/06 §2.1) */
+extern esp_err_t ui_port_init(void);
+
 static const char *TAG = "main";
 
 /* WiFi 就绪 → 启动播放列表(一次性任务: app_player_start 内含停止等待,
@@ -96,8 +99,10 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(audio_mixer_init(&mcfg));
     audio_mixer_set_master_volume(CONFIG_ESP_CUBE_DEFAULT_VOLUME);
-    ESP_ERROR_CHECK(drv_audio_pa_set(true));            /* codec 就绪后再开功放(防爆音) */
+    /* 混音任务先起, 成功后才开功放: 否则 mixer 启动失败 → abort → 重启
+     * 循环, 每次循环 PA 都"噗"一声(失败域审查 2026-11-12) */
     ESP_ERROR_CHECK(audio_mixer_start());
+    ESP_ERROR_CHECK(drv_audio_pa_set(true));
 
 #if CONFIG_ESP_CUBE_ENABLE_UI
     /* ---- 3. 显示(独立失败域) ---- */
@@ -109,7 +114,14 @@ void app_main(void)
     };
     esp_err_t derr = drv_display_init(&dcfg);
     if (derr == ESP_OK) {
-        ESP_ERROR_CHECK(app_ui_start());
+        ESP_ERROR_CHECK(ui_port_init());                /* ui_model 设备后端 */
+        app_ui_boot_cfg_t ucfg = {
+            .io_handle = drv_display_get_io(),
+            .panel_handle = drv_display_get_panel(),
+            .h_res = CONFIG_ESP_CUBE_LCD_H_RES,
+            .v_res = CONFIG_ESP_CUBE_LCD_V_RES,
+        };
+        ESP_ERROR_CHECK(app_ui_start(&ucfg));
     } else {
         ESP_LOGE(TAG, "display init failed(%s), audio-only mode", esp_err_to_name(derr));
     }
@@ -139,12 +151,18 @@ void app_main(void)
     ESP_LOGI(TAG, "coex prefer BT: %s", cerr == ESP_OK ? "ok" : esp_err_to_name(cerr));
 #endif
 
-    /* ---- 5. 语音 AI(里程碑2, Kconfig 启用) ---- */
+    /* ---- 5. 语音 AI(里程碑2, Kconfig 启用; 可选功能 → 降级不 abort) ---- */
 #if CONFIG_ESP_CUBE_ENABLE_VOICE
-    ESP_ERROR_CHECK(app_voice_start());
+    esp_err_t verr = app_voice_start();
+    if (verr != ESP_OK) {
+        ESP_LOGE(TAG, "voice degraded: %s", esp_err_to_name(verr));
+    }
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
-    ESP_ERROR_CHECK(ai_session_start());
+    esp_err_t aerr = ai_session_start();
+    if (aerr != ESP_OK) {
+        ESP_LOGE(TAG, "ai session degraded: %s", esp_err_to_name(aerr));
+    }
 #endif
 
     /* ---- 6. 演示观察者 ---- */

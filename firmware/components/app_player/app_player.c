@@ -501,7 +501,16 @@ static const char *s_playlist[] = {
     "http://live.xmcdn.com/live/74/64.m3u8",        /* 广东音乐之声FM99.3(流行) */
     "http://ngcdn001.cnr.cn/live/zgzs/index.m3u8",  /* CNR中国之声(新闻/TS段) */
 };
+/* 台名与 s_playlist 一一对应(UI 显示用; 电台列表单一来源在本组件) */
+static const char *s_station_names[] = {
+    "广东音乐之声·卫星",
+    "上海经典947",
+    "广东音乐之声FM993",
+    "CNR中国之声",
+};
 #define PLAYLIST_NUM (sizeof(s_playlist) / sizeof(s_playlist[0]))
+_Static_assert(sizeof(s_station_names) / sizeof(s_station_names[0]) ==
+               PLAYLIST_NUM, "station names must match playlist");
 
 /* ================= 播放任务 ================= */
 #if CONFIG_ESP_CUBE_TEST_TONE
@@ -1024,4 +1033,32 @@ app_player_state_t app_player_get_state(void)
 const char *app_player_get_url(void)
 {
     return s_player.url;
+}
+
+/* ---- 播放列表接口(电台单一来源; 见 app_player.h) ---- */
+int app_player_station_num(void)
+{
+    return (int)PLAYLIST_NUM;
+}
+
+const char *app_player_station_name(int idx)
+{
+    if (idx < 0 || idx >= (int)PLAYLIST_NUM) return NULL;
+    return s_station_names[idx];
+}
+
+int app_player_station_idx(void)
+{
+    return s_player.playlist_idx;
+}
+
+esp_err_t app_player_play_index(int idx)
+{
+    int n = (int)PLAYLIST_NUM;
+    idx = ((idx % n) + n) % n;                    /* 越界回绕 */
+    esp_err_t err = app_player_start(s_playlist[idx]);
+    if (err == ESP_OK) {
+        s_player.playlist_idx = idx;              /* 显式点选仍参与后续轮播 */
+    }
+    return err;
 }
