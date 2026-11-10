@@ -65,7 +65,12 @@ static lv_obj_t *s_lbl_lyr_src;             /* 歌词排版源(离屏, 只供 sn
 static lv_obj_t *s_lbl_lyr_next;            /* 歌词下一行(预示, 固定水平) */
 static lv_obj_t *s_img_lyr_cur;             /* 当前句(快照 image, 飞入动画) */
 static lv_obj_t *s_img_lyr_out;             /* 旧句(快照 image, 飞离动画) */
-static lv_draw_buf_t *s_dsc_cur, *s_dsc_out;   /* 快照数据(lv_snapshot_take 返回) */
+/* 快照池: 双槽交替(飞出句沿用当前槽内容, 新句写另一槽), 免每句
+ * 58KB malloc/free; 槽尺寸按排版区上限分配, 超限回退一次性分配路径 */
+#define LYR_SNAP_BYTES  (96u * 1024u)   /* 430 宽 ARGB + 对齐 stride + ext 余量 */
+static lv_draw_buf_t s_snap_dsc[2];
+static uint8_t *s_snap_buf[2];
+static int s_snap_slot;                     /* 当前句所在槽 */
 
 /* 歌词飞行动画状态 */
 static int  s_lyr_angle;                    /* 当前句倾角(0.1° 单位) */
@@ -90,6 +95,7 @@ static lv_color16_t *s_buf_splash;          /* SPLASH_CUBE^2 */
 static int16_t s_pcm[256 * 2];
 static float    s_fft[128];
 static float    s_band[SPEC_BANDS];         /* 平滑后 band 高度 0..1 */
+static int16_t  s_band_lo[SPEC_BANDS], s_band_hi[SPEC_BANDS];  /* 预计算边界 */
 static float    s_energy, s_bass;           /* 整体能量/低频(0..1) */
 static float    s_curve[LINE_W];            /* 当前帧曲线 y(画布内) */
 static bool     s_splash_active = true;
@@ -198,37 +204,85 @@ static void fade_out(lv_obj_t *obj, uint32_t dur)
 /* ============================================================ */
 /*                 音频直线 AA 渲染(ARGB)                       */
 /* ============================================================ */
+/* na 倒数表(替代混合除法): nr = num * recip[na] >> 16 */
+static uint16_t s_recip[256];
+
+/* 预渲染光盘 sprite: 三个半径恒定(辉光 9/内芯 3.5/倒影 2.2), 一次性
+ * 距离场 AA 后逐像素 blit —— 免去每帧 ~15 万次 sqrtf 与除法 */
+enum { SPR_GLOW_BIG = 0, SPR_GLOW_SMALL, SPR_REFLECT, SPR_NUM };
+#define SPR_MAX_HALF 11                     /* rad 9 → ri 11 */
+typedef struct {
+    int half;
+    int stride;
+    uint8_t cov[(SPR_MAX_HALF * 2 + 1) * (SPR_MAX_HALF * 2 + 1)];
+} disc_sprite_t;
+static disc_sprite_t s_spr[SPR_NUM];
+
+static void render_tables_init(void)
+{
+    s_recip[0] = 0;
+    for (int i = 1; i < 256; i++) {
+        s_recip[i] = (uint16_t)((65536 + i / 2) / i);
+    }
+    static const float radii[SPR_NUM] = { 9.0f, 3.5f, 2.2f };
+    for (int i = 0; i < SPR_NUM; i++) {
+        float rad = radii[i];
+        int ri = (int)rad + 2;
+        s_spr[i].half = ri;
+        s_spr[i].stride = ri * 2 + 1;
+        for (int y = -ri; y <= ri; y++) {
+            for (int x = -ri; x <= ri; x++) {
+                float d = sqrtf((float)(x * x + y * y));
+                float edge = rad - d;
+                float cov = edge > 1.0f ? 1.0f : (edge < 0 ? 0.0f : edge);
+                s_spr[i].cov[(y + ri) * s_spr[i].stride + (x + ri)] =
+                    (uint8_t)(cov * 255.0f + 0.5f);
+            }
+        }
+    }
+    /* 频带边界表(对数分组, 消每帧 2×SPEC_BANDS 次 powf) */
+    for (int b = 0; b < SPEC_BANDS; b++) {
+        int lo = (int)(powf((float)b / SPEC_BANDS, 1.8f) * 100);
+        int hi = (int)(powf((float)(b + 1) / SPEC_BANDS, 1.8f) * 100);
+        if (hi <= lo) hi = lo + 1;
+        s_band_lo[b] = (int16_t)lo;
+        s_band_hi[b] = (int16_t)hi;
+    }
+}
+
 static inline void line_px(int x, int y, uint8_t r, uint8_t g, uint8_t b,
                            uint8_t a)
 {
     if (x < 0 || x >= LINE_W || y < 0 || y >= LINE_H || a == 0) return;
     uint32_t *px = &s_buf_line[y * LINE_W + x];
-    uint32_t da = *px >> 24;
-    uint8_t na = (uint8_t)(a + da * (255 - a) / 255);       /* over 合成 */
+    uint32_t d = *px;
+    uint32_t da = d >> 24;
+    uint32_t rem = 255 - a;
+    uint32_t wa = (da * rem) >> 8;               /* ≈ da*rem/255 */
+    uint32_t na = a + wa;                        /* over 合成 */
     if (na == 0) return;
-    uint32_t dr = (*px >> 16) & 0xFF, dg = (*px >> 8) & 0xFF, db = *px & 0xFF;
-    uint32_t nr = (r * a + dr * da * (255 - a) / 255) / na;
-    uint32_t ng = (g * a + dg * da * (255 - a) / 255) / na;
-    uint32_t nb = (b * a + db * da * (255 - a) / 255) / na;
-    *px = ((uint32_t)na << 24) | (nr << 16) | (ng << 8) | nb;
+    uint32_t inv = s_recip[na];
+    uint32_t nr = ((r * a + (((d >> 16) & 0xFF) * wa)) * inv) >> 16;
+    uint32_t ng = ((g * a + (((d >> 8) & 0xFF) * wa)) * inv) >> 16;
+    uint32_t nb = ((b * a + ((d & 0xFF) * wa)) * inv) >> 16;
+    *px = (na << 24) | (nr << 16) | (ng << 8) | nb;
 }
 
-/* 软圆盘(距离场 AA) */
-static void line_disc(float cx, float cy, float rad, uint8_t r, uint8_t g,
+/* 光盘 blit(距离场 AA 已预烘焙进 sprite) */
+static void line_disc(int cx, int cy, int spr, uint8_t r, uint8_t g,
                       uint8_t b, uint8_t a)
 {
-    int ri = (int)rad + 2;
-    int x0 = (int)cx - ri, x1 = (int)cx + ri;
-    int y0 = (int)cy - ri, y1 = (int)cy + ri;
+    const disc_sprite_t *s = &s_spr[spr];
+    int ri = s->half;
+    int x0 = cx - ri, x1 = cx + ri, y0 = cy - ri, y1 = cy + ri;
     if (x1 < 0 || x0 >= LINE_W || y1 < 0 || y0 >= LINE_H) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
     for (int y = y0; y <= y1; y++) {
-        float dyy = y - cy;
+        const uint8_t *row = &s->cov[(y - (cy - ri)) * s->stride];
         for (int x = x0; x <= x1; x++) {
-            float dxx = x - cx;
-            float d = sqrtf(dxx * dxx + dyy * dyy);
-            float edge = rad - d;
-            float cov = edge > 1.0f ? 1.0f : (edge < 0 ? 0.0f : edge);
-            if (cov > 0) line_px(x, y, r, g, b, (uint8_t)(a * cov));
+            uint8_t c = row[x - (cx - ri)];
+            if (c) line_px(x, y, r, g, b, (uint8_t)((c * a) >> 8));
         }
     }
 }
@@ -263,10 +317,8 @@ static void bands_update(bool playing)
         if (s_bass > 1) s_bass = 1;
 
         for (int b = 0; b < SPEC_BANDS; b++) {
-            /* 对数频率分组(与混音器抽头一致) */
-            int lo = (int)(powf((float)b / SPEC_BANDS, 1.8f) * 100);
-            int hi = (int)(powf((float)(b + 1) / SPEC_BANDS, 1.8f) * 100);
-            if (hi <= lo) hi = lo + 1;
+            /* 对数频率分组(边界已预计算, 见 render_tables_init) */
+            int lo = s_band_lo[b], hi = s_band_hi[b];
             float mag = 0;
             for (int k = lo; k < hi && k < 128; k++) {
                 if (s_fft[k] > mag) mag = s_fft[k];
@@ -289,10 +341,12 @@ static void bands_update(bool playing)
 /* ============================================================ */
 /*                   直线绘制(每帧)                              */
 /* ============================================================ */
+/* 上一帧脏带(脏区清理: 只清曲线扫过的行, 免每帧 405KB memset) */
+static int s_prev_y0 = LINE_H, s_prev_y1 = -1;
+
 static void line_draw(const ui_model_t *m)
 {
     if (s_buf_line == NULL || s_canvas_line == NULL) return;  /* OOM 守卫 */
-    memset(s_buf_line, 0, sizeof(uint32_t) * LINE_W * LINE_H);
 
     bool idle = s_scene == SCENE_IDLE;
     bool lyrics_mode = s_scene == SCENE_LYRICS;
@@ -325,15 +379,39 @@ static void line_draw(const ui_model_t *m)
         s_curve[x] = cy - h * amp;
     }
 
+    /* ---- 脏带清屏(曲线 y 范围 + 倒影带, 与上一帧取并集) ---- */
+    int y0 = LINE_H, y1 = 0;
+    for (int x = 0; x < LINE_W; x++) {
+        int yy = (int)s_curve[x];
+        if (yy < y0) y0 = yy;
+        if (yy > y1) y1 = yy;
+        if (!idle) {                       /* 倒影带(cy 镜像 + 下移 14) */
+            int ry = (int)(2 * cy - s_curve[x] + 14);
+            if (ry < y0) y0 = ry;
+            if (ry > y1) y1 = ry;
+        }
+    }
+    int cur_y0 = y0 - 13, cur_y1 = y1 + 13;  /* 辉光半径 + AA 余量 */
+    if (cur_y0 < 0) cur_y0 = 0;
+    if (cur_y1 >= LINE_H) cur_y1 = LINE_H - 1;
+    y0 = cur_y0; y1 = cur_y1;
+    if (s_prev_y0 < y0) y0 = s_prev_y0;    /* 并集: 上帧带可能更宽 */
+    if (s_prev_y1 > y1) y1 = s_prev_y1;
+    if (y1 >= y0) {
+        memset(&s_buf_line[(size_t)y0 * LINE_W], 0,
+               (size_t)(y1 - y0 + 1) * LINE_W * sizeof(uint32_t));
+    }
+    s_prev_y0 = cur_y0; s_prev_y1 = cur_y1;  /* 记录本帧带(下帧清理) */
+
     uint8_t cr, cg, cb;
     line_color(&cr, &cg, &cb, m);
     float dim = idle ? 0.45f : 0.35f + 0.65f * s_energy;
 
-    /* ---- 辉光层(软笔刷稀疏采样, 无节点亮斑) ---- */
+    /* ---- 辉光层(预烘焙 sprite, 无节点亮斑) ---- */
     for (int x = 0; x < LINE_W; x += 2) {
-        line_disc((float)x, s_curve[x], 9.0f, cr, cg, cb,
+        line_disc(x, (int)s_curve[x], SPR_GLOW_BIG, cr, cg, cb,
                   (uint8_t)(14 * dim));
-        line_disc((float)x, s_curve[x], 3.5f, cr, cg, cb,
+        line_disc(x, (int)s_curve[x], SPR_GLOW_SMALL, cr, cg, cb,
                   (uint8_t)(60 * dim));
     }
     /* ---- 芯线(逐列垂直 AA) ---- */
@@ -350,8 +428,8 @@ static void line_draw(const ui_model_t *m)
     if (!idle) {
         int ra = (int)(26 * dim);
         for (int x = 0; x < LINE_W; x += 3) {
-            line_disc((float)x, 2 * cy - s_curve[x] + 14, 2.2f, cr, cg, cb,
-                      (uint8_t)ra);
+            line_disc(x, (int)(2 * cy - s_curve[x] + 14), SPR_REFLECT,
+                      cr, cg, cb, (uint8_t)ra);
         }
     }
     lv_obj_invalidate(s_canvas_line);
@@ -523,11 +601,8 @@ static void lyric_fly_out(void)
     /* 无旧句(img_cur 隐藏=屏上无句)则忽略 */
     if (lv_obj_has_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN)) return;
 
-    /* 快照交接: out 拿 cur 的内容与倾角, cur 稍后换新 */
-    if (s_dsc_out != NULL) lv_draw_buf_destroy(s_dsc_out);   /* 上上句释放 */
-    s_dsc_out = s_dsc_cur;
-    s_dsc_cur = NULL;
-    lv_image_set_src(s_img_lyr_out, s_dsc_out);
+    /* 快照交接: out 直接引用当前槽内容(池不释放), cur 稍后写另一槽 */
+    lv_image_set_src(s_img_lyr_out, &s_snap_dsc[s_snap_slot]);
     lv_image_set_rotation(s_img_lyr_out, s_lyr_angle);
     lv_obj_set_pos(s_img_lyr_out, s_lyr_rest_x, s_lyr_rest_y);
     lv_obj_remove_flag(s_img_lyr_out, LV_OBJ_FLAG_HIDDEN);
@@ -572,8 +647,30 @@ static void lyric_fly_in(const char *text)
      * label 旋转的渲染路径在 9.6.0 缺失, 见 lv_conf.h 注) */
     lv_label_set_text(s_lbl_lyr_src, text);
     lv_obj_update_layout(s_lbl_lyr_src);
-    lv_draw_buf_t *dsc = lv_snapshot_take(s_lbl_lyr_src, LV_COLOR_FORMAT_ARGB8888);
-    if (dsc == NULL) return;
+    /* 池槽惰性分配: lv_draw_buf_init 绑定外部缓冲(无 ALLOCATED 旗标,
+     * 不会被误释放); take_to_draw_buf 内部 reshape 原地改头复用 */
+    s_snap_slot ^= 1;
+    if (s_snap_buf[s_snap_slot] == NULL) {
+        s_snap_buf[s_snap_slot] = malloc(LYR_SNAP_BYTES);
+        if (s_snap_buf[s_snap_slot] != NULL) {
+            lv_draw_buf_init(&s_snap_dsc[s_snap_slot], 1, 1,
+                             LV_COLOR_FORMAT_ARGB8888, LV_STRIDE_AUTO,
+                             s_snap_buf[s_snap_slot], LYR_SNAP_BYTES);
+        }
+    }
+    lv_draw_buf_t *dsc = NULL;
+    if (s_snap_buf[s_snap_slot] != NULL) {
+        dsc = (lv_snapshot_take_to_draw_buf(
+                   s_lbl_lyr_src, LV_COLOR_FORMAT_ARGB8888,
+                   &s_snap_dsc[s_snap_slot]) == LV_RESULT_OK)
+              ? &s_snap_dsc[s_snap_slot] : NULL;
+    }
+    if (dsc == NULL) {
+        /* 兜底(池未建/文本超池容量): 一次性分配, 仅 OOM 退化态会走到;
+         * 屏显引用期间不能立即释放, 由下句快照顶替后自然失引用 */
+        dsc = lv_snapshot_take(s_lbl_lyr_src, LV_COLOR_FORMAT_ARGB8888);
+        if (dsc == NULL) return;
+    }
 
     /* ease_out 飞入: 边缘 → 中心(越接近越慢)。
      * 只做位移不叠 opa 动画; 出发点钳制屏内(见 lyr_clamp_*) */
@@ -584,8 +681,6 @@ static void lyric_fly_in(const char *text)
     lv_image_set_antialias(s_img_lyr_cur, true);
     lv_obj_set_pos(s_img_lyr_cur, sx, sy);
     lv_obj_remove_flag(s_img_lyr_cur, LV_OBJ_FLAG_HIDDEN);
-    if (s_dsc_cur != NULL) lv_draw_buf_destroy(s_dsc_cur);   /* 上句(未飞离场景) */
-    s_dsc_cur = dsc;
 
     lv_anim_del(s_img_lyr_cur, anim_x_cb);
     lv_anim_del(s_img_lyr_cur, anim_y_cb);
@@ -841,6 +936,7 @@ static void splash_create(void)
 void ui_pages_create(int w, int h)
 {
     s_rng_state = lv_tick_get() | 1u;   /* |1 保证非零种子 */
+    render_tables_init();               /* 倒数表/光盘 sprite/频带边界 */
     (void)w; (void)h;
 
     /* ---- 主屏 ---- */
