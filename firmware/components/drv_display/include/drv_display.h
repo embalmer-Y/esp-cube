@@ -26,6 +26,10 @@ typedef struct {
 /* 初始化(幂等): 创建 SPI IO + 面板, 执行厂商初始化序列, 复位并点亮 */
 esp_err_t drv_display_init(const drv_display_cfg_t *cfg);
 
+/* 单线(3-wire 9-bit)点亮自检: GPIO 位压彩条, 不经 GPSPI/QSPI(docs/05 排查);
+ * 点亮=D0/CLK/CS/RST 全通。CONFIG_ESP_CUBE_LCD_SINGLE_LANE_TEST 启用 */
+esp_err_t drv_display_single_lane_test(int h_res, int v_res);
+
 /* 获取句柄(供 esp_lvgl_port / 直接绘屏使用) */
 esp_lcd_panel_io_handle_t drv_display_get_io(void);
 esp_lcd_panel_handle_t drv_display_get_panel(void);

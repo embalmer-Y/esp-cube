@@ -104,8 +104,31 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_mixer_start());
     ESP_ERROR_CHECK(drv_audio_pa_set(true));
 
+    /* ---- 3. 语音 AI(里程碑2): 先于显示/蓝牙初始化 —— esp-sr 模型解密
+     * 需要大块连续内部 RAM, 放最后会被 WiFi/BT/LVGL 挤死(2026-11-12
+     * 实测 free heap≈14.8MB 全是 PSRAM, 内部仅剩 6.5KB → wakenet 解密
+     * 失败/HLS 重连 20KB 分配失败/ai 任务创建失败; Kaleido V-04 同序)。
+     * 可选功能一律降级不 abort。 ---- */
+#if CONFIG_ESP_CUBE_ENABLE_VOICE
+    esp_err_t verr = app_voice_start();
+    if (verr != ESP_OK) {
+        ESP_LOGE(TAG, "voice degraded: %s", esp_err_to_name(verr));
+    }
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_AI
+    esp_err_t aerr = ai_session_start();
+    if (aerr != ESP_OK) {
+        ESP_LOGE(TAG, "ai session degraded: %s", esp_err_to_name(aerr));
+    }
+#endif
+
 #if CONFIG_ESP_CUBE_ENABLE_UI
-    /* ---- 3. 显示(独立失败域) ---- */
+    /* ---- 4. 显示(独立失败域) ---- */
+#if CONFIG_ESP_CUBE_LCD_SINGLE_LANE_TEST
+    drv_display_single_lane_test(CONFIG_ESP_CUBE_LCD_H_RES,
+                                 CONFIG_ESP_CUBE_LCD_V_RES);
+    vTaskDelay(pdMS_TO_TICKS(5000));     /* 观察窗: 人工判定单线是否点亮 */
+#endif
     drv_display_cfg_t dcfg = {
         .pixel_clock_hz = CONFIG_ESP_CUBE_LCD_PIXEL_CLOCK_HZ,
         .h_res = CONFIG_ESP_CUBE_LCD_H_RES,
@@ -149,20 +172,6 @@ void app_main(void)
      * 反而使干扰均匀化, 远近距离都卡)。语音 AI 上线后如需再平衡再调。 */
     esp_err_t cerr = esp_coex_preference_set(ESP_COEX_PREFER_BT);
     ESP_LOGI(TAG, "coex prefer BT: %s", cerr == ESP_OK ? "ok" : esp_err_to_name(cerr));
-#endif
-
-    /* ---- 5. 语音 AI(里程碑2, Kconfig 启用; 可选功能 → 降级不 abort) ---- */
-#if CONFIG_ESP_CUBE_ENABLE_VOICE
-    esp_err_t verr = app_voice_start();
-    if (verr != ESP_OK) {
-        ESP_LOGE(TAG, "voice degraded: %s", esp_err_to_name(verr));
-    }
-#endif
-#if CONFIG_ESP_CUBE_ENABLE_AI
-    esp_err_t aerr = ai_session_start();
-    if (aerr != ESP_OK) {
-        ESP_LOGE(TAG, "ai session degraded: %s", esp_err_to_name(aerr));
-    }
 #endif
 
     /* ---- 6. 演示观察者 ---- */

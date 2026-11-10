@@ -19,4 +19,7 @@ dependencies:
   # esp-sr: 离线唤醒(V-04 S31 实测: 唯一可用 wn10_hilexin_int16;
   # Kconfig SR_WN_WN10_HILEXIN_INT16 + MODEL_IN_FLASH 必开)
   # 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / ENABLE_AI
-  espressif/esp-sr: "^2.6.0"
+  espressif/esp-sr: "2.6.0"
+  # esp-dl 锁 3.3.14(Kaleido S31 V-04 同版): 3.3.15 的 WakeNetX::build_model
+  # 在 S31 上损坏 TLSF 堆 → block_trim_free 断言复位(2026-11-12 实测定位)
+  espressif/esp-dl: "3.3.14"

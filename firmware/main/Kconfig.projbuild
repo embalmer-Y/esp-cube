@@ -89,6 +89,14 @@ menu "EspCube Configuration"
         bool "显示首亮调试(彩条停留3秒观察窗)"
         default n
 
+    config ESP_CUBE_LCD_SINGLE_LANE_TEST
+        bool "屏幕单线(3-wire)点亮自检(GPIO位压彩条, 不经QSPI)"
+        default n
+        help
+            排查杜邦线/四线数据通路用(docs/05): 固件启动时先用 3-wire
+            9-bit 位压波形点亮六色彩条(约10秒), 再继续正常 QSPI 初始化。
+            彩条出现 = D0/CLK/CS/RST 全通。
+
     config ESP_CUBE_MIXER_RATE
         int "混音引擎采样率(Hz)"
         default 48000

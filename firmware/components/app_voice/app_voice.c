@@ -124,17 +124,27 @@ esp_err_t app_voice_start(void)
         ESP_LOGI(TAG, "model[%d]=%s", i, models->model_name[i]);
     }
 
-    /* ---- AFE: 单麦 SR 高性能模式 ---- */
+    /* ---- AFE: 单麦 SR 高性能模式(逐步打点: 定位 S31 加载期静默复位) ---- */
+    ESP_LOGI(TAG, "step1: afe_config_init...");
     afe_config_t *afe_cfg = afe_config_init("M", models, AFE_TYPE_SR,
                                             AFE_MODE_HIGH_PERF);
     ESP_RETURN_ON_FALSE(afe_cfg != NULL, ESP_FAIL, TAG, "afe cfg");
+    /* 内存模式必须 MORE_PSRAM(Kaleido V-04 真机定参): 默认 internal 模式
+     * 在 S31 上 AFE 创建期间损坏 TLSF 堆元数据 → block_trim_free 断言
+     * 复位(2026-11-12 实测; 与 convo-stage/wakenet_test 两处参照一致)。
+     * 注: 不调 afe_config_check(V-40 实证其破坏唤醒检测) */
+    afe_cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+    ESP_LOGI(TAG, "step2: esp_afe_handle_from_config...");
     s_afe = esp_afe_handle_from_config(afe_cfg);
     ESP_RETURN_ON_FALSE(s_afe != NULL, ESP_FAIL, TAG, "afe handle");
+    ESP_LOGI(TAG, "step3: create_from_config...");
     s_afe_data = s_afe->create_from_config(afe_cfg);
     ESP_RETURN_ON_FALSE(s_afe_data != NULL, ESP_FAIL, TAG, "afe data");
+    ESP_LOGI(TAG, "step4: add_wakenet_model...");
 
     /* S31 自动挂载缺失——显式添加(V-04 W-5) */
     int rc = s_afe->add_wakenet_model(s_afe_data, "wn10_hilexin");
+    ESP_LOGI(TAG, "step5: add_wakenet_model rc=%d", rc);
     ESP_LOGW(TAG, "add_wakenet_model(wn10_hilexin) → %d", rc);
     s_afe->print_pipeline(s_afe_data);
     s_afe->set_wakenet_threshold(s_afe_data, 1, 0.60);
