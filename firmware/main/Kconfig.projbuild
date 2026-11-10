@@ -85,6 +85,10 @@ menu "EspCube Configuration"
         bool "音频链路调试日志(输出幅度/音源缓冲水位/读取探针)"
         default n
 
+    config ESP_CUBE_DISPLAY_DEBUG
+        bool "显示首亮调试(彩条停留3秒观察窗)"
+        default n
+
     config ESP_CUBE_MIXER_RATE
         int "混音引擎采样率(Hz)"
         default 48000

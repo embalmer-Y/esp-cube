@@ -307,10 +307,13 @@ esp_err_t audio_mixer_init(const audio_mixer_cfg_t *cfg)
     s_mixer.master_q15 = percent_to_q15(60);
     s_mixer.duck_cur_q15 = 32767;   /* ducking 当前增益: 初始=满增益 */
     for (int i = 0; i < 2; i++) {
+        /* 内部 RAM: LVGL 任务 30fps 高频读取, 且仅 ~2KB×2 */
         s_mixer.spectrum_buf[i] = heap_caps_malloc(
             (size_t)(cfg->sample_rate / 100) * cfg->channels * sizeof(int16_t),
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
         if (s_mixer.spectrum_buf[i] == NULL) {
+            heap_caps_free(s_mixer.spectrum_buf[0]);   /* 部分失败整体回收 */
+            s_mixer.spectrum_buf[0] = NULL;
             return ESP_ERR_NO_MEM;
         }
     }
@@ -352,11 +355,17 @@ void audio_mixer_set_ducking(bool ai_talking)
 
 bool audio_mixer_take_spectrum(int16_t *out, int frames)
 {
-    int idx = s_mixer.spectrum_idx;     /* 读"最新完成"的那块 */
     int max_frames = s_mixer.cfg.sample_rate / 100;
     if (frames > max_frames) frames = max_frames;
-    memcpy(out, s_mixer.spectrum_buf[idx], (size_t)frames * s_mixer.cfg.channels * sizeof(int16_t));
-    return true;
+    /* 双检防撕裂: 写侧"翻转索引→memcpy"期间读到的是正在写的块;
+     * 拷贝后核对索引未变, 变了则重拷一次(旧块此时已稳定)。 */
+    for (int retry = 0; retry < 2; retry++) {
+        int idx = s_mixer.spectrum_idx;
+        memcpy(out, s_mixer.spectrum_buf[idx],
+               (size_t)frames * s_mixer.cfg.channels * sizeof(int16_t));
+        if (s_mixer.spectrum_idx == idx) return true;
+    }
+    return true;                        /* 重试仍翻转: 接受最新块(频谱抖动无害) */
 }
 
 void audio_mixer_set_ref_sink(audio_ref_sink_fn fn, void *user_ctx)

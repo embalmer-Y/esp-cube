@@ -42,7 +42,7 @@ static void parse_title(icy_state_t *st, const char *meta)
     memcpy(st->title, p, n);
     st->title[n] = 0;
     ESP_LOGI(TAG, "title: %s", st->title);
-    cube_event_publish(CUBE_EVT_STREAM_TITLE, st->title, n);
+    cube_event_publish(CUBE_EVT_STREAM_TITLE, st->title, n + 1);
 }
 
 void icy_feed_chunk(icy_state_t *st, const uint8_t *data, size_t n,

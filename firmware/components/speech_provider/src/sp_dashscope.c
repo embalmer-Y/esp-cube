@@ -410,6 +410,8 @@ void ks_asr_close(void)
 struct ks_tts_sess {
 	char task_id[33];
 	esp_websocket_client_handle_t ws;
+	char *uri;	/* 堆持有: 组件解析晚于本函数栈帧(V-45, ASR 同款) */
+	char *auth;
 	SemaphoreHandle_t connected;
 	SemaphoreHandle_t started;
 	SemaphoreHandle_t finished;
@@ -499,7 +501,6 @@ static void tts_ws_event(void *arg, esp_event_base_t base, int32_t id,
 int ks_tts_open(const struct ks_tts_cfg *cfg,
 		const struct ks_tts_events *ev)
 {
-	char auth[192];
 	char *run;
 	esp_websocket_client_config_t wc = {
 		.buffer_size = KS_WS_BUF,
@@ -523,7 +524,7 @@ int ks_tts_open(const struct ks_tts_cfg *cfg,
 		return -6;
 	s_tts = calloc(1, sizeof(*s_tts));
 	if (!s_tts)
-		return -1;
+		goto fail;	/* 会话锁配对释放(close 的 NULL 防御分支) */
 	s_tts->ev = ev ? *ev : (struct ks_tts_events){ 0 };
 	task_id_gen(s_tts->task_id);
 	s_tts->connected = xSemaphoreCreateBinary();
@@ -533,19 +534,21 @@ int ks_tts_open(const struct ks_tts_cfg *cfg,
 		goto fail;
 
 	{
-		char host[192];
 		size_t n = strlen(cfg->url);
 
 		while (n && cfg->url[n - 1] == '/')
 			n--;
-		strlcpy(host, cfg->url, n + 1 > sizeof(host) ?
-			sizeof(host) : n + 1);
-		strlcat(host, KS_URI_PATH, sizeof(host));
-		wc.uri = host;
+		s_tts->uri = malloc(n + sizeof(KS_URI_PATH));
+		s_tts->auth = malloc(192);
+		if (!s_tts->uri || !s_tts->auth)
+			goto fail;
+		memcpy(s_tts->uri, cfg->url, n);
+		memcpy(s_tts->uri + n, KS_URI_PATH, sizeof(KS_URI_PATH));
+		snprintf(s_tts->auth, 192,
+			 "Authorization: Bearer %s\r\n", cfg->api_key);
+		wc.uri = s_tts->uri;
+		wc.headers = s_tts->auth;
 	}
-	snprintf(auth, sizeof(auth), "Authorization: Bearer %s\r\n",
-		 cfg->api_key);
-	wc.headers = auth;
 
 	s_tts->ws = esp_websocket_client_init(&wc);
 	if (!s_tts->ws)
@@ -649,6 +652,8 @@ void ks_tts_close(void)
 	vSemaphoreDelete(s_tts->connected);
 	vSemaphoreDelete(s_tts->started);
 	vSemaphoreDelete(s_tts->finished);
+	free(s_tts->uri);
+	free(s_tts->auth);
 	free(s_tts);
 	s_tts = NULL;
 	sp_sess_give();		/* V-47：正常 close 路径配对释放 */

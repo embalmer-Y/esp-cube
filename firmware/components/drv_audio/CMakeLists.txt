@@ -2,7 +2,7 @@
 idf_component_register(
     SRCS "drv_audio.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES boardcfg cubecore
+    PRIV_REQUIRES boardcfg
         esp_driver_i2s esp_driver_i2c esp_driver_gpio
         espressif__esp_codec_dev
 )

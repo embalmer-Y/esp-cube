@@ -13,6 +13,9 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* 支持的最大变换点数(工作区按此分配); 超限调用直接返回 */
+#define FFT_MAX_N 1024
+
 /* 就地复数 FFT: re/im 长度 n(n 为 2 的幂) */
 static void fft_inplace(float *re, float *im, size_t n)
 {
@@ -51,22 +54,31 @@ static void fft_inplace(float *re, float *im, size_t n)
     }
 }
 
-/* 复数工作区(静态, 首次调用时从PSRAM分配一次): 避免占用任务栈(FFT在LVGL任务调用) */
+/* 复数工作区(静态, 首次调用分配一次): 内部 RAM——LVGL 任务 30fps
+ * 高频访问, PSRAM 有 cache 惩罚; 共 8KB 用量小无压力 */
 static float *s_re, *s_im;
 
 void cube_fft_magnitude(const int16_t *in, size_t n, float *out)
 {
     if (s_re == NULL) {
-        s_re = heap_caps_malloc(sizeof(float) * 512, MALLOC_CAP_SPIRAM);
-        s_im = heap_caps_malloc(sizeof(float) * 512, MALLOC_CAP_SPIRAM);
-        if (s_re == NULL || s_im == NULL) return;
+        s_re = heap_caps_malloc(sizeof(float) * FFT_MAX_N, MALLOC_CAP_INTERNAL);
+        s_im = heap_caps_malloc(sizeof(float) * FFT_MAX_N, MALLOC_CAP_INTERNAL);
+        if (s_re == NULL || s_im == NULL) {
+            /* 部分失败必须整体回收: 旧实现留下半初始化工作区,
+             * 下次调用直接向 NULL 写(崩溃) */
+            heap_caps_free(s_re);
+            heap_caps_free(s_im);
+            s_re = s_im = NULL;
+            return;
+        }
     }
-    for (size_t i = 0; i < n && i < 512; i++) {
+    if (in == NULL || out == NULL || n == 0 || n > FFT_MAX_N) return;
+    for (size_t i = 0; i < n; i++) {
         s_re[i] = (float)in[i];
         s_im[i] = 0.0f;
     }
     fft_inplace(s_re, s_im, n);
-    for (size_t k = 0; k < n / 2 && k < 256; k++) {
+    for (size_t k = 0; k < n / 2; k++) {
         out[k] = sqrtf(s_re[k] * s_re[k] + s_im[k] * s_im[k]);
     }
 }

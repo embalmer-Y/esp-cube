@@ -7,4 +7,4 @@ idf_component_register(EMBED_FILES "gs_r46.pem"
                             "src/sp_llm.c" "src/sp_sess.c"
                        INCLUDE_DIRS "include"
                        REQUIRES esp_websocket_client esp_http_client espressif__cjson
-                       PRIV_REQUIRES esp_timer mbedtls espressif__cjson)
+                       PRIV_REQUIRES esp_timer mbedtls)

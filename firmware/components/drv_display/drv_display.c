@@ -143,7 +143,9 @@ esp_err_t drv_display_init(const drv_display_cfg_t *cfg)
     ESP_LOGI(TAG, "panel brightness 80%%: ok");
     if (test_fb != NULL) {
         ESP_LOGI(TAG, "first-light color bars: transferred (%dx%d)", cfg->h_res, cfg->v_res);
-        vTaskDelay(pdMS_TO_TICKS(3000));
+#if CONFIG_ESP_CUBE_DISPLAY_DEBUG
+        vTaskDelay(pdMS_TO_TICKS(3000));   /* 首亮观察窗(仅调试构建) */
+#endif
         heap_caps_free(test_fb);
         test_fb = NULL;
     }

@@ -123,6 +123,16 @@ enum { AXIS_NONE = 0, AXIS_VOL, AXIS_SWITCH };
 /* ============================================================ */
 /*                        小工具                                 */
 /* ============================================================ */
+/* xorshift32: 平台无关伪随机(libc rand 无种子每次开机同序列;
+ * 也不引 esp_random 破坏 UI 代码的平台无关性), lv_tick 播种 */
+static uint32_t s_rng_state = 0x12345678u;
+static uint32_t ui_rand(void)
+{
+    uint32_t x = s_rng_state;
+    x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+    return s_rng_state = x;
+}
+
 static lv_obj_t *label_make(lv_obj_t *parent, const lv_font_t *font,
                             uint32_t color)
 {
@@ -281,6 +291,7 @@ static void bands_update(bool playing)
 /* ============================================================ */
 static void line_draw(const ui_model_t *m)
 {
+    if (s_buf_line == NULL || s_canvas_line == NULL) return;  /* OOM 守卫 */
     memset(s_buf_line, 0, sizeof(uint32_t) * LINE_W * LINE_H);
 
     bool idle = s_scene == SCENE_IDLE;
@@ -362,7 +373,7 @@ static void hud_show(void)
     lv_obj_set_style_opa(s_hud, LV_OPA_COVER, 0);
     lv_obj_set_height(s_hud_fill, 150 * vol / 100);
     lv_label_set_text_fmt(s_hud_num, "%d", vol);
-    lv_timer_reset(s_hud_timer);
+    if (s_hud_timer != NULL) lv_timer_reset(s_hud_timer);
 }
 
 static void volume_sync(int vol)
@@ -430,7 +441,7 @@ static void toast_station(const ui_model_t *m)
     lv_label_set_text(s_lbl_station, m->station_names[m->station_idx % n]);
     lv_obj_set_style_opa(s_lbl_station, LV_OPA_COVER, 0);
     fade_in(s_lbl_station, 8, 260);
-    lv_timer_reset(s_toast_timer);
+    if (s_toast_timer != NULL) lv_timer_reset(s_toast_timer);
 }
 
 static void toast_hide_cb(lv_timer_t *t)
@@ -549,11 +560,11 @@ static void lyric_fly_out(void)
 static void lyric_fly_in(const char *text)
 {
     /* 随机倾角 ±4~13°(0.1° 单位) */
-    int deg = 40 + rand() % 90;                  /* 40..130 = 4..13° */
-    s_lyr_angle = (rand() % 2 ? 1 : -1) * deg;
+    int deg = 40 + ui_rand() % 90;               /* 40..130 = 4..13° */
+    s_lyr_angle = (ui_rand() % 2 ? 1 : -1) * deg;
 
     /* 随机飞入方向(单位向量) */
-    float ang = (float)(rand() % 360) * (float)M_PI / 180.0f;
+    float ang = (float)(ui_rand() % 360) * (float)M_PI / 180.0f;
     s_lyr_dir_x = cosf(ang);
     s_lyr_dir_y = sinf(ang);
 
@@ -829,6 +840,7 @@ static void splash_create(void)
 /* ============================================================ */
 void ui_pages_create(int w, int h)
 {
+    s_rng_state = lv_tick_get() | 1u;   /* |1 保证非零种子 */
     (void)w; (void)h;
 
     /* ---- 主屏 ---- */
@@ -928,6 +940,9 @@ void ui_pages_create(int w, int h)
     /* 常驻运行 + reset 续期; cb 内已有 opa==0 短路, 空转无害 */
     s_hud_timer = lv_timer_create(hud_hide_cb, VOL_HUD_MS, NULL);
     s_toast_timer = lv_timer_create(toast_hide_cb, TOAST_MS, NULL);
+    if (s_hud_timer == NULL || s_toast_timer == NULL) {
+        /* 无定时器则 HUD/toast 常驻(功能降级不崩); 引用处判空 */
+    }
 
     /* 手势 */
     lv_obj_add_event_cb(s_scr_main, gesture_press_cb, LV_EVENT_PRESSED, NULL);
