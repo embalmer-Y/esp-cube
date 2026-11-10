@@ -12,8 +12,10 @@
 /* 颜色(9.6 用 LV_COLOR_FORMAT_DEFAULT; RGB565 与设备一致) */
 #define LV_COLOR_FORMAT_DEFAULT LV_COLOR_FORMAT_RGB565
 
-/* 内存: 用系统堆(canvas 大缓冲由 malloc 提供) */
-#define LV_MEM_CUSTOM       1
+/* 内存: 用系统堆(canvas/歌词离屏 layer 的大缓冲走 malloc;
+ * 9.6 已改名 LV_USE_STDLIB_MALLOC, 旧名 LV_MEM_CUSTOM 被忽略
+ * → 内置 64KB 池, 歌词 layer 86KB 分配失败) */
+#define LV_USE_STDLIB_MALLOC LV_STDLIB_CLIB
 #define LV_MEMCPY_MEMSET_STD 1
 
 /* OS: 无(主循环手动泵 lv_timer_handler + lv_tick_inc) */
@@ -35,6 +37,10 @@
 /* 布局 */
 #define LV_USE_FLEX         1
 #define LV_USE_GRID         1
+
+/* 注意: 不开 LV_DRAW_TRANSFORM_USE_MATRIX(9.6.0 的旋转 layer 变换
+ * 绘制 argb8888_row_checked 崩, 且 rotation+opa 动画组合走离屏路径
+ * 会分配失败)。歌词飞行动画只用位移, 不与 opa 动画叠加(见 ui_pages.c)。
 
 /* 刷新节拍(模拟器跑满, 由 SDL 主循环控制) */
 #define LV_DEF_REFR_PERIOD  16

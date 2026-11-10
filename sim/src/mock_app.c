@@ -298,7 +298,8 @@ static const demo_step_t s_demo_steps[] = {
     { 9700,  DEMO_NONE,              "04_station_toast" },
     { 10200, SIM_ACT_BT_TOGGLE,      NULL },         /* BT 接管: 晴天(歌词) */
     { 11200, DEMO_NONE,              "05_bt_lyrics" },
-    { 15000, DEMO_NONE,              "06_bt_lyrics_next" },
+    { 14560, DEMO_NONE,              "06_lyrics_flying" },   /* 切句后160ms: 交叉飞行中 */
+    { 15400, DEMO_NONE,              "06b_lyrics_settled" },
     { 15600, SIM_ACT_BT_META,        NULL },         /* 切纯音乐 Summer */
     { 16600, DEMO_NONE,              "07_bt_instrumental" },
     { 17200, SIM_ACT_VOL_DOWN,       NULL },
