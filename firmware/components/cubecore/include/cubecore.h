@@ -12,3 +12,4 @@
 #include "cube_ringbuf.h"
 #include "cube_resampler.h"
 #include "cube_fft.h"
+#include "cube_tasks.h"

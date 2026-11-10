@@ -57,7 +57,7 @@ static const char *TAG = "player";
 
 #define PLAYER_MAX_RETRIES      5       /* 单次启播最大重连次数 */
 #define PLAYER_RETRY_STEP_MS    1000    /* 重连退避步进(线性: step×次数) */
-#define PLAYER_TASK_STACK       12288   /* 播放任务栈(字节; PSRAM 静态分配) */
+#define PLAYER_TASK_STACK       CUBE_TASK_PLAYER_STACK  /* 栈(PSRAM 静态分配); 参数见 cube_tasks.h */
 
 #define FEED_BUF_SIZE    4096                    /* 网络读块 */
 #define PCM_BUF_FRAMES   2048                    /* 解码输出缓冲(帧, 覆盖MP3/AAC最大帧) */
@@ -563,6 +563,29 @@ static void test_tone_loop(void)
 }
 #endif
 
+/* 解码会话清理(direct/HLS 两路径同构段; 调用方各自补传输层收尾) */
+static void decoder_cleanup(decoder_t *dec)
+{
+    if (s_dec_calls > 0) {
+        ESP_LOGD(TAG, "decode timing: calls=%u avg=%lldus max=%lldus",
+                 s_dec_calls, s_dec_us_total / s_dec_calls, s_dec_us_max);
+    }
+    s_dec_us_total = 0; s_dec_calls = 0; s_dec_us_max = 0;
+    ESP_LOGI(TAG, "stream end: frames=%u decoded=%uB",
+             (unsigned)dec->frame_cnt, (unsigned)dec->total_decoded);
+    audio_mixer_set_source_active(s_player.src, false);
+    if (dec->dec) {
+        esp_audio_dec_close(dec->dec);
+        dec->dec = NULL;
+    }
+    if (dec->mp3) {
+        MP3FreeDecoder(dec->mp3);
+        dec->mp3 = NULL;
+    }
+    dec->info_valid = false;
+    s_pending_len = 0;
+}
+
 /* ================= 直连流路径(HTTP/ICY → 解码) =================
  * 返回 true = 正常EOF(数据收完), false = 错误/超时(重连同一URL) */
 static bool direct_stream_run(void)
@@ -662,27 +685,24 @@ static bool direct_stream_run(void)
     }
 
     /* ---- 清理本次连接 ---- */
-    if (s_dec_calls > 0) {
-        ESP_LOGD(TAG, "decode timing: calls=%u avg=%lldus max=%lldus",
-                 s_dec_calls, s_dec_us_total / s_dec_calls, s_dec_us_max);
-    }
-    s_dec_us_total = 0; s_dec_calls = 0; s_dec_us_max = 0;
-    ESP_LOGI(TAG, "stream end: frames=%u decoded=%uB",
-             (unsigned)dec.frame_cnt, (unsigned)dec.total_decoded);
-    audio_mixer_set_source_active(s_player.src, false);
-    if (dec.dec) {
-        esp_audio_dec_close(dec.dec);
-        dec.dec = NULL;
-    }
-    if (dec.mp3) {
-        MP3FreeDecoder(dec.mp3);
-        dec.mp3 = NULL;
-    }
-    dec.info_valid = false;
-    s_pending_len = 0;
+    decoder_cleanup(&dec);
     esp_http_client_close(http);
     esp_http_client_cleanup(http);
     return eof_ok;
+}
+
+/* AAC 解码器配置(裸段 ADTS; aac_plus=SBR): HLS 首开与 SBR 回退共用 */
+static esp_aac_dec_cfg_t aac_cfg_build(const esp_extractor_stream_info_t *si,
+                                       bool aac_plus)
+{
+    esp_aac_dec_cfg_t cfg = {
+        .sample_rate = (int32_t)si->audio_info.sample_rate,
+        .channel = (uint8_t)si->audio_info.channel,
+        .bits_per_sample = 16,
+        .no_adts_header = false,
+        .aac_plus_enable = aac_plus,
+    };
+    return cfg;
 }
 
 /* ================= HLS 路径(m3u8, esp_hls_stream extractor 插件) =================
@@ -779,13 +799,8 @@ static bool hls_session_run(void)
                     esp_extractor_stream_info_t sinfo2 = { 0 };
                     esp_extractor_get_stream_info(ext, ESP_EXTRACTOR_STREAM_TYPE_AUDIO,
                                                   0, &sinfo2);
-                    esp_aac_dec_cfg_t aac_cfg = {
-                        .sample_rate = (int32_t)sinfo2.audio_info.sample_rate,
-                        .channel = (uint8_t)sinfo2.audio_info.channel,
-                        .bits_per_sample = 16,
-                        .no_adts_header = false,
-                        .aac_plus_enable = !aac_plus_first,  /* 翻转SBR设定重试 */
-                    };
+                    esp_aac_dec_cfg_t aac_cfg =
+                        aac_cfg_build(&sinfo2, !aac_plus_first);  /* 翻转SBR重试 */
                     esp_audio_dec_close(dec.dec);
                     dec.dec = NULL;
                     s_pending_len = 0;
@@ -823,13 +838,7 @@ static bool hls_session_run(void)
                         /* 实测(蜻蜓/喜马): 分段 AAC 帧带 ADTS 头(ff f9), 解码器
                          * 自行解析头(采样率/声道以头为准); 国内平台源多为 HE-AAC,
                          * 启用 SBR; 若实际是 LC 造成异常, 由下方 SBR 回退链兜底 */
-                        esp_aac_dec_cfg_t aac_cfg = {
-                            .sample_rate = (int32_t)sinfo.audio_info.sample_rate,
-                            .channel = (uint8_t)sinfo.audio_info.channel,
-                            .bits_per_sample = 16,
-                            .no_adts_header = false,
-                            .aac_plus_enable = true,
-                        };
+                        esp_aac_dec_cfg_t aac_cfg = aac_cfg_build(&sinfo, true);
                         ESP_GOTO_ON_FALSE(
                             decoder_open(&dec, ESP_AUDIO_TYPE_AAC,
                                          &aac_cfg, sizeof(aac_cfg)) == ESP_OK,
@@ -872,24 +881,7 @@ static bool hls_session_run(void)
     }
 
 hls_end:
-    if (s_dec_calls > 0) {
-        ESP_LOGD(TAG, "decode timing: calls=%u avg=%lldus max=%lldus",
-                 s_dec_calls, s_dec_us_total / s_dec_calls, s_dec_us_max);
-    }
-    s_dec_us_total = 0; s_dec_calls = 0; s_dec_us_max = 0;
-    ESP_LOGI(TAG, "stream end: frames=%u decoded=%uB",
-             (unsigned)dec.frame_cnt, (unsigned)dec.total_decoded);
-    audio_mixer_set_source_active(s_player.src, false);
-    if (dec.dec) {
-        esp_audio_dec_close(dec.dec);
-        dec.dec = NULL;
-    }
-    if (dec.mp3) {
-        MP3FreeDecoder(dec.mp3);
-        dec.mp3 = NULL;
-    }
-    dec.info_valid = false;
-    s_pending_len = 0;
+    decoder_cleanup(&dec);
     if (ext) {
         esp_extractor_close(ext);
     }
@@ -1003,8 +995,9 @@ esp_err_t app_player_start(const char *url)
                             "stack alloc(psram) fail");
     }
     s_player.task = xTaskCreateStaticPinnedToCore(
-            player_task, "player", PLAYER_TASK_STACK, NULL, 12,
-            s_stacks[s_slot], &s_tcbs[s_slot], 1);
+            player_task, CUBE_TASK_PLAYER_NAME, PLAYER_TASK_STACK, NULL,
+            CUBE_TASK_PLAYER_PRIO,
+            s_stacks[s_slot], &s_tcbs[s_slot], CUBE_TASK_PLAYER_CORE);
     if (s_player.task == NULL) {
         ESP_LOGE(TAG, "player task create fail: internal free=%u",
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));

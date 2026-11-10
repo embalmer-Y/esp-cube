@@ -11,6 +11,7 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "cube_tasks.h"
 #include "lvgl.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -27,9 +28,9 @@ esp_err_t app_ui_start(const app_ui_boot_cfg_t *cfg)
      * v2.9 的任务参数在结构体里(Kconfig 无效): 绑核1(渲染与音频分核),
      * 栈 16KB(FFT/canvas 绘制), 优先级 4(低于混音器, 不抢占实时音频)。 */
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    lvgl_cfg.task_priority = 4;
-    lvgl_cfg.task_stack = 16384;
-    lvgl_cfg.task_affinity = 1;         /* core1: 与 core0 的音频/蓝牙分核 */
+    lvgl_cfg.task_priority = CUBE_TASK_LVGL_PRIO;
+    lvgl_cfg.task_stack = CUBE_TASK_LVGL_STACK;
+    lvgl_cfg.task_affinity = CUBE_TASK_LVGL_CORE;  /* 与 core0 音频/蓝牙分核 */
     lvgl_cfg.timer_period_ms = 5;
     ESP_RETURN_ON_ERROR(lvgl_port_init(&lvgl_cfg), TAG, "lvgl port init");
 

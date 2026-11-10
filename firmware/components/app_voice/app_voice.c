@@ -143,8 +143,10 @@ esp_err_t app_voice_start(void)
                         "evt subscribe");
 
     s_running = true;
-    BaseType_t ok = xTaskCreatePinnedToCore(voice_task, "voice", 8192, NULL,
-                                            18, &s_task, 0) == pdPASS;
+    BaseType_t ok = xTaskCreatePinnedToCore(voice_task, CUBE_TASK_VOICE_NAME,
+                                            CUBE_TASK_VOICE_STACK, NULL,
+                                            CUBE_TASK_VOICE_PRIO,
+                                            &s_task, CUBE_TASK_VOICE_CORE) == pdPASS;
     ESP_RETURN_ON_FALSE(ok, ESP_FAIL, TAG, "voice task");
     ESP_LOGI(TAG, "voice frontend running — 说「Hi,乐鑫」唤醒");
     return ESP_OK;

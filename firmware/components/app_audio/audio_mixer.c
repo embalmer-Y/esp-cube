@@ -324,8 +324,10 @@ esp_err_t audio_mixer_start(void)
 {
     if (s_mixer.task != NULL) return ESP_OK;
     s_mixer.running = true;
-    BaseType_t r = xTaskCreatePinnedToCore(mixer_task, "mixer", 8192, NULL,
-                                           20, &s_mixer.task, 0);
+    BaseType_t r = xTaskCreatePinnedToCore(mixer_task, CUBE_TASK_MIXER_NAME,
+                                           CUBE_TASK_MIXER_STACK, NULL,
+                                           CUBE_TASK_MIXER_PRIO,
+                                           &s_mixer.task, CUBE_TASK_MIXER_CORE);
     return r == pdPASS ? ESP_OK : ESP_FAIL;
 }
 

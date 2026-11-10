@@ -36,6 +36,9 @@ add_executable(espcube_sim
     src/main.c
     src/mock_app.c
     ../firmware/components/app_ui/ui/ui_pages.c
+    ../firmware/components/app_ui/ui/ui_render.c
+    ../firmware/components/app_ui/ui/ui_lyrics.c
+    ../firmware/components/app_ui/ui/ui_widget.c
     ../firmware/components/app_ui/ui/ui_font_cjk18.c
     ../firmware/components/app_ui/ui/ui_font_cjk24.c
     ../firmware/components/cubecore/cube_fft.c

@@ -373,12 +373,18 @@ esp_err_t ai_session_start(void)
     ESP_RETURN_ON_ERROR(cube_event_subscribe(ai_evt_cb, NULL), TAG,
                         "evt subscribe");
 
-    BaseType_t ok = xTaskCreatePinnedToCore(session_task, "aisess", 8192,
-                                            NULL, 5, &s_task, 0) == pdPASS &&
-                    xTaskCreatePinnedToCore(tts_task, "aitts", 6144,
-                                            NULL, 5, &s_tts_task, 1) == pdPASS &&
-                    xTaskCreatePinnedToCore(mic_task, "aimic", 6144,
-                                            NULL, 5, &s_mic_task, 0) == pdPASS;
+    BaseType_t ok = xTaskCreatePinnedToCore(session_task, CUBE_TASK_AISESS_NAME,
+                                            CUBE_TASK_AISESS_STACK, NULL,
+                                            CUBE_TASK_AISESS_PRIO,
+                                            &s_task, CUBE_TASK_AISESS_CORE) == pdPASS &&
+                    xTaskCreatePinnedToCore(tts_task, CUBE_TASK_AITTS_NAME,
+                                            CUBE_TASK_AITTS_STACK, NULL,
+                                            CUBE_TASK_AITTS_PRIO,
+                                            &s_tts_task, CUBE_TASK_AITTS_CORE) == pdPASS &&
+                    xTaskCreatePinnedToCore(mic_task, CUBE_TASK_AIMIC_NAME,
+                                            CUBE_TASK_AIMIC_STACK, NULL,
+                                            CUBE_TASK_AIMIC_PRIO,
+                                            &s_mic_task, CUBE_TASK_AIMIC_CORE) == pdPASS;
     ESP_RETURN_ON_FALSE(ok, ESP_FAIL, TAG, "tasks");
     vTaskSuspend(s_mic_task);
     ESP_LOGI(TAG, "ai session ready (dashscope byok, tts=%dk)",
