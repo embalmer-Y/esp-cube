@@ -1,4 +1,4 @@
-# drv_audio: ES8311 codec + I2S 全双工驱动封装
+# drv_audio [L1 驱动]: ES8311 codec + I2S 全双工驱动封装
 idf_component_register(
     SRCS "drv_audio.c"
     INCLUDE_DIRS "include"

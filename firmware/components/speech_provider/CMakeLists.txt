@@ -1,4 +1,4 @@
-# speech_provider —— 云端语音三通道(ASR/TTS/LLM), 移植自 Kaleido
+# speech_provider [L2 服务] —— 云端语音三通道(ASR/TTS/LLM), 移植自 Kaleido
 # kaleido_speech(V-33 百炼链路真机验证, API 前缀 ks_ 保留以便对照上游)
 # sp_minimax: MiniMax TTS(HTTPS SSE), sp_dashscope: DashScope ASR+TTS(WS)
 # sp_llm: OpenAI 兼容 chat/completions SSE; gs_r46.pem: DashScope 根证书

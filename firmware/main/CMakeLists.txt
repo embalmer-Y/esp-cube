@@ -1,4 +1,4 @@
-# main: 装配层 —— 只负责模块初始化顺序与演示逻辑, 不含具体功能实现
+# main [L5 装配]: 只负责模块初始化顺序/失败域策略/ui_port_esp 后端; 唯一可横跨全层(依赖规则见 docs/06)
 idf_component_register(
     SRCS "main.c"
     INCLUDE_DIRS "."

@@ -1,4 +1,4 @@
-# app_player: 网络音源(ICP/ICY 流 + 解码 → 混音器)
+# app_player [L3 应用]: 网络音源(HTTP/ICY 流 + 解码 → 混音器)
 idf_component_register(
     SRCS "app_player.c" "icy_stream.c"
     INCLUDE_DIRS "include"

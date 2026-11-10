@@ -1,4 +1,4 @@
-# app_net: WiFi STA 管理
+# app_net [L2 服务]: WiFi STA 管理(连接服务)
 idf_component_register(
     SRCS "app_net.c"
     INCLUDE_DIRS "include"

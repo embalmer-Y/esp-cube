@@ -1,4 +1,4 @@
-# drv_display: QSPI AMOLED 面板驱动封装(CO5300)
+# drv_display [L1 驱动]: QSPI AMOLED 面板驱动封装(CO5300)
 idf_component_register(
     SRCS "drv_display.c"
     INCLUDE_DIRS "include"

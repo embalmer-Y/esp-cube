@@ -209,6 +209,8 @@ int main(int argc, char **argv)
 
     /* 主循环 */
     uint32_t last = SDL_GetTicks(), last_fps_t = last, frames = 0;
+    uint32_t demo_t0 = last, demo_frames = 0;   /* demo 帧耗时基线(性能回归对比) */
+    uint32_t handler_ms_acc = 0;
     while (s_running) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -238,7 +240,9 @@ int main(int argc, char **argv)
         uint32_t now = SDL_GetTicks();
         lv_tick_inc(now - last);
         last = now;
+        uint32_t h0 = now;
         lv_timer_handler();
+        handler_ms_acc += SDL_GetTicks() - h0;   /* 纯 UI 帧耗时(排除节流延时) */
         mock_app_periodic(now);
         if (s_demo_mode && mock_app_demo_done()) {
             SDL_Delay(300);
@@ -247,11 +251,22 @@ int main(int argc, char **argv)
         SDL_Delay(5);
 
         frames++;
+        demo_frames++;
         if (s_show_fps && now - last_fps_t >= 500) {
             lv_label_set_text_fmt(s_fps_label, "%d fps", frames * 1000 / (now - last_fps_t));
             frames = 0;
             last_fps_t = now;
         }
+    }
+    if (s_demo_mode) {
+        /* 帧耗时基线: demo 全时间线平均帧率/帧耗时(性能回归对比用) */
+        uint32_t demo_ms = SDL_GetTicks() - demo_t0;
+        printf("[perf] demo frames=%u elapsed=%ums avg=%.2fms/frame (%.0f fps)"
+               " | UI work avg=%.3fms/frame\n",
+               demo_frames, demo_ms,
+               demo_ms ? (double)demo_ms / demo_frames : 0,
+               demo_ms ? demo_frames * 1000.0 / demo_ms : 0,
+               demo_frames ? (double)handler_ms_acc / demo_frames : 0);
     }
 
     free(s_frame);

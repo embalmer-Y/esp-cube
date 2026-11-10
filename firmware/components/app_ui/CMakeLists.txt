@@ -1,4 +1,4 @@
-# app_ui: LVGL9 UI(60Hz 刷新/频谱/3D立方体)
+# app_ui [L4 表现]: LVGL9 氛围 UI(只依赖 ui_model.h 契约, 依赖规则见 docs/06)
 idf_component_register(
     SRCS "app_ui.c" "ui_pages.c"
     INCLUDE_DIRS "include"
