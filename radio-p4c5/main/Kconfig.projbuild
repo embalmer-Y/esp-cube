@@ -10,7 +10,7 @@ menu "Radio P4C5"
 
     config ESP_CUBE_DEFAULT_VOLUME
         int "默认音量(0-100)"
-        default 45
+        default 35
 
     config ESP_CUBE_MIXER_RATE
         int "混音引擎采样率(Hz)"
