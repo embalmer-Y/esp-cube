@@ -31,6 +31,19 @@
 
 static const char *TAG = "voice";
 
+/* WakeNet 模型随目标选择(Kconfig SR_WN_*):
+ *   S31 = wn10_hilexin("Hi,乐鑫", V-04 唯一可用)
+ *   P4  = wn9_nihaoxiaozhi_tts("你好小智", Kaleido voice-loop-p4 真机实证) */
+#if CONFIG_SR_WN_WN10_HILEXIN_INT16
+#define VOICE_WN_MODEL     "wn10_hilexin"
+#define VOICE_WAKE_PHRASE  "Hi,乐鑫"
+#elif CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS
+#define VOICE_WN_MODEL     "wn9_nihaoxiaozhi_tts"
+#define VOICE_WAKE_PHRASE  "你好小智"
+#else
+#error "未选择 WakeNet 模型(menuconfig: Component config → esp-sr)"
+#endif
+
 static TaskHandle_t s_task;
 static volatile bool s_running;
 static const esp_afe_sr_iface_t *s_afe;
@@ -142,10 +155,10 @@ esp_err_t app_voice_start(void)
     ESP_RETURN_ON_FALSE(s_afe_data != NULL, ESP_FAIL, TAG, "afe data");
     ESP_LOGI(TAG, "step4: add_wakenet_model...");
 
-    /* S31 自动挂载缺失——显式添加(V-04 W-5) */
-    int rc = s_afe->add_wakenet_model(s_afe_data, "wn10_hilexin");
+    /* S31 自动挂载缺失——显式添加(V-04 W-5); 模型名随目标(见文件头) */
+    int rc = s_afe->add_wakenet_model(s_afe_data, VOICE_WN_MODEL);
     ESP_LOGI(TAG, "step5: add_wakenet_model rc=%d", rc);
-    ESP_LOGW(TAG, "add_wakenet_model(wn10_hilexin) → %d", rc);
+    ESP_LOGW(TAG, "add_wakenet_model(%s) → %d", VOICE_WN_MODEL, rc);
     s_afe->print_pipeline(s_afe_data);
     s_afe->set_wakenet_threshold(s_afe_data, 1, 0.60);
 
@@ -158,7 +171,7 @@ esp_err_t app_voice_start(void)
                                             CUBE_TASK_VOICE_PRIO,
                                             &s_task, CUBE_TASK_VOICE_CORE) == pdPASS;
     ESP_RETURN_ON_FALSE(ok, ESP_FAIL, TAG, "voice task");
-    ESP_LOGI(TAG, "voice frontend running — 说「Hi,乐鑫」唤醒");
+    ESP_LOGI(TAG, "voice frontend running — 说「%s」唤醒", VOICE_WAKE_PHRASE);
     return ESP_OK;
 }
 

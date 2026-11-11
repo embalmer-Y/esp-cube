@@ -117,12 +117,14 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_mixer_start());
     ESP_ERROR_CHECK(drv_audio_pa_set(true));
 
-    /* ---- 3. 语音 AI(里程碑2): 先于显示/蓝牙初始化 —— esp-sr 模型解密
-     * 需要大块连续内部 RAM, 放最后会被 WiFi/BT/LVGL 挤死(2026-11-12
-     * 实测 free heap≈14.8MB 全是 PSRAM, 内部仅剩 6.5KB → wakenet 解密
-     * 失败/HLS 重连 20KB 分配失败/ai 任务创建失败; Kaleido V-04 同序)。
+    /* ---- 3. 语音 AI(里程碑2): 初始化次序按目标分派 ——
+     * S31: voice/AI 先于显示/网络 —— esp-sr 模型解密需要大块连续内部
+     * RAM, 放最后会被 WiFi/BT/LVGL 挤死(2026-11-12 实测内部仅剩 6.5KB;
+     * Kaleido V-04 同序)。
+     * P4: 语音在 WiFi 之后(V-45 铁律: hosted SDIO × 显示 × wakenet 共存
+     * 期次序敏感), 见下方 net 启动后。
      * 可选功能一律降级不 abort。 ---- */
-#if CONFIG_ESP_CUBE_ENABLE_VOICE
+#if CONFIG_ESP_CUBE_ENABLE_VOICE && !CONFIG_IDF_TARGET_ESP32P4
     esp_err_t verr = app_voice_start();
     if (verr != ESP_OK) {
         ESP_LOGE(TAG, "voice degraded: %s", esp_err_to_name(verr));
@@ -184,6 +186,14 @@ void app_main(void)
      * 失败一律降级(蓝牙/本地仍可用), 绝不 abort。 */
     esp_err_t nerr = app_net_start();
     ESP_LOGI(TAG, "wifi: %s", nerr == ESP_OK ? "ok" : esp_err_to_name(nerr));
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_VOICE && CONFIG_IDF_TARGET_ESP32P4
+    /* P4: WakeNet 在 WiFi 之后初始化(Kaleido V-45 铁律: wakenet 必须
+     * 后于 wifi; P4 内部 RAM 充裕, 无 S31 的模型解密挤压问题) */
+    esp_err_t verr = app_voice_start();
+    if (verr != ESP_OK) {
+        ESP_LOGE(TAG, "voice degraded: %s", esp_err_to_name(verr));
+    }
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_BT
     esp_err_t berr = app_bt_start();
