@@ -58,6 +58,16 @@ menu "EspCube Configuration"
           全包(LLM qwen/ASR paraformer/TTS cosyvoice)。key 只进本地
           sdkconfig(不入库, 与 WiFi 凭据同红线)。
 
+    config ESP_CUBE_ENABLE_EFC
+        bool "启用 EFC 表情动画(esp_efc_codec, IDLE 场景播放)"
+        default n
+        depends on ESP_CUBE_ENABLE_UI
+        help
+          Emote Frame Codec(乐鑫): RGB565 无损 tile 编码动画, LVGL
+          lv_efc 控件承载。P4C5 推荐(32MB PSRAM + PPA 硬件缩放),
+          当前仅 sdkconfig.defaults.esp32p4 默认开; S31 可开但内部
+          RAM 紧张需实测。需同步 CONFIG_ESP_EFC_LVGL_WIDGET=y。
+
     # ---- AI 云配置(BYOK, 只进本地 sdkconfig) ----
     config ESP_CUBE_AI_API_KEY
         string "阿里云百炼 API Key(DASHSCOPE)"

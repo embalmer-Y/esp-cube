@@ -9,6 +9,10 @@
  */
 #pragma once
 
+#if __has_include("sdkconfig.h")
+#include "sdkconfig.h"
+#endif
+
 /* ---- 混音引擎(app_audio) ---- */
 #define CUBE_TASK_MIXER_NAME   "mixer"
 #define CUBE_TASK_MIXER_STACK  8192
@@ -43,7 +47,13 @@
 #define CUBE_TASK_AIMIC_PRIO   5
 #define CUBE_TASK_AIMIC_CORE   0
 
-/* ---- LVGL 渲染(app_ui; esp_lvgl_port 任务) ---- */
+/* ---- LVGL 渲染(app_ui; esp_lvgl_port 任务) ----
+ * EFC 解码跑在 LVGL 任务上下文(esp_efc_codec 官方 emote_player 口径
+ * 20KB+), 启用 EFC 时加大; 未启用保持 16KB(S31 内部 RAM 紧张) */
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+#define CUBE_TASK_LVGL_STACK   24576
+#else
 #define CUBE_TASK_LVGL_STACK   16384
+#endif
 #define CUBE_TASK_LVGL_PRIO    4
 #define CUBE_TASK_LVGL_CORE    1

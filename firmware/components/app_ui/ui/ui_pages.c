@@ -23,6 +23,22 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+/* ================= EFC 表情动画(IDLE 场景主角; P4C5 默认开) =================
+ * esp_efc_codec lv_efc 控件: RGB565 无损 tile 编码动画。嵌入素材 =
+ * 乐鑫 test_app giphy_z.efc(480×480, zlib 容器); sim 无 sdkconfig.h 时
+ * 整段不参与编译(__has_include 门控, ui 子树平台无关惯例)。 */
+#if __has_include("sdkconfig.h")
+#include "sdkconfig.h"
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+#include "lv_efc.h"
+extern const uint8_t giphy_z_efc_start[] asm("_binary_giphy_z_efc_start");
+extern const uint8_t giphy_z_efc_end[] asm("_binary_giphy_z_efc_end");
+#define EFC_DEMO_SIZE       300             /* 控件边长(素材480 等比缩小, P4 走 PPA) */
+#define EFC_FRAME_DELAY_MS  50              /* .efc 不存帧率, 应用侧设定 */
+static lv_obj_t *s_efc_player;
+#endif
+
 ui_page_t ui_pg;
 
 /* ================= 启动页(仅本文件使用) ================= */
@@ -42,6 +58,18 @@ static void scene_apply(int scene)
     int prev = ui_pg.last_scene;
     ui_pg.last_scene = scene;
     ui_pg.scene = scene;
+
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+    /* EFC 表情: IDLE 场景播放, 其余场景暂停并隐藏(首帧场景也生效) */
+    if (scene == SCENE_IDLE) {
+        lv_obj_clear_flag(s_efc_player, LV_OBJ_FLAG_HIDDEN);
+        lv_efc_resume(s_efc_player);
+        if (prev != -1) ui_fade_in(s_efc_player, 10, 300);
+    } else {
+        lv_efc_pause(s_efc_player);
+        lv_obj_add_flag(s_efc_player, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
 
     if (prev == -1) return;                 /* 启动页后首帧不做退场动画 */
     if (scene == SCENE_IDLE) {
@@ -261,6 +289,27 @@ void ui_pages_create(int w, int h)
     ui_widget_create(ui_pg.scr_main);      /* 品牌标/toast/AI/标题/HUD */
     ui_lyrics_create(w);                   /* 歌词层(layer_top) */
     ui_widget_gesture_register(ui_pg.scr_main);
+
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+    /* IDLE 场景表情动画: 嵌入 blob(EMBED_FILES → flash rodata, 控件内
+     * 部再拷入 PSRAM); 等比缩小 480→300(P4 PPA 加速路径); 循环播放 */
+    s_efc_player = lv_efc_create(ui_pg.scr_main);
+    lv_obj_set_size(s_efc_player, EFC_DEMO_SIZE, EFC_DEMO_SIZE);
+    lv_obj_align(s_efc_player, LV_ALIGN_CENTER, 0, -20);
+    lv_image_set_inner_align(s_efc_player, LV_IMAGE_ALIGN_CONTAIN_DOWNSCALE);
+    lv_efc_set_src_data(s_efc_player, giphy_z_efc_start,
+                        (size_t)(giphy_z_efc_end - giphy_z_efc_start));
+    lv_efc_set_loop_enabled(s_efc_player, true);
+    lv_efc_set_frame_delay(s_efc_player, EFC_FRAME_DELAY_MS);
+    if (lv_efc_is_loaded(s_efc_player)) {
+        lv_efc_play(s_efc_player);
+        LV_LOG_INFO("efc: demo clip ok, %d frames @%dms",
+                    (int)lv_efc_get_total_frames(s_efc_player), EFC_FRAME_DELAY_MS);
+    } else {
+        LV_LOG_WARN("efc: demo clip load failed, idle scene falls back");
+        lv_obj_add_flag(s_efc_player, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
 
     /* ---- 启动页 ---- */
     lv_obj_t *scr_splash = splash_create();

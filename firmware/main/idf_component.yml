@@ -34,3 +34,7 @@ dependencies:
     version: "3.0.10"
     rules:
       - if: "target == esp32p4"
+  # EFC 表情动画编解码(RGB565 无损 tile 编码, 预编译库; P4 含 PPA 缩放路径)
+  # 双目标引入, 经 Kconfig ESP_CUBE_ENABLE_EFC + ESP_EFC_LVGL_WIDGET 启用
+  # (当前仅 P4 默认开; 素材许可 caveat 见 docs/06 §9.5)
+  espressif/esp_efc_codec: "^1.1.0"
