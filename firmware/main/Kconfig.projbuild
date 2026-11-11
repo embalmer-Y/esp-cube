@@ -50,13 +50,15 @@ menu "EspCube Configuration"
           并烧录 model 分区(srmodels)。详见 docs/02_详细设计.md §5。
 
     config ESP_CUBE_ENABLE_AI
-        bool "启用 AI 云端会话(百炼组合C: ASR+LLM+TTS)[里程碑2]"
+        bool "启用 AI 云端会话(百炼: LLM+TTS, 可选 ASR)"
         default n
-        depends on ESP_CUBE_ENABLE_VOICE
         help
           移植自 Kaleido kaleido_speech(V-33 真机验证)。一把阿里云 key
-          全包(LLM qwen/ASR paraformer/TTS cosyvoice)。key 只进本地
+          全包(LLM qwen/TTS cosyvoice/ASR paraformer)。key 只进本地
           sdkconfig(不入库, 与 WiFi 凭据同红线)。
+          2026-11 起不依赖 VOICE: 文本注入(CLI ask)即可驱动 LLM+TTS
+          (语音 ASR 入口需另开 VOICE)。含 function calling 技能循环
+          (ai_skills 注册表, L5 注入)。
 
     config ESP_CUBE_ENABLE_EFC
         bool "启用 EFC 表情动画(esp_efc_codec, IDLE 场景播放)"

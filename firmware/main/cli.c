@@ -28,6 +28,10 @@
 #include "cube_tasks.h"
 #include "app_ncm.h"
 #include "app_player.h"
+#include "sdkconfig.h"
+#if CONFIG_ESP_CUBE_ENABLE_AI
+#include "ai_session.h"
+#endif
 
 static const char *TAG = "cli";
 
@@ -125,7 +129,11 @@ static void handle_line(char *line)
     }
     if (strcmp(line, "help") == 0) {
         printf("  ncm <关键词>  网易云搜索+播放 | ncmn <n> 播第n条\n"
-               "  radio 回电台轮播 | st <n> 切台 | stop 停止\n");
+               "  radio 回电台轮播 | st <n> 切台 | stop 停止\n"
+#if CONFIG_ESP_CUBE_ENABLE_AI
+               "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
+#endif
+        );
     } else if (strcmp(line, "ncm") == 0) {
         cmd_ncm(arg);
     } else if (strcmp(line, "ncmn") == 0) {
@@ -140,6 +148,17 @@ static void handle_line(char *line)
     } else if (strcmp(line, "stop") == 0) {
         app_player_stop();
         printf("  stopped\n");
+#if CONFIG_ESP_CUBE_ENABLE_AI
+    } else if (strcmp(line, "ask") == 0) {
+        if (arg == NULL || arg[0] == 0) {
+            printf("  用法: ask <文本>(如: ask 放一首周杰伦的晴天)\n");
+        } else {
+            esp_err_t err = ai_session_submit_text(arg);
+            printf("  ai: %s\n", err == ESP_OK
+                   ? "已提交(AI 回复将经 TTS 播出, 串口同步打印)"
+                   : esp_err_to_name(err));
+        }
+#endif
     } else {
         printf("  未知命令(%s), help 查看\n", line);
     }

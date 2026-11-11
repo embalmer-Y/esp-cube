@@ -22,6 +22,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -141,6 +142,35 @@ typedef bool (*ks_llm_sent_cb)(void *user, const char *sentence,
  */
 int ks_llm_chat(const struct ks_llm_cfg *cfg, ks_llm_sent_cb cb,
 		void *user, int64_t *first_token_us);
+
+/* ---- LLM v2（function calling, 2026-11 增） ----
+ * 调研结论(DashScope qwen OpenAI 兼容): tools 数组 + tool_choice=auto;
+ * tool_stream=false(默认)下复杂参数 arguments 一次性整包返回 ——
+ * MCU 端免做流式 delta 拼 tool_calls。parallel_tool_calls 强制 false
+ * (单轮最多一个调用, MCU 简化)。 */
+struct ks_llm_cfg_v2 {
+	const char *url;	/* chat/completions SSE 端点           */
+	const char *api_key;	/* Bearer                               */
+	const char *model;	/* qwen-plus ...                        */
+	const char *system;	/* 可为 NULL                            */
+	cJSON *messages;	/* 调用方持有: {role,content} 数组,
+				 * 不含 system(v2 内部前置);
+				 * 含工具轮回传的 role:"tool" 项      */
+	cJSON *tools;		/* OpenAI tools 数组, 可 NULL(纯文本)   */
+	bool cut_clauses;
+	bool no_think;
+};
+
+/* 工具调用回调(与调用同线程): id/name/arguments(JSON 字符串,
+ * v2 已按 delta 增量拼装完整) */
+typedef void (*ks_llm_tool_cb)(void *user, const char *id,
+			       const char *name, const char *arguments);
+
+/* 返回 0=纯文本流完成(cb 已收口)；1=模型发起工具调用(tool_cb 已
+ * 回调, 本轮无文本, 调用方应执行工具后携 role:"tool" 再调 v2)；
+ * -1 本地错误；-2 HTTP 非 200 */
+int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
+		   ks_llm_tool_cb tool_cb, void *user);
 
 /* 便捷：由 MiniMax JWT 拼 chatcompletion_v2 URL（内含 GroupID 提取，
  * 免去调用方接触 JWT 细节）；解析失败返回 -1 */

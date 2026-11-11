@@ -19,7 +19,7 @@ from pathlib import Path
 LAYERS = {
     "cubecore": 0, "boardcfg": 0,
     "drv_audio": 1, "drv_display": 1,
-    "app_audio": 2, "app_net": 2, "speech_provider": 2,
+    "app_audio": 2, "app_net": 2, "speech_provider": 2, "app_ncm": 2, "ai_skills": 2,
     "app_bt": 3, "app_player": 3, "app_voice": 3, "app_ai_session": 3,
     "app_ui": 4,
 }

@@ -37,6 +37,7 @@
 #include "audio_mixer.h"
 #include "audio_mic.h"
 #include "speech_provider.h"
+#include "ai_skills.h"
 #include "sdkconfig.h"
 
 #if !CONFIG_ESP_CUBE_ENABLE_AI
@@ -44,6 +45,11 @@
 /* VOICE/AI 关闭: 空实现(仅保启动接口可用) */
 esp_err_t ai_session_start(void) { return ESP_OK; }
 void ai_session_on_wake(void) {}
+esp_err_t ai_session_submit_text(const char *text)
+{
+    (void)text;
+    return ESP_ERR_NOT_SUPPORTED;
+}
 
 #else
 
@@ -86,6 +92,7 @@ enum {
     EVT_ASR_TEXT,          /* payload: char*(堆, 消费方释放) */
     EVT_MIC_DONE,
     EVT_TTS_DONE,          /* TTS 缓冲排空且已收口(tts_task 发) */
+    EVT_TEXT_IN,           /* payload: char*(文本注入, 跳过 ASR 直进 LLM) */
 };
 
 /* 队列元素(带指针的事件) */
@@ -129,6 +136,22 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
         if (s_state != AI_SPEAKING) set_state(AI_SPEAKING);
     }
     return true;
+}
+
+/* ---- 工具调用回调(v2, 与调用同线程): 暂存到 user 指向的结构 ---- */
+typedef struct {
+    char id[96];
+    char name[96];
+    char args[512];
+} tool_call_t;
+
+static void on_llm_tool(void *user, const char *id, const char *name,
+                        const char *arguments)
+{
+    tool_call_t *t = user;
+    strlcpy(t->id, id ? id : "", sizeof(t->id));
+    strlcpy(t->name, name ? name : "", sizeof(t->name));
+    strlcpy(t->args, arguments ? arguments : "{}", sizeof(t->args));
 }
 
 /* ---- TTS PCM 回调(网络任务) → 环形缓冲。
@@ -239,24 +262,85 @@ static void mic_task(void *arg)
     }
 }
 
-/* ---- LLM→TTS 一轮编排(EVT_MIC_DONE 后 session_task 内执行) ---- */
-static void run_round(void)
+/* ---- LLM→(技能)→TTS 一轮编排(session_task 内执行; 语音/文本注入共用) ----
+ * function calling 循环(≤2 轮工具): 文本照旧流式进 TTS; 模型发起
+ * tool_calls → ai_skill_exec 执行 → role:"tool" 回传 → 模型用结果
+ * 生成最终答复(仍流式进 TTS)。 */
+static void run_round(const char *user_text)
 {
     set_state(AI_THINKING);
-    struct ks_llm_cfg lcfg = {
-        .url = AI_LLM_URL,
-        .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
-        .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
-        .system = CONFIG_ESP_CUBE_AI_LLM_SYSTEM,
-        .user_msg = s_last_asr[0] ? s_last_asr : "你好",
-        .cut_clauses = true,
-        .no_think = true,
-    };
-    int64_t first_tok = 0;
-    int rc = ks_llm_chat(&lcfg, on_llm_sent, NULL, &first_tok);
-    if (rc != 0) {
-        ESP_LOGE(TAG, "llm chat rc=%d", rc);
+
+    /* system 追加技能引导(tools 描述已含语义, 此处强化"点播必须用工具") */
+    char system_full[384];
+    snprintf(system_full, sizeof(system_full),
+             "%s 你可调用工具控制本音箱(点歌/电台/音量/停止); 用户表达播歌/"
+             "切台/调音量意图时必须调用工具, 并用一句话简短回应。",
+             CONFIG_ESP_CUBE_AI_LLM_SYSTEM);
+
+    cJSON *messages = cJSON_CreateArray();
+    cJSON *um = cJSON_CreateObject();
+    cJSON *tools = ai_skills_tools_json();
+    cJSON_AddStringToObject(um, "role", "user");
+    cJSON_AddStringToObject(um, "content",
+                             (user_text && user_text[0]) ? user_text : "你好");
+    cJSON_AddItemToArray(messages, um);
+    if (tools == NULL) {
+        ESP_LOGW(TAG, "no skills registered, plain chat");
     }
+
+    tool_call_t tc;
+    for (int round = 0; round < 3; round++) {   /* 首轮 + ≤2 工具轮回 */
+        struct ks_llm_cfg_v2 lcfg = {
+            .url = AI_LLM_URL,
+            .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+            .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
+            .system = system_full,
+            .messages = messages,
+            .tools = tools,
+            .cut_clauses = true,
+            .no_think = true,
+        };
+        int rc = ks_llm_chat_v2(&lcfg, on_llm_sent, on_llm_tool, &tc);
+        if (s_abort_req) break;
+        if (rc == 1 && tc.name[0] != 0 && round < 2) {
+            /* 执行技能 → 结果回传(role:"tool") → 下一轮 LLM */
+            char reply[256];   /* 技能回执(与 ai_skills.h AI_SKILL_REPLY_MAX 对齐, 免头间耦合) */
+            cJSON *args_obj = cJSON_Parse(tc.args);   /* 失败→NULL(无参) */
+            esp_err_t err = ai_skill_exec(tc.name, args_obj, reply,
+                                          sizeof(reply));
+            cJSON_Delete(args_obj);
+            ESP_LOGI(TAG, "skill %s(%s) %s: %s", tc.name, tc.args,
+                     err == ESP_OK ? "ok" : esp_err_to_name(err), reply);
+
+            cJSON *am = cJSON_CreateObject();
+            cJSON_AddStringToObject(am, "role", "assistant");
+            cJSON_AddNullToObject(am, "content");
+            cJSON *tcs = cJSON_AddArrayToObject(am, "tool_calls");
+            cJSON *tcj = cJSON_CreateObject();
+            cJSON_AddStringToObject(tcj, "id", tc.id);
+            cJSON_AddStringToObject(tcj, "type", "function");
+            cJSON *fn = cJSON_CreateObject();
+            cJSON_AddStringToObject(fn, "name", tc.name);
+            cJSON_AddStringToObject(fn, "arguments", tc.args);
+            cJSON_AddItemToObject(tcj, "function", fn);
+            cJSON_AddItemToArray(tcs, tcj);
+            cJSON_AddItemToArray(messages, am);
+
+            cJSON *tm = cJSON_CreateObject();
+            cJSON_AddStringToObject(tm, "role", "tool");
+            cJSON_AddStringToObject(tm, "tool_call_id", tc.id);
+            cJSON_AddStringToObject(tm, "content", reply);
+            cJSON_AddItemToArray(messages, tm);
+            continue;
+        }
+        if (rc < 0) {
+            ESP_LOGE(TAG, "llm v2 rc=%d", rc);
+        }
+        break;                                   /* 纯文本轮完成 */
+    }
+
+    cJSON_Delete(messages);
+    cJSON_Delete(tools);
     ks_tts_feed("", true, 5000);                 /* TTS 收口 */
     ks_tts_close();
     s_tts_closed = true;                         /* tts_task 排空后回 IDLE */
@@ -319,8 +403,41 @@ static void session_task(void *arg)
             vTaskResume(s_mic_task);             /* 开始录音 */
             break;
 
+        case EVT_TEXT_IN: {
+            /* 文本注入(CLI ask / 调试): 复位轮状态 → 直接 LLM+TTS */
+            char *text = (char *)e.payload;
+            s_abort_req = true;
+            ks_tts_close();
+            ks_asr_close();
+            s_ring_r = s_ring_w;
+            s_abort_req = false;
+            s_tts_closed = false;
+            cube_resampler_init(&s_rs, AI_TTS_RATE, 48000);
+            audio_mixer_set_source_active(s_tts_src, true);
+
+            struct ks_tts_cfg tcfg2 = {
+                .url = AI_DASHSCOPE_URL,
+                .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+                .model = CONFIG_ESP_CUBE_AI_TTS_MODEL,
+                .voice = CONFIG_ESP_CUBE_AI_TTS_VOICE,
+                .sample_rate = AI_TTS_RATE,
+                .speech_rate = 0, .pitch = 0,
+            };
+            struct ks_tts_events tev2 = {
+                .user = NULL, .on_pcm = on_tts_pcm, .on_error = on_tts_err,
+            };
+            if (ks_tts_open(&tcfg2, &tev2) != 0) {
+                ESP_LOGE(TAG, "tts open failed(text-in)");
+            }
+            ESP_LOGI(TAG, "text-in: %s", text);
+            cube_event_publish(CUBE_EVT_AI_TEXT, text, strlen(text) + 1);
+            run_round(text);
+            free(text);
+            break;
+        }
+
         case EVT_MIC_DONE:
-            run_round();
+            run_round(s_last_asr);
             break;
 
         case EVT_TTS_DONE:                       /* 播放排空 → 本轮结束 */
@@ -396,6 +513,25 @@ void ai_session_on_wake(void)
 {
     session_evt_t e = { .id = EVT_WAKE };
     xQueueSend(s_evtq, &e, 0);
+}
+
+esp_err_t ai_session_submit_text(const char *text)
+{
+    if (s_evtq == NULL) {
+        return ESP_ERR_INVALID_STATE;            /* 会话未启动 */
+    }
+    if (text == NULL || text[0] == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    session_evt_t e = { .id = EVT_TEXT_IN, .payload = strdup(text) };
+    if (e.payload == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (xQueueSend(s_evtq, &e, 0) != pdPASS) {
+        free(e.payload);
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 #endif /* CONFIG_ESP_CUBE_ENABLE_AI */

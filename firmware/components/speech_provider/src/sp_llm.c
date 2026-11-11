@@ -42,6 +42,14 @@ struct ks_llm_ctx {
 	bool cut_clauses;
 	bool abort;
 	int status;
+	/* ---- function calling(v2): delta.tool_calls 增量拼装 ---- */
+	ks_llm_tool_cb tool_cb;	/* NULL=v1 行为(忽略 tool_calls)   */
+	char tool_id[96];
+	char tool_name[96];
+	char *tool_args;	/* 堆缓冲, 按 delta 追加           */
+	size_t tool_args_len;
+	size_t tool_args_cap;
+	bool tool_seen;		/* finish_reason==tool_calls       */
 };
 
 /* ---- MiniMax JWT → GroupID → chatcompletion_v2 URL ---- */
@@ -179,6 +187,32 @@ static void emit(struct ks_llm_ctx *c, const char *delta, size_t n)
 
 /* ---- SSE 行解析 ---- */
 
+/* tool_calls 增量拼装: tool_stream=false(百炼默认)下 arguments 一次
+ * 整包到; 仍按 append 写以兼容切片行为 */
+static void tool_args_append(struct ks_llm_ctx *c, const char *s, size_t n)
+{
+	if (c->tool_args_len + n + 1 > c->tool_args_cap) {
+		size_t cap = c->tool_args_cap ? c->tool_args_cap * 2 : 512;
+		while (cap < c->tool_args_len + n + 1 && cap < 4096)
+			cap *= 2;
+		if (cap < c->tool_args_len + n + 1) {
+			ESP_LOGW(TAG, "tool args 超4K截断");
+			n = cap - c->tool_args_len - 1;
+		}
+		char *nb = realloc(c->tool_args, cap);
+		if (nb == NULL) {
+			ESP_LOGE(TAG, "tool args OOM");
+			return;
+		}
+		c->tool_args = nb;
+		c->tool_args_cap = cap;
+	}
+	memcpy(c->tool_args + c->tool_args_len, s, n);
+	c->tool_args_len += n;
+	if (c->tool_args != NULL)
+		c->tool_args[c->tool_args_len] = '\0';
+}
+
 static void handle_line(struct ks_llm_ctx *c, const char *line, size_t len)
 {
 	static const char pfx[] = "data: ";
@@ -203,6 +237,29 @@ static void handle_line(struct ks_llm_ctx *c, const char *line, size_t len)
 		if (!c->first_token_us)
 			c->first_token_us = esp_timer_get_time() - c->t0;
 		emit(c, content->valuestring, strlen(content->valuestring));
+	}
+	/* ---- tool_calls(v2): 仅首项(请求已强制 parallel=false) ---- */
+	if (c->tool_cb) {
+		cJSON *tcs = delta ? cJSON_GetObjectItem(delta, "tool_calls") : NULL;
+		if (cJSON_IsArray(tcs) && cJSON_GetArraySize(tcs) > 0) {
+			cJSON *t0 = cJSON_GetArrayItem(tcs, 0);
+			const cJSON *fid = cJSON_GetObjectItem(t0, "id");
+			const cJSON *fn = cJSON_GetObjectItem(
+				cJSON_GetObjectItem(t0, "function"), "name");
+			const cJSON *fa = cJSON_GetObjectItem(
+				cJSON_GetObjectItem(t0, "function"), "arguments");
+			if (cJSON_IsString(fid) && fid->valuestring[0])
+				strlcpy(c->tool_id, fid->valuestring, sizeof(c->tool_id));
+			if (cJSON_IsString(fn) && fn->valuestring[0])
+				strlcpy(c->tool_name, fn->valuestring, sizeof(c->tool_name));
+			if (cJSON_IsString(fa) && fa->valuestring[0])
+				tool_args_append(c, fa->valuestring,
+						 strlen(fa->valuestring));
+		}
+		const cJSON *fr = ch ? cJSON_GetObjectItem(ch, "finish_reason") : NULL;
+		if (cJSON_IsString(fr) &&
+		    strcmp(fr->valuestring, "tool_calls") == 0)
+			c->tool_seen = true;
 	}
 	cJSON_Delete(root);
 }
@@ -389,4 +446,128 @@ int ks_llm_chat(const struct ks_llm_cfg *cfg, ks_llm_sent_cb cb, void *user,
 		return -2;
 	}
 	return 0;
+}
+
+/* ---- v2: function calling(请求体走堆缓冲: tools+多轮消息可超 4K) ---- */
+int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
+		   ks_llm_tool_cb tool_cb, void *user)
+{
+	struct ks_llm_ctx c = { .cb = cb, .user = user,
+				.cut_clauses = cfg ? cfg->cut_clauses : false,
+				.tool_cb = tool_cb };
+	char auth[768];
+	char *body;
+	char *s;
+	cJSON *root, *msgs;
+	esp_http_client_handle_t cl;
+	int code, ret;
+
+	if (!cfg || !cfg->url || !cfg->api_key || !cfg->model ||
+	    !cfg->messages || !cb)
+		return -1;
+
+	c.t0 = esp_timer_get_time();
+
+	root = cJSON_CreateObject();
+	if (!root)
+		return -1;
+	cJSON_AddStringToObject(root, "model", cfg->model);
+	cJSON_AddBoolToObject(root, "stream", true);
+	if (cfg->no_think) {
+		cJSON *th = cJSON_AddObjectToObject(root, "thinking");
+		cJSON_AddStringToObject(th, "type", "disabled");
+	}
+	msgs = cJSON_AddArrayToObject(root, "messages");
+	if (cfg->system) {
+		cJSON *m = cJSON_CreateObject();
+		cJSON_AddStringToObject(m, "role", "system");
+		cJSON_AddStringToObject(m, "content", cfg->system);
+		cJSON_AddItemToArray(msgs, m);
+	}
+	cJSON *it;
+	cJSON_ArrayForEach(it, cfg->messages)
+		cJSON_AddItemReferenceToArray(msgs, it);
+	if (cfg->tools) {
+		cJSON_AddItemReferenceToObject(root, "tools", cfg->tools);
+		cJSON_AddStringToObject(root, "tool_choice", "auto");
+		cJSON_AddBoolToObject(root, "parallel_tool_calls", false);
+	}
+	s = cJSON_PrintUnformatted(root);
+	cJSON_Delete(root);
+	if (!s)
+		return -1;
+	body = malloc(strlen(s) + 1);        /* 堆: tools/历史可超 4K */
+	if (body == NULL) {
+		cJSON_free(s);
+		return -1;
+	}
+	strcpy(body, s);
+	cJSON_free(s);
+
+	snprintf(auth, sizeof(auth), "Bearer %s", cfg->api_key);
+	esp_http_client_config_t hc = {
+		.url = cfg->url,
+		.method = HTTP_METHOD_POST,
+		.timeout_ms = 30000,
+		.crt_bundle_attach = esp_crt_bundle_attach,
+		.buffer_size = 2048,
+		.buffer_size_tx = 4096,
+		.event_handler = http_event,
+		.user_data = &c,
+	};
+	cl = esp_http_client_init(&hc);
+	if (!cl) {
+		free(body);
+		free(c.tool_args);
+		return -1;
+	}
+	esp_http_client_set_header(cl, "Authorization", auth);
+	esp_http_client_set_header(cl, "Content-Type", "application/json");
+
+	ret = 0;
+	if (esp_http_client_open(cl, strlen(body)) != ESP_OK ||
+	    esp_http_client_write(cl, body, strlen(body)) != (int)strlen(body)) {
+		ret = -1;
+		goto out;
+	}
+	esp_http_client_fetch_headers(cl);
+	{
+		char buf[1024];
+		int n;
+		while (!c.abort &&
+		       (n = esp_http_client_read(cl, buf, sizeof(buf))) > 0)
+			;
+	}
+
+	code = esp_http_client_get_status_code(cl);
+	if (code != 200) {
+		ESP_LOGE(TAG, "v2 http %d", code);
+		ret = -2;
+		goto out;
+	}
+
+	if (c.tool_seen && tool_cb && c.tool_name[0]) {
+		/* 工具调用轮: 文本(若有)已按句回调; 报告工具后由调用方
+		 * 执行并携 role:"tool" 重入 */
+		if (c.sent_len) {                 /* 收口残余文本 */
+			c.sent[c.sent_len] = '\0';
+			cb(c.user, c.sent, true);
+		}
+		tool_cb(user, c.tool_id, c.tool_name,
+			c.tool_args ? c.tool_args : "{}");
+		ret = 1;
+	} else {
+		if (c.sent_len) {
+			c.sent[c.sent_len] = '\0';
+			cb(c.user, c.sent, true);
+		} else {
+			cb(c.user, "", true);
+		}
+		ret = 0;
+	}
+out:
+	esp_http_client_cleanup(cl);
+	free(body);
+	free(c.tool_args);
+	return ret;
 }

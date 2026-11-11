@@ -45,6 +45,8 @@ extern esp_err_t ui_port_init(void);
 
 /* 串口命令行(本目录 cli.c) */
 #include "cli.h"
+/* AI 技能注册(本目录 ai_skills_setup.c, L5 依赖注入) */
+extern void register_ai_skills(void);
 
 static const char *TAG = "main";
 
@@ -127,6 +129,7 @@ void app_main(void)
     }
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
+    register_ai_skills();                   /* L5 技能注入(先于会话启动) */
     esp_err_t aerr = ai_session_start();
     if (aerr != ESP_OK) {
         ESP_LOGE(TAG, "ai session degraded: %s", esp_err_to_name(aerr));

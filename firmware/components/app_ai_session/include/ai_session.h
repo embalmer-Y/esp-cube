@@ -26,6 +26,10 @@ esp_err_t ai_session_start(void);
 /* 唤醒入口(正常由事件总线驱动, 亦可供调试直调) */
 void ai_session_on_wake(void);
 
+/* 文本注入入口(跳过唤醒/录音/ASR, 直接进 LLM→TTS 轮):
+ * CLI `ask` 命令/B2 语音链外的调试通道; 会在会话任务异步执行 */
+esp_err_t ai_session_submit_text(const char *text);
+
 #ifdef __cplusplus
 }
 #endif
