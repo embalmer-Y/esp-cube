@@ -69,7 +69,9 @@ static struct {
     app_player_state_t state;
     TaskHandle_t task;
     volatile bool stop_req;
+#if CONFIG_ESP_CUBE_ENABLE_BT
     volatile bool bt_pause;                     /* BT 音乐接管: 挂起电台供流 */
+#endif
     audio_source_handle_t src;
     /* HTTP 响应头捕获(HTTP_EVENT_ON_HEADER 上下文写入) */
     char content_type[64];
@@ -96,6 +98,7 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
  * 订阅回调可能在 BT 栈任务上下文执行 → 只做 volatile 写, 所有实际
  * 动作(停读/关源/恢复)都由播放任务在 bt_pause_gate() 内完成。
  */
+#if CONFIG_ESP_CUBE_ENABLE_BT
 static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)ctx;
@@ -111,6 +114,7 @@ static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *
     }
     s_player.bt_pause = active;
 }
+#endif
 
 esp_err_t app_player_init(void)
 {
@@ -119,12 +123,17 @@ esp_err_t app_player_init(void)
         return ESP_OK;
     }
     inited = true;
+#if CONFIG_ESP_CUBE_ENABLE_BT
     return cube_event_subscribe(player_evt_cb, NULL);
+#else
+    return ESP_OK;                          /* 无 BT 目标: 无需订阅 */
+#endif
 }
 
 /* 播放任务内调用: BT 暂停期间在此驻留(不读网络→TCP背压, 不供混音器)。
  * 恢复时重开源通道并返回; 暂停期间连接被服务器断开属预期(直播服务器
  * 踢空闲连接), 由外层循环以"零失败"重开会话。 */
+#if CONFIG_ESP_CUBE_ENABLE_BT
 static void bt_pause_gate(void)
 {
     if (!s_player.bt_pause || s_player.src == NULL) {
@@ -146,6 +155,9 @@ static void bt_pause_gate(void)
         ESP_LOGI(TAG, "radio resumed (BT released)");
     }
 }
+#else
+static void bt_pause_gate(void) {}          /* 无 BT 目标: 空实现, 调用点零改动 */
+#endif
 typedef struct {
     esp_audio_dec_handle_t dec;
     esp_audio_dec_info_t info;
@@ -754,7 +766,7 @@ static bool hls_session_run(void)
     decoder_t dec = { 0 };
     bool eof_ok = false;
     esp_extractor_handle_t ext = NULL;
-    esp_err_t ret = ESP_OK;
+    esp_err_t ret = ESP_OK;    /* ESP_GOTO_ON_* 宏的 goto 标签载体(值不被读) */
 
     /* 音频-only 提取; 帧输出池 48KB(内部RAM, 欠压时插件以 WAITING_OUTPUT 反压)。
      * 网络 URL 必须走 io_cfg 变体(file_cfg 仅本地文件, 内部走 VFS fopen) */
@@ -919,12 +931,14 @@ static void player_task(void *arg)
         audio_mixer_set_source_active(s_player.src, false);
 
         if (!s_player.stop_req) {
+#if CONFIG_ESP_CUBE_ENABLE_BT
             /* BT 暂停期间会话被服务器断开属预期(踢空闲连接): 不计失败,
              * 回到循环顶部的 gate 驻留, 直到 BT 释放后重开会话 */
             if (s_player.bt_pause) {
                 retries = 0;
                 continue;
             }
+#endif
             /* EOF → 播放列表轮播下一首; 读取错误 → 原地重试同一URL */
             if (s_player.playlist_idx >= 0 && eof_ok) {
                 s_player.playlist_idx = (s_player.playlist_idx + 1) % PLAYLIST_NUM;

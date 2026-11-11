@@ -21,13 +21,16 @@
 
 static const char *TAG = "net";
 
-/* 与蓝牙共存: 稍缓的重连节奏, 避免初始化风暴挤占 2.4G */
+/* 重连节奏稍缓(历史: 与 S31 蓝牙共存避免初始化风暴; 双目标沿用): 直播源
+ * 重连风暴易触发服务端限流, 指数退避更稳 */
 #define WIFI_RETRY_MS_BASE  2000
 #define WIFI_RETRY_MAX_SHIFT 4      /* 最大退避 = 基准 × 2^4 = 32s */
 
 static esp_timer_handle_t s_reconnect_timer;
 static volatile int s_retry_count = 0;
+#if CONFIG_ESP_CUBE_ENABLE_BT
 static volatile bool s_suspended;  /* BT 模式: WiFi 已停, 重连抑制 */
+#endif
 static volatile bool s_got_ip;     /* STA 已获 IP(供播放器恢复时等待) */
 static volatile bool s_inited;
 
@@ -53,12 +56,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             int delay_ms = WIFI_RETRY_MS_BASE << shift;
             s_retry_count++;
             s_got_ip = false;
+#if CONFIG_ESP_CUBE_ENABLE_BT
             ESP_LOGW(TAG, "disconnected, retry in %dms(#%d)%s", delay_ms, s_retry_count,
                      s_suspended ? " [suspended]" : "");
+#else
+            ESP_LOGW(TAG, "disconnected, retry in %dms(#%d)", delay_ms, s_retry_count);
+#endif
             cube_event_publish(CUBE_EVT_WIFI_DISCONNECTED, NULL, 0);
+#if CONFIG_ESP_CUBE_ENABLE_BT
             if (s_suspended) {
                 break;              /* BT 模式主动停网: 不安排重连 */
             }
+#endif
             /* 指数退避后重连(定时器回调, 不阻塞事件循环) */
             (void)esp_timer_stop(s_reconnect_timer);   /* 未激活时返回INVALID_STATE, 无害 */
             esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000);
@@ -76,13 +85,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     }
 }
 
-/* ================= BT 模式射频让渡(M1.8.5) =================
+/* ================= BT 模式射频让渡(M1.8.5, 仅 S31 有 BT) =================
  * 实测(用户听感+pcm flow 数据): WiFi/BT 共存调度下 A2DP 存在
  * ①"劣化积累态"(首次卡顿后持续数秒一卡, 重连才恢复) ②3 米卡顿显著增多。
  * 对策: BT 模式停 WiFi, 蓝牙独占射频; 断开蓝牙后重启 WiFi 并恢复电台。
  * 代价: BT 播放期间无网络功能 —— M2 语音 AI 上线时需重新权衡
  * (届时可做成运行时开关: "音质优先(关WiFi)" vs "AI 优先(共存)")。
  */
+#if CONFIG_ESP_CUBE_ENABLE_BT
 esp_err_t app_net_suspend(void)
 {
     if (!s_inited || s_suspended) {
@@ -106,6 +116,7 @@ esp_err_t app_net_resume(void)
     ESP_LOGI(TAG, "wifi resumed (err=%s)", esp_err_to_name(err));
     return err;
 }
+#endif /* CONFIG_ESP_CUBE_ENABLE_BT */
 
 bool app_net_is_up(void)
 {
@@ -123,6 +134,7 @@ esp_err_t app_net_wait_up(int timeout_ms)
 }
 
 /* 事件总线订阅: BT 接管 → 停网; BT 释放 → 复网(播放器再等 IP 后恢复电台) */
+#if CONFIG_ESP_CUBE_ENABLE_BT
 static void net_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)ctx;
@@ -135,6 +147,7 @@ static void net_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx
         app_net_resume();
     }
 }
+#endif
 
 esp_err_t app_net_start(void)
 {
@@ -157,7 +170,7 @@ esp_err_t app_net_start(void)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
-    /* 与 BT 共存: 使用默认静态/动态共存缓冲 */
+    /* 缓冲策略沿用默认(S31 历史上为 BT 共存选择的组合; P4 透传模式同样适用) */
     ESP_RETURN_ON_ERROR(esp_wifi_init(&wcfg), TAG, "wifi init");
 
     ESP_RETURN_ON_ERROR(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
@@ -173,14 +186,17 @@ esp_err_t app_net_start(void)
     };
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg), TAG, "set config");
-    /* PS_NONE(M1.8.4 实测结论): PS_MIN_MODEM 的周期性唤醒/DTIM 突发使 BT
-     * A2DP 远近距离均匀卡顿(数据流 5s 窗口从 868KB 掉半直至断流 14s)。
-     * 恢复 PS_NONE, BT 空口优先改由 main 里 esp_coex_preference_set 解决。 */
+    /* PS_NONE(M1.8.4 实测结论, 双目标沿用): PS_MIN_MODEM 的周期性唤醒/DTIM
+     * 突发使流媒体卡顿(S31 实测数据流 5s 窗口从 868KB 掉半直至断流 14s);
+     * 常供电音箱场景省电收益无意义, 流稳定性优先。S31 上 BT 空口优先另由
+     * main 里 esp_coex_preference_set 解决。 */
     ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG, "set ps");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
 
     ESP_LOGI(TAG, "wifi sta started, connecting to \"%s\"", CONFIG_ESP_CUBE_WIFI_SSID);
     s_inited = true;
+#if CONFIG_ESP_CUBE_ENABLE_BT
     ESP_ERROR_CHECK(cube_event_subscribe(net_evt_cb, NULL));  /* BT 模式自动让渡射频 */
+#endif
     return ESP_OK;
 }

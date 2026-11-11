@@ -22,14 +22,16 @@
 #include "board_config.h"
 #include "board_pins.h"
 #include "nvs_flash.h"
-#include "esp_coexist.h"
 #include "drv_audio.h"
 #include "drv_display.h"
 #include "audio_mixer.h"
 #include "app_player.h"
 #include "app_net.h"
 #include "app_ui.h"
+#if CONFIG_ESP_CUBE_ENABLE_BT
+#include "esp_coexist.h"
 #include "app_bt.h"
+#endif
 
 #if CONFIG_ESP_CUBE_ENABLE_VOICE
 #include "app_voice.h"
