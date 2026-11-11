@@ -31,9 +31,11 @@
 #define CUBE_TASK_PLAYER_PRIO      12
 #define CUBE_TASK_PLAYER_CORE      1
 
-/* ---- AI 会话编排(app_ai_session 三任务) ---- */
+/* ---- AI 会话编排(app_ai_session 三任务) ----
+ * 12KB: LLM v2 调用链实测 8KB 溢出(ks_llm_ctx 2.8K + http_event 行缓冲
+ * 2K + TLS/读缓冲叠加, 2026-11-11 板上实测) */
 #define CUBE_TASK_AISESS_NAME  "aisess"
-#define CUBE_TASK_AISESS_STACK 8192
+#define CUBE_TASK_AISESS_STACK 12288
 #define CUBE_TASK_AISESS_PRIO  5
 #define CUBE_TASK_AISESS_CORE  0
 

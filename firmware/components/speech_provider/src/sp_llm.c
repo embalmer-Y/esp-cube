@@ -504,6 +504,8 @@ int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 	strcpy(body, s);
 	cJSON_free(s);
 
+	/* 请求体调试日志(400 排查用): 默认关, 需要时改 LOGI */
+	ESP_LOGD(TAG, "v2 req(%u)", strlen(body));
 	snprintf(auth, sizeof(auth), "Bearer %s", cfg->api_key);
 	esp_http_client_config_t hc = {
 		.url = cfg->url,

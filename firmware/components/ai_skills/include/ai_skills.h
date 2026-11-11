@@ -24,7 +24,8 @@ extern "C" {
 #endif
 
 #define AI_SKILL_NAME_LEN   32
-#define AI_SKILL_DESC_LEN   96
+#define AI_SKILL_DESC_LEN   192      /* 字节; 中文描述实测 96B 会截断出
+                                      * 非法 UTF-8 → LLM 请求体 400 */
 #define AI_SKILL_MAX        8        /* 注册表容量(满即 ESP_ERR_NO_MEM) */
 
 /* 执行体: args=LLM 生成的参数对象(防防御解析, 可能为 NULL);

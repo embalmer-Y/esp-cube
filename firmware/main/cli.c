@@ -198,6 +198,9 @@ static void cli_task(void *arg)
                 len--;
                 printf("\b \b");
             }
+        } else if (len == 0 && (ch & 0x80)) {
+            /* 行首噪声字节(实测 0xFF: 主机打开串口的 DTR 切换毛刺, 间歇
+             * 出现)——命令恒以 ASCII 开头, 直接丢弃; 行中 UTF-8 不受影响 */
         } else if (len < CLI_LINE_MAX - 1 && ch >= 0x20 && ch != 0x7f) {
             /* 接受 ≥0x80 字节: UTF-8 中文关键词直通(搜索必需) */
             line[len++] = (char)ch;

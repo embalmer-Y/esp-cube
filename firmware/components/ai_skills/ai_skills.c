@@ -19,6 +19,24 @@ typedef struct {
 static skill_slot_t s_skills[AI_SKILL_MAX];
 static int s_count;
 
+/* UTF-8 边界安全拷贝: 容量截断时回退到字符边界(截在续字节上会让
+ * JSON 里的描述变成非法 UTF-8 → 服务端 400, 2026-11-11 板上实测) */
+static void strlcpy_utf8(char *dst, const char *src, size_t cap)
+{
+    strlcpy(dst, src, cap);
+    size_t len = strlen(dst);
+    if (len == 0 || (unsigned char)src[len] == 0) {
+        return;                            /* 未截断 */
+    }
+    while (len > 0 && ((unsigned char)dst[len - 1] & 0xC0) == 0x80) {
+        len--;                             /* 回退续字节 */
+    }
+    if (len > 0 && ((unsigned char)dst[len - 1] & 0x80) != 0) {
+        len--;                             /* 丢残缺首字节 */
+    }
+    dst[len] = 0;
+}
+
 esp_err_t ai_skill_register(const char *name, const char *description,
                             const char *schema_json, ai_skill_fn handler)
 {
@@ -29,7 +47,7 @@ esp_err_t ai_skill_register(const char *name, const char *description,
     /* 同名覆盖(幂等) */
     for (int i = 0; i < s_count; i++) {
         if (strcmp(s_skills[i].name, name) == 0) {
-            strlcpy(s_skills[i].desc, description, sizeof(s_skills[i].desc));
+            strlcpy_utf8(s_skills[i].desc, description, sizeof(s_skills[i].desc));
             if (s_skills[i].schema != NULL) {
                 cJSON_Delete(s_skills[i].schema);
             }
@@ -46,7 +64,7 @@ esp_err_t ai_skill_register(const char *name, const char *description,
     }
     skill_slot_t *s = &s_skills[s_count++];
     strlcpy(s->name, name, sizeof(s->name));
-    strlcpy(s->desc, description, sizeof(s->desc));
+    strlcpy_utf8(s->desc, description, sizeof(s->desc));
     s->schema = (schema_json != NULL && schema_json[0] != 0)
                 ? cJSON_Parse(schema_json) : NULL;
     if (schema_json != NULL && schema_json[0] != 0 && s->schema == NULL) {
