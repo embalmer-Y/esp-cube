@@ -34,10 +34,7 @@ esp_err_t app_ui_start(const app_ui_boot_cfg_t *cfg)
     lvgl_cfg.timer_period_ms = 5;
     ESP_RETURN_ON_ERROR(lvgl_port_init(&lvgl_cfg), TAG, "lvgl port init");
 
-    /* ---- 2. 显示设备绑定: 全帧双缓冲(设计文档 §4) ----
-     * full_refresh=1: LVGL 每次提交整帧(坐标天然偶对齐, 满足 CO5300 约束);
-     * swap_bytes=1: SPI/QSPI 面板按大端发送 RGB565, 端口层负责字节序;
-     * 缓冲 2×460×460×2B≈846KB 落 PSRAM(S31 PSRAM 专用控制器, 不与 LCD 争带宽)。 */
+    /* ---- 2. 显示设备绑定(接口方式由装配层注入) ---- */
     lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = (esp_lcd_panel_io_handle_t)cfg->io_handle,
         .panel_handle = (esp_lcd_panel_handle_t)cfg->panel_handle,
@@ -49,11 +46,29 @@ esp_err_t app_ui_start(const app_ui_boot_cfg_t *cfg)
         .flags = {
             .buff_spiram = true,
             .buff_dma = false,
-            .swap_bytes = true,                 /* 帧序异常时优先核对此项 */
-            .full_refresh = true,
         },
     };
-    lv_display_t *disp = lvgl_port_add_disp(&disp_cfg);
+
+    lv_display_t *disp = NULL;
+    if (cfg->iface == UI_DISP_IF_DSI) {
+        /* MIPI-DSI DPI 面板(P4C5): 直接模式画进 DPI 自身帧缓冲, 换帧与
+         * vsync 对齐(Kaleido dsi-lvgl V-35R 实测口径: avoid_tearing 必须
+         * 搭配 direct_mode, 否则 flush 死等信号量); 并行总线无字节序问题 */
+        disp_cfg.flags.swap_bytes = false;
+        disp_cfg.flags.direct_mode = true;
+        lvgl_port_display_dsi_cfg_t dsi_cfg = {
+            .flags = { .avoid_tearing = true },
+        };
+        disp = lvgl_port_add_disp_dsi(&disp_cfg, &dsi_cfg);
+    } else {
+        /* QSPI 面板(S31): full_refresh=1 每次提交整帧(坐标天然偶对齐,
+         * 满足 CO5300 约束); swap_bytes=1 QSPI 按大端发送 RGB565;
+         * 缓冲 2×460×460×2B≈846KB 落 PSRAM(S31 PSRAM 专用控制器,
+         * 不与 LCD 争带宽)。 */
+        disp_cfg.flags.swap_bytes = true;       /* 帧序异常时优先核对此项 */
+        disp_cfg.flags.full_refresh = true;
+        disp = lvgl_port_add_disp(&disp_cfg);
+    }
     ESP_RETURN_ON_FALSE(disp != NULL, ESP_FAIL, TAG, "add disp");
 
     /* ---- 3. 页面构建 ---- */

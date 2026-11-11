@@ -2,7 +2,7 @@
  * board_pins_p4c5.h —— 鱼鹰光电 OSPTEK ESP32-P4C5 开发板引脚与板级常量
  *
  * 依据: 底板原理图 V1.3 + Kaleido 26 号调研三重验证(同款板真机实测, 归档
- * project-archive/entelea-handoff-*/Kaleido/docs/research/26-P4C5平台切换落地调研.md)
+ * project-archive/entelea-handoff-2026-11-08/Kaleido/docs/research/ 目录)
  * + radio-p4c5 独立工程全链点亮(2026-11: ES8311@48k → hosted 3.0.10 → HLS 电台)。
  */
 #pragma once
@@ -56,6 +56,13 @@ extern "C" {
 
 /* I2C 地址(espressif/esp_codec_dev 1.6.2: ES8311_CODEC_DEFAULT_ADDR 即此) */
 #define BOARD_CODEC_I2C_ADDR        0x30            /* ES8311 7位地址0x18 的 8位形式 */
+
+/* I2S DMA 形状(8×480 ≈ 80ms@48k + auto_clear: 欠载时 DMA 默认循环重发
+ * 尾缓冲(实测语音末字无限复读), 开自动清零则发静音 —— radio-p4c5/
+ * Kaleido 同款板实证) */
+#define BOARD_AUDIO_DMA_DESC        8
+#define BOARD_AUDIO_DMA_FRAMES      480
+#define BOARD_AUDIO_I2S_AUTO_CLEAR  1
 
 /* ===================== C5 共芯(SDIO, esp_hosted P4 默认值) =====================
  * CLK=18 CMD=19 D0..D3=14..17 —— 与 esp_hosted 在 P4 的预设默认完全一致,

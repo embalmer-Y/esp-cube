@@ -19,12 +19,19 @@
 extern "C" {
 #endif
 
+/* 显示接口类型(由装配层按板注入, L4 不感知板卡) */
+typedef enum {
+    UI_DISP_IF_QSPI = 0,    /* S31: QSPI 面板, 全帧双缓冲 + swap_bytes */
+    UI_DISP_IF_DSI,         /* P4C5: MIPI-DSI DPI, direct_mode + 防撕裂 */
+} ui_disp_iface_t;
+
 /* 启动配置(句柄以 void* 传递: 免得 app_ui.h 引入 esp_lcd 头) */
 typedef struct {
-    void *io_handle;        /* esp_lcd_panel_io_handle_t(QSPI IO) */
+    void *io_handle;        /* esp_lcd_panel_io_handle_t(QSPI/DBI IO) */
     void *panel_handle;     /* esp_lcd_panel_handle_t(面板) */
     int h_res;
     int v_res;
+    ui_disp_iface_t iface;  /* 显示接口(决定 esp_lvgl_port 绑定方式) */
 } app_ui_boot_cfg_t;
 
 /* 初始化 LVGL 运行环境 + 绑定显示 + 构建页面(在 drv_display_init 成功后) */

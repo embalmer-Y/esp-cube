@@ -18,6 +18,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "cubecore.h"
+#if CONFIG_ESP_CUBE_NET_HOSTED
+#include "esp_hosted.h"      /* C5 共芯: esp_wifi API 经 esp_wifi_remote 透传 */
+#endif
 
 static const char *TAG = "net";
 
@@ -166,6 +169,20 @@ esp_err_t app_net_start(void)
 
     ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif init");
     ESP_RETURN_ON_ERROR(esp_event_loop_create_default(), TAG, "event loop");
+
+#if CONFIG_ESP_CUBE_NET_HOSTED
+    /* ---- esp_hosted 两段式(Kaleido 缺陷 H 终局口径, radio-p4c5 实证) ----
+     * SDIO slot1/4bit@40MHz/复位GPIO54 = esp_hosted 在 P4 的默认值, 零配置;
+     * constructor 早启已关(AUTO_CALL_INIT_BEFORE_APP_MAIN=n), 此处显式保序;
+     * 与板上 C5 slave 固件同版本配对(3.0.10)。 */
+    ESP_RETURN_ON_ERROR(esp_hosted_init(), TAG, "hosted init");
+    esp_err_t cerr = esp_hosted_connect_to_slave();   /* 阻塞 ~1.5s(含复位/枚举/RPC 建链) */
+    if (cerr != ESP_OK) {
+        /* 降级返回: C5 可能未就绪/线序异常, 由 main 按失败域降级处理 */
+        ESP_LOGE(TAG, "hosted connect failed: %s", esp_err_to_name(cerr));
+        return cerr;
+    }
+#endif
 
     esp_netif_create_default_wifi_sta();
 

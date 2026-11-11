@@ -1,5 +1,5 @@
 /*
- * drv_display.c —— CO5300 QSPI AMOLED 驱动实现
+ * drv_display_qspi.c —— CO5300 QSPI AMOLED 驱动实现(EspCube S31 板后端)
  *
  * 要点(对应设计文档 §4):
  *   1. QSPI 4-line 面板: esp_lcd_panel_io_spi_config 由 CO5300 组件提供的
@@ -7,6 +7,7 @@
  *   2. 面板窗口坐标必须【偶数对齐】(CO5300 硬约束)—— M1 采用 LVGL 全帧双缓冲,
  *      刷新区域恒为整屏(0..459), 天然满足对齐; 后续切部分刷新时需在 flush 前对齐;
  *   3. 亮度走寄存器 0x51(0-255), 无 PWM 背光。
+ * P4C5 板走 MIPI-DSI 后端(本文件不参与编译, 见 drv_display_dsi.c)。
  */
 #include "drv_display.h"
 

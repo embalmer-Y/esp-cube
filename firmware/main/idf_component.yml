@@ -8,14 +8,12 @@ dependencies:
   espressif/esp_lcd_co5300: "^2.2.0"
   # LVGL9 移植层(任务/缓冲/刷新管理)
   espressif/esp_lvgl_port: "^2.0.0"
-  # codec 统一抽象(ES8311 播放+录音, 两板同款芯片)
-  # S31: 2.0.0-beta5 = IDF 6.x 适配线(现状保持, 拆分自单文件时期);
-  # P4C5: 1.6.2 = Kaleido/radio-p4c5 同款板真机实证版本
-  espressif/esp_codec_dev:
-    version: "==2.0.0-beta5"
-    matches:
-      - if: "target == esp32p4"
-        version: "1.6.2"
+  # codec 统一抽象(ES8311 播放+录音, 两板同款芯片)。
+  # 双目标统一 1.6.2: 稳定线最新版(双 target 无限制), radio-p4c5 同款
+  # P4C5 板真机实证; 且取代 S31 旧用的 2.0.0-beta5 —— 后者是 S31 语音
+  # WakeNet TLSF 堆损坏的头号嫌疑(2026-11-12 定位), 换 1.6.2 顺带验证。
+  # 注意: 单工程目录共享 managed_components, 不支持按 target 双版本。
+  espressif/esp_codec_dev: "1.6.2"
   # 软件编解码(MP3/AAC 网络流解码; Opus 编解码供 M2 语音 AI)
   espressif/esp_audio_codec: "^2.6.0"
   # WebSocket 客户端(M2: xiaozhi 协议 / GLM-Realtime)

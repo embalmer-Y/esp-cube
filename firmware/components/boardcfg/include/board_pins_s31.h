@@ -60,8 +60,15 @@ extern "C" {
 #define BOARD_PIN_CODEC_DIN      GPIO_NUM_54      /* I2S_ASDOUT (codec ADC → ESP RX) */
 #define BOARD_PIN_AMP_EN         GPIO_NUM_57      /* PA_CTRL → NS4150B(高有效) */
 
-/* I2C 地址(注意: esp_codec_dev v2 采用 8 位地址形式, 内部右移1位得7位地址) */
+/* I2C 地址(8 位地址形式, 组件内部右移1位得7位地址;
+ * esp_codec_dev 1.6.2 的 ES8311_CODEC_DEFAULT_ADDR 即此值) */
 #define BOARD_CODEC_I2C_ADDR     0x30             /* ES8311 7位地址0x18 的 8位形式 */
+
+/* I2S DMA 形状(6×240 ≈ 30ms@48k: 抗 WiFi/BT 共存抖动实测值;
+ * S31 内部 RAM 紧张, 不开 auto_clear) */
+#define BOARD_AUDIO_DMA_DESC     6
+#define BOARD_AUDIO_DMA_FRAMES   240
+#define BOARD_AUDIO_I2S_AUTO_CLEAR 0
 
 #ifdef __cplusplus
 }

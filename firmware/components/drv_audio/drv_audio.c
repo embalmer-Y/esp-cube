@@ -1,20 +1,27 @@
 /*
- * drv_audio.c —— ES8311 + I2S 驱动实现
+ * drv_audio.c —— ES8311 + I2S 驱动实现(S31 / P4C5 双板同一份)
  *
- * 实现要点:
+ * 两板同款音频链(ES8311 + NS4150B + 模拟麦), 差异全部收敛在 boardcfg:
+ *   - 引脚: board_pins_s31.h / board_pins_p4c5.h;
+ *   - DMA 形状与 auto_clear: BOARD_AUDIO_DMA_* (S31 6×240 / P4C5 8×480);
+ *   - PA 怪癖: P4C5 的 es8311 驱动 pa_pin 自动配置不生效(Kaleido V-38
+ *     实证), BOARD_AMP_MANUAL_PA → codec open 后手工补配推挽输出;
+ *   - esp_codec_dev 双目标统一 1.6.2(原 S31 用 2.0.0-beta5 = 语音 TLSF
+ *     堆损坏头号嫌疑, 详见 main/idf_component.yml 注释)。
+ *
+ * 实现要点(沿袭):
  *   1. I2S 全双工: TX/RX 同一控制器同一 LRCK(ES8311 单接口约束),
  *      播放 48k;录音通道读出后由 app_voice 降采样到 16k 喂 esp-sr;
  *   2. esp_codec_dev 抽象层: 统一音量/静音/模式管理, 与乐鑫官方 BSP 同构;
  *   3. PA 上电时序: codec open → 设置音量(数字静音) → PA enable → 解除静音,
  *      避免 NS4150B 上电瞬间的直流阶跃产生爆音。
- *
- * ⚠ I2C/I2S 引脚为【待核对】占位值, 见 board_pins.h 与接线指南。
  */
 #include "drv_audio.h"
 
 #include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
+#include "driver/gpio.h"
 #include "driver/i2s_std.h"
 #include "driver/i2c_master.h"
 #include "board_pins.h"
@@ -42,9 +49,13 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg)
 
     /* ================= 1. I2S 全双工通道 ================= */
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    /* 特大 DMA 缓冲抗 WiFi/BT 抖动: 6 buf × 240 帧 */
-    chan_cfg.dma_desc_num = 6;
-    chan_cfg.dma_frame_num = 240;
+    /* DMA 形状按板(boardcfg): S31 6×240(30ms, 共存抖动实测) /
+     * P4C5 8×480(80ms, Kaleido/radio 实证)+auto_clear(欠载静音防复读) */
+    chan_cfg.dma_desc_num = BOARD_AUDIO_DMA_DESC;
+    chan_cfg.dma_frame_num = BOARD_AUDIO_DMA_FRAMES;
+#if BOARD_AUDIO_I2S_AUTO_CLEAR
+    chan_cfg.auto_clear = true;
+#endif
     ESP_RETURN_ON_ERROR(i2s_new_channel(&chan_cfg, &s_tx, &s_rx), TAG, "i2s new channel");
 
     i2s_std_config_t std_cfg = {
@@ -66,16 +77,15 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg)
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_tx), TAG, "enable tx");
     ESP_RETURN_ON_ERROR(i2s_channel_enable(s_rx), TAG, "enable rx");
 
-    /* ================= 2. codec 数据/控制接口(esp_codec_dev v2 API) ================= */
+    /* ================= 2. codec 数据/控制接口 ================= */
     audio_codec_i2s_cfg_t i2s_cfg = {
         .port = I2S_NUM_0,
         .tx_handle = s_tx,
         .rx_handle = s_rx,
-        .clk_src = 0,                           /* 0 = 默认时钟源 */
     };
     const audio_codec_data_if_t *data_if = audio_codec_new_i2s_data(&i2s_cfg);
 
-    /* I2C 控制(ES8311; v2 组件要求外部先建好 I2C master bus) */
+    /* I2C 控制(ES8311; 两版组件均要求外部先建好 I2C master bus) */
     i2c_master_bus_handle_t i2c_bus = NULL;
     i2c_master_bus_config_t i2c_cfg = {
         .i2c_port = I2C_NUM_0,
@@ -94,17 +104,17 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg)
     };
     const audio_codec_ctrl_if_t *ctrl_if = audio_codec_new_i2c_ctrl(&ctrl_cfg);
 
-    /* ================= 3. ES8311 codec 设备(v2: 硬件分块配置) ================= */
+    /* ================= 3. ES8311 codec 设备(esp_codec_dev 1.6.2 扁平配置,
+     * radio-p4c5/Kaleido 同款 P4C5 板实证; S31 同芯片同款用法) ================= */
     es8311_codec_cfg_t es8311_cfg = {
         .ctrl_if = ctrl_if,
-        .gpio_if = NULL,                        /* 无额外 GPIO 控制 */
-        /* ESP32-S31 为 I2S master → codec 为 slave;使用外部 MCLK */
-        .sys_cfg = { .is_master = false, .no_mclk = false },
-        .adc_cfg = { .digital_mic = false },    /* 模拟麦克风输入(板载) */
-        .dac_cfg = { .ref_enable = false, .ref_dac_ch = -1,
-                     .real_adc_data_ch = -1, .headphone = AUDIO_HW_HEADPHONE_AUTO },
-        .pa_cfg = { .pa_pin = (BOARD_PIN_AMP_EN >= 0) ? BOARD_PIN_AMP_EN : -1,
-                    .pa_active_low = false },
+        .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,   /* 播放+录音(语音链) */
+        .master_mode = false,                   /* ESP 为 I2S master → codec slave */
+        .use_mclk = true,
+        .digital_mic = false,                   /* 模拟麦 → ES8311 ADC */
+        .pa_pin = BOARD_PIN_AMP_EN,
+        .pa_reverted = false,
+        .hw_gain = { .pa_voltage = 5.0 },
     };
     const audio_codec_if_t *codec_if = es8311_codec_new(&es8311_cfg);
 
@@ -124,8 +134,20 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg)
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_codec, &fs), TAG, "codec open");
     esp_codec_dev_set_out_vol(s_codec, 0);          /* 先静音, 由 mixer 控制实际音量 */
 
-    ESP_LOGI(TAG, "ES8311 ready: %dHz/%dch (PA on GPIO%d)", s_cfg.sample_rate,
-             s_cfg.channels, BOARD_PIN_AMP_EN);
+#ifdef BOARD_AMP_MANUAL_PA
+    /* P4C5 板怪癖(Kaleido V-38 实证): es8311 驱动对 pa_pin 的 gpio 配置在
+     * 本板不生效(疑与启动期全脚 sleep 隔离冲突) → open 后手工补配推挽输出
+     * 并保持低; PA 仍由 main 在混音任务就绪后 drv_audio_pa_set(true) 打开 */
+    gpio_config_t pa_gpio = {
+        .pin_bit_mask = 1ULL << BOARD_PIN_AMP_EN,
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    (void)gpio_config(&pa_gpio);
+    gpio_set_level(BOARD_PIN_AMP_EN, 0);
+#endif
+
+    ESP_LOGI(TAG, "ES8311 ready: %dHz/%dch (board=%s, PA on GPIO%d)",
+             s_cfg.sample_rate, s_cfg.channels, BOARD_NAME, BOARD_PIN_AMP_EN);
     return ESP_OK;
 }
 

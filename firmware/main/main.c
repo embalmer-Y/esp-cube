@@ -138,7 +138,12 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(5000));     /* 观察窗: 人工判定单线是否点亮 */
 #endif
     drv_display_cfg_t dcfg = {
+#if CONFIG_ESP_CUBE_BOARD_P4C5
+        /* MIPI-DSI 后端: DPI 像素钟/时序取板级常量, 此处仅传分辨率 */
+        .pixel_clock_hz = BOARD_LCD_DPI_CLK_MHZ * 1000000,
+#else
         .pixel_clock_hz = CONFIG_ESP_CUBE_LCD_PIXEL_CLOCK_HZ,
+#endif
         .h_res = CONFIG_ESP_CUBE_LCD_H_RES,
         .v_res = CONFIG_ESP_CUBE_LCD_V_RES,
         .use_te = false,                                /* M3 启用 TE 同步 */
@@ -151,6 +156,11 @@ void app_main(void)
             .panel_handle = drv_display_get_panel(),
             .h_res = CONFIG_ESP_CUBE_LCD_H_RES,
             .v_res = CONFIG_ESP_CUBE_LCD_V_RES,
+#if CONFIG_ESP_CUBE_BOARD_P4C5
+            .iface = UI_DISP_IF_DSI,
+#else
+            .iface = UI_DISP_IF_QSPI,
+#endif
         };
         ESP_ERROR_CHECK(app_ui_start(&ucfg));
     } else {

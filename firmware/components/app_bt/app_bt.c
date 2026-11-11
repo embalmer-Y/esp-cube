@@ -16,6 +16,11 @@
  */
 #include "app_bt.h"
 
+/* P4 无蓝牙控制器: 组件无条件注册但源整体按开关编译(app_voice 同款模式,
+ * Kconfig ESP_CUBE_ENABLE_BT 仅在 S31 目标存在)。守卫先于 BT 头 include
+ * —— P4 构建不引入 bt 组件, 这些头不在包含路径。 */
+#if CONFIG_ESP_CUBE_ENABLE_BT
+
 #include <string.h>
 #include "esp_check.h"
 #include "esp_log.h"
@@ -31,10 +36,6 @@
 #include "freertos/task.h"
 #include "cubecore.h"
 #include "audio_mixer.h"
-
-/* P4 无蓝牙控制器: 组件无条件注册但源整体按开关编译(app_voice 同款模式,
- * Kconfig ESP_CUBE_ENABLE_BT 仅在 S31 目标存在) */
-#if CONFIG_ESP_CUBE_ENABLE_BT
 
 static const char *TAG = "bt";
 
