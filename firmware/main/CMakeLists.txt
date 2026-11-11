@@ -2,10 +2,10 @@
 set(main_priv_reqs
     cubecore boardcfg
     drv_display drv_audio
-    app_audio app_player app_net app_ui
+    app_audio app_player app_net app_ncm app_ui
     app_bt app_voice app_ai_session
     espressif__esp_lvgl_port
-    nvs_flash esp_wifi esp_event esp_netif esp_timer
+    nvs_flash esp_wifi esp_event esp_netif esp_timer esp_driver_uart
 )
 # app_bt 组件双目标存在(P4 上空编译)保留依赖供头文件路径;
 # esp_coex 仅 S31(P4 无 BT 控制器)
@@ -15,7 +15,7 @@ if(idf_target STREQUAL "esp32s31")
 endif()
 
 idf_component_register(
-    SRCS "main.c" "ui_port_esp.c"
+    SRCS "main.c" "ui_port_esp.c" "cli.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES ${main_priv_reqs}
 )

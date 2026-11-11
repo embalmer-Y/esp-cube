@@ -47,6 +47,14 @@
 #define CUBE_TASK_AIMIC_PRIO   5
 #define CUBE_TASK_AIMIC_CORE   0
 
+/* ---- 串口 CLI(main/cli.c; 调试/演示命令, 后续由语音接管输入) ----
+ * 栈 8KB: printf 族 ~2KB + weapi/http 调用链(实测 4KB 溢出: 搜索结果
+ * 结构体 1.1KB 局部变量 + vfprintf 栈深) */
+#define CUBE_TASK_CLI_NAME   "cli"
+#define CUBE_TASK_CLI_STACK  8192
+#define CUBE_TASK_CLI_PRIO   5
+#define CUBE_TASK_CLI_CORE   0
+
 /* ---- LVGL 渲染(app_ui; esp_lvgl_port 任务) ----
  * EFC 解码跑在 LVGL 任务上下文(esp_efc_codec 官方 emote_player 口径
  * 20KB+), 启用 EFC 时加大; 未启用保持 16KB(S31 内部 RAM 紧张) */

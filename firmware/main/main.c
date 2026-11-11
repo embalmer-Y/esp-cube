@@ -43,6 +43,9 @@
 /* ui_model.h 设备后端(本目录 ui_port_esp.c, L5 实现 docs/06 §2.1) */
 extern esp_err_t ui_port_init(void);
 
+/* 串口命令行(本目录 cli.c) */
+#include "cli.h"
+
 static const char *TAG = "main";
 
 /* WiFi 就绪 → 启动播放列表(一次性任务: app_player_start 内含停止等待,
@@ -192,8 +195,9 @@ void app_main(void)
     ESP_LOGI(TAG, "coex prefer BT: %s", cerr == ESP_OK ? "ok" : esp_err_to_name(cerr));
 #endif
 
-    /* ---- 6. 演示观察者 ---- */
+    /* ---- 6. 演示观察者 + 串口 CLI ---- */
     cube_event_subscribe(demo_evt_cb, NULL);
+    ESP_ERROR_CHECK(cli_start());   /* ncm 点歌/电台切台调试入口(无触摸期最小输入通道) */
 
     ESP_LOGI(TAG, "startup complete, free heap=%u / psram=%u",
              (unsigned)esp_get_free_heap_size(),
