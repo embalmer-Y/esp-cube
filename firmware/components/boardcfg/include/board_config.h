@@ -1,5 +1,6 @@
 /*
- * board_config.h —— 板级能力描述(与引脚解耦的功能性常量)
+ * board_config.h —— 板级共性能力描述(与引脚解耦的功能性常量)
+ * 板级差异常量(显示接口/PSRAM 容量/怪癖开关)在 board_pins_*.h 中登记。
  */
 #pragma once
 
@@ -7,15 +8,7 @@
 extern "C" {
 #endif
 
-/* 模组: ESP32-S31-WROOM-3 */
-#define BOARD_FLASH_SIZE_MB    16
-#define BOARD_PSRAM_SIZE_MB    16
-
-/* AM200Q460460FLS1 有效显示区域在 CO5300 GRAM 中的偏移 */
-#define BOARD_LCD_X_GAP        10
-#define BOARD_LCD_Y_GAP        0
-
-/* 音频链路能力 */
+/* 音频链路能力(两板同款: ES8311 codec + NS4150B 功放 + 模拟麦) */
 #define BOARD_AUDIO_DAC        "ES8311"
 #define BOARD_AUDIO_AMP        "NS4150B"   /* 3W @4Ω/5V, 喇叭座 1.25mm 4Ω */
 

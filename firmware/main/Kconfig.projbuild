@@ -1,9 +1,38 @@
 menu "EspCube Configuration"
 
+    # ============ 板卡选择(引脚/外设映射分派, boardcfg 唯一登记处) ============
+    choice ESP_CUBE_BOARD
+        prompt "板卡型号"
+        default ESP_CUBE_BOARD_S31 if IDF_TARGET_ESP32S31
+        default ESP_CUBE_BOARD_P4C5 if IDF_TARGET_ESP32P4
+        help
+          同一代码库支持双目标: 引脚映射与板级能力常量由
+          boardcfg/components 的 board_pins_s31.h / board_pins_p4c5.h 分派。
+
+    config ESP_CUBE_BOARD_S31
+        bool "EspCube 核心板(ESP32-S31-WROOM-3, QSPI AMOLED)"
+
+    config ESP_CUBE_BOARD_P4C5
+        bool "鱼鹰光电 OSPTEK ESP32-P4C5 开发板(MIPI-DSI AMOLED + C5 WiFi)"
+    endchoice
+
     # ============ 功能开关(里程碑式启用) ============
     config ESP_CUBE_ENABLE_BT
         bool "启用蓝牙 A2DP Sink(手机蓝牙音乐)"
+        depends on IDF_TARGET_ESP32S31
         default y
+        help
+          P4 无蓝牙控制器, 该选项仅在 S31 目标存在(不定义时
+          代码中 #if 自动为假, app_bt 整体不参与编译)。
+
+    config ESP_CUBE_NET_HOSTED
+        bool "WiFi 经 C5 共芯(esp_hosted, SDIO 透传)"
+        depends on ESP_CUBE_ENABLE_NET
+        default y if IDF_TARGET_ESP32P4
+        default n
+        help
+          P4 无原生射频: WiFi 由 C5 经 SDIO/esp_hosted 提供,
+          esp_wifi API 经 esp_wifi_remote 透传, 上层无感。
 
     config ESP_CUBE_ENABLE_NET
         bool "启用 WiFi + 网络电台播放"
@@ -91,6 +120,7 @@ menu "EspCube Configuration"
 
     config ESP_CUBE_LCD_SINGLE_LANE_TEST
         bool "屏幕单线(3-wire)点亮自检(GPIO位压彩条, 不经QSPI)"
+        depends on IDF_TARGET_ESP32S31
         default n
         help
             排查杜邦线/四线数据通路用(docs/05): 固件启动时先用 3-wire
@@ -104,6 +134,7 @@ menu "EspCube Configuration"
 
     config ESP_CUBE_BT_SRC_RATE
         int "蓝牙A2DP解码输出采样率(Hz)"
+        depends on ESP_CUBE_ENABLE_BT
         default 44100
         range 16000 48000
         help
@@ -125,6 +156,7 @@ menu "EspCube Configuration"
     # ============ 显示 ============
     config ESP_CUBE_LCD_PIXEL_CLOCK_HZ
         int "QSPI 像素时钟(Hz)"
+        depends on IDF_TARGET_ESP32S31
         default 40000000
         help
           厂商示例使用 40MHz; 首次点亮可先用 10MHz 排除时序问题。

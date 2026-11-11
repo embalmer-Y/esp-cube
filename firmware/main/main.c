@@ -20,6 +20,7 @@
 
 #include "cubecore.h"
 #include "board_config.h"
+#include "board_pins.h"
 #include "nvs_flash.h"
 #include "esp_coexist.h"
 #include "drv_audio.h"
@@ -69,9 +70,14 @@ static void app_start_delay_hint(void)
 {
     ESP_LOGI(TAG, "=================================================");
     ESP_LOGI(TAG, " EspCube cube-speaker prototype");
-    ESP_LOGI(TAG, " MCU : %s (16MB Flash + %dMB PSRAM)", "ESP32-S31-WROOM-3", BOARD_PSRAM_SIZE_MB);
+    ESP_LOGI(TAG, " MCU : %s (%dMB Flash + %dMB PSRAM)", BOARD_NAME,
+             BOARD_FLASH_SIZE_MB, BOARD_PSRAM_SIZE_MB);
     ESP_LOGI(TAG, " Audio: %s + %s (board builtin)", BOARD_AUDIO_DAC, BOARD_AUDIO_AMP);
+#if CONFIG_ESP_CUBE_ENABLE_BT
     ESP_LOGI(TAG, " BT  : A2DP sink \"EspCube\" | NET: %s", CONFIG_ESP_CUBE_WIFI_SSID);
+#else
+    ESP_LOGI(TAG, " BT  : not supported on this target | NET: %s", CONFIG_ESP_CUBE_WIFI_SSID);
+#endif
     ESP_LOGI(TAG, "=================================================");
 }
 

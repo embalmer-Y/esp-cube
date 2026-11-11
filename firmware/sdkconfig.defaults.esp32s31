@@ -1,0 +1,33 @@
+# ============ EspCube ESP32-S31 目标叠加(EspCube 核心板) ============
+# 与拆分前单文件行为完全一致(2026-11 双目标重构, sdkconfig diff 验收)。
+
+CONFIG_IDF_TARGET="esp32s31"
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
+CONFIG_MAIN_TASK_STACK_SIZE=8192
+
+# ---- PSRAM: WROOM-3 封装内 Octal 16MB ----
+CONFIG_SPIRAM_MODE_OCT=y
+# 大块缓冲(Mixer环形缓冲/LVGL帧缓冲/解码器工作区)自动落 PSRAM
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# ---- 分区表(S31 布局: 表在默认 0x8000) ----
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- 蓝牙: 经典蓝牙 A2DP Sink(S31 原生 BR/EDR) ----
+# 控制器模式必须显式选择(choice 默认落 BLE_ONLY, 会导致经典蓝牙无法工作);
+# M1 仅用 A2DP → BR/EDR Only(省内存且避开双模预览问题);M3 配网需 BLE 时再评估切 BTDM
+CONFIG_BT_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_A2DP_ENABLE=y
+
+# ---- WiFi / 蓝牙 2.4G 共存 ----
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+# WiFi 动态缓冲 32→12: 释放约 60KB 内部 DMA RAM(显示 SPI 私有缓冲与之竞争);
+# 音频流场景吞吐足够(下行 ~256kbps)
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=12
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
+
+# ---- 音频编解码: S31 汇编优化库(默认n=C便携实现, 解码慢~15倍, 实测40ms/帧) ----
+# CONFIG_ESP_AUDIO_CODEC_S31_USE_ASM is not set

@@ -1,45 +1,28 @@
-# ============ EspCube sdkconfig 默认值(ESP32-S31 / IDF v6.1) ============
+# ============ EspCube sdkconfig 公共默认值(S31 + P4C5 双目标) ============
+# 分目标叠加文件: sdkconfig.defaults.esp32s31 / sdkconfig.defaults.esp32p4
+# (IDF 按 IDF_TARGET 自动加载); 板卡选择见 Kconfig ESP_CUBE_BOARD。
 # 说明: 若个别选项名在 v6.1 中有变化, 编译时会以警告忽略, 届时按 menuconfig 实际项修正。
 
-# ---- 目标与主频 ----
-CONFIG_IDF_TARGET="esp32s31"
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_320=y
+# ---- 主频/系统(主频值在分目标文件) ----
 CONFIG_FREERTOS_HZ=1000
-CONFIG_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=500
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
-# ---- Flash / PSRAM (WROOM-3: 16MB Flash + 16MB 封装内 Octal PSRAM) ----
+# ---- Flash(两板均 16MB QIO@80M; P4 另加 Boya 芯片支持与 no-stub) ----
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- PSRAM 公共(模式在分目标文件: S31=OCT 16MB / P4=HEX 32MB) ----
 CONFIG_SPIRAM=y
-CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_200M=y
-# 大块缓冲(Mixer环形缓冲/LVGL帧缓冲/解码器工作区)自动落 PSRAM
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
 
-# ---- 蓝牙: 经典蓝牙 A2DP Sink(S31 原生 BR/EDR) ----
-# 控制器模式必须显式选择(choice 默认落 BLE_ONLY, 会导致经典蓝牙无法工作);
-# M1 仅用 A2DP → BR/EDR Only(省内存且避开双模预览问题);M3 配网需 BLE 时再评估切 BTDM
-CONFIG_BT_ENABLED=y
-CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=y
-CONFIG_BT_CLASSIC_ENABLED=y
-CONFIG_BT_A2DP_ENABLE=y
-
-# ---- WiFi / 蓝牙 2.4G 共存 ----
-CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
-# WiFi 动态缓冲 32→12: 释放约 60KB 内部 DMA RAM(显示 SPI 私有缓冲与之竞争);
-# 音频流场景吞吐足够(下行 ~256kbps)
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=12
-CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=12
-
-# ---- 网络 ----
+# ---- 网络(跨境流媒体吞吐 = 窗口/RTT, 见 S31 实测注释) ----
 CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=24
 CONFIG_LWIP_TCPIP_TASK_STACK_SIZE=8192
-# TCP 窗口 5760→36864: 跨境流媒体吞吐 = 窗口/RTT(约250ms),
-# 5760 仅够 ~23KB/s, 叠加WiFi开销后低于音频实时线 → 加大4倍(内存换吞吐)
 CONFIG_LWIP_TCP_WND_DEFAULT=10240
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=10240
 
@@ -47,15 +30,6 @@ CONFIG_LWIP_TCP_SND_BUF_DEFAULT=10240
 CONFIG_LVGL_PORT_TASK_STACK_SIZE=32768
 CONFIG_LVGL_PORT_TASK_AFFINITY_CPU1=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
-
-# ---- 音频编解码: 启用 S31 汇编优化库(默认n=C便携实现, 解码慢~15倍, 实测40ms/帧) ----
-# CONFIG_ESP_AUDIO_CODEC_S31_USE_ASM is not set
-
-# ---- 系统稳健性 ----
-CONFIG_ESP_INT_WDT_TIMEOUT_MS=500
-CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
-CONFIG_LOG_DEFAULT_LEVEL_INFO=y
-CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
 
 # ---- LVGL 9.6 编译前置(新氛围 UI; 与 sim/lv_conf.h 对齐) ----
 # 字体内置 malloc 池仅 64KB, 歌词旋转 snapshot 需大块分配 → CLIB

@@ -1,14 +1,21 @@
-## EspCube 主组件依赖(ESP Component Registry)
+## EspCube 主组件依赖(ESP Component Registry) —— S31 + P4C5 双目标
 ## 版本策略: 以 IDF v6.1 兼容线为准; 编译解析失败时按 registry 实际版本调整。
+## 同名依赖按目标选版本用 matches(官方 manifest 规范), 组件仅某目标引入用 rules。
 dependencies:
   idf: ">=6.0,<7.0"
-  # QSPI AMOLED 驱动 IC CO5300(鱼鹰光电 2寸 460x460 面板)
-  espressif/esp_lcd_co5300: "^2.0.0"
+  # AMOLED 驱动 IC CO5300(鱼鹰 2寸 460x460 面板, S31=QSPI / P4C5=MIPI-DSI
+  # 同一组件双接口; ^2.2.0 = Kaleido panel-2in MIPI 真机实证版本)
+  espressif/esp_lcd_co5300: "^2.2.0"
   # LVGL9 移植层(任务/缓冲/刷新管理)
   espressif/esp_lvgl_port: "^2.0.0"
-  # codec 统一抽象(ES8311 播放+录音, 板载 Function CoreBoard-1)
-  # 2.0.0-beta5 = IDF 6.x 适配线(IDF 5.x 用 1.6.x 线)
-  espressif/esp_codec_dev: "==2.0.0-beta5"
+  # codec 统一抽象(ES8311 播放+录音, 两板同款芯片)
+  # S31: 2.0.0-beta5 = IDF 6.x 适配线(现状保持, 拆分自单文件时期);
+  # P4C5: 1.6.2 = Kaleido/radio-p4c5 同款板真机实证版本
+  espressif/esp_codec_dev:
+    version: "==2.0.0-beta5"
+    matches:
+      - if: "target == esp32p4"
+        version: "1.6.2"
   # 软件编解码(MP3/AAC 网络流解码; Opus 编解码供 M2 语音 AI)
   espressif/esp_audio_codec: "^2.6.0"
   # WebSocket 客户端(M2: xiaozhi 协议 / GLM-Realtime)
@@ -16,10 +23,16 @@ dependencies:
   # MP3 解码已 vendor 至 components/mp3_helix(-O3 编译), 不再用 registry 组件
   # HLS 直播/点播协议栈(国内电台主流): m3u8 解析/分段调度/AES-128 解密
   espressif/esp_hls_stream: "^1.0.4"
-  # esp-sr: 离线唤醒(V-04 S31 实测: 唯一可用 wn10_hilexin_int16;
-  # Kconfig SR_WN_WN10_HILEXIN_INT16 + MODEL_IN_FLASH 必开)
+  # esp-sr: 离线唤醒(S31: wn10_hilexin_int16; P4: Kaleido voice-loop-p4
+  # 同版跑通 wn9 —— Kconfig SR_WN_* 选择模型)
   # 启用时同步打开 Kconfig: CONFIG_ESP_CUBE_ENABLE_VOICE / ENABLE_AI
   espressif/esp-sr: "2.6.0"
   # esp-dl 锁 3.3.14(Kaleido S31 V-04 同版): 3.3.15 的 WakeNetX::build_model
   # 在 S31 上损坏 TLSF 堆 → block_trim_free 断言复位(2026-11-12 实测定位)
   espressif/esp-dl: "3.3.14"
+  # WiFi 经 C5 共芯(P4 无原生射频; 与板上 C5 slave 固件 3.0.10 同版本配对,
+  # radio-p4c5 全链真机实证) —— 仅 P4 目标引入
+  espressif/esp_hosted:
+    version: "3.0.10"
+    rules:
+      - if: "target == esp32p4"

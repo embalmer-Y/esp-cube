@@ -1,0 +1,10 @@
+# EspCube P4C5 分区表(16MB Flash, 表偏移 0x10000——XIP bootloader 超 0x6000,
+# 沿用 Kaleido/radio-p4c5 实证口径)
+# 布局与 S31 partitions.csv 同构: factory 10MB(CJK 字库×2 ~5.5MB rodata),
+# model: esp-sr 模型分区(esp-sr 要求分区名固定 "model"), storage: 杂项预留
+# Name,    Type, SubType, Offset,    Size,      Flags
+nvs,      data, nvs,     0x11000,   0x6000,
+phy_init, data, phy,     0x17000,   0x1000,
+factory,  app,  factory, 0x20000,   0xA00000,
+model,    data, spiffs,  0xA20000,  0x380000,
+storage,  data, spiffs,  0xDA0000,  0x70000,
