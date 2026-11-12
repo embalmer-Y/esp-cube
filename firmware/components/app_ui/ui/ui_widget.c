@@ -57,7 +57,10 @@ lv_obj_t *ui_label_make(lv_obj_t *parent, const lv_font_t *font,
     return l;
 }
 
-/* y 滑动(面板进出场, ease_out) */
+/* y 滑动(面板进出场, ease_out)。
+ * 值域 = align 基准上的 style y 偏移(起终点必须同系: get_y 返回的
+ * 绝对坐标在 BOTTOM_MID 面板上比 style 大一个基准 → 混用会在
+ * 收起瞬间跳变 196px, 2026-11-12) */
 static void panel_slide(lv_obj_t *obj, int32_t y_to, uint32_t dur)
 {
     lv_anim_del(obj, ui_anim_y_cb);
@@ -65,7 +68,7 @@ static void panel_slide(lv_obj_t *obj, int32_t y_to, uint32_t dur)
     lv_anim_init(&a);
     lv_anim_set_var(&a, obj);
     lv_anim_set_exec_cb(&a, ui_anim_y_cb);
-    lv_anim_set_values(&a, lv_obj_get_y(obj), y_to);
+    lv_anim_set_values(&a, lv_obj_get_style_y(obj, LV_PART_MAIN), y_to);
     lv_anim_set_duration(&a, dur);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
@@ -112,14 +115,16 @@ void ui_panel_show(int which)
 {
     if (ui_w.panel == which) return;
     ui_w.panel = (int8_t)which;
-    int32_t scr_h = (int32_t)lv_display_get_vertical_resolution(
-        lv_display_get_default());
-    /* 状态栏: 收起藏屏上方外, 展开贴顶; AI 状态: 藏屏下方外, 展开贴底 */
+    /* 状态栏: 收起藏屏上方外, 展开贴顶; AI 状态: 藏屏下方外, 展开贴底。
+     * ⚠ panel_slide 走 lv_obj_set_y —— 在 align 基准上的偏移, 不是绝对
+     * 坐标: p_status 是 TOP_MID(基准 0, 偏移=绝对); p_soul 是 BOTTOM_MID
+     * (基准 scr_h-PANEL_H_SOUL) —— 展开偏移 -6 → 绝对贴底, 收起偏移
+     * PANEL_H_SOUL+16 → 屏外(与初始 align 同位)。写成绝对坐标会把面板
+     * 推到基准之下(展开只露 75px 小截, 2026-11-12 sim 探针定位) */
     panel_slide(ui_w.p_status,
                 which == 1 ? 6 : -PANEL_H_STATUS - 12, PANEL_HIDE_MS);
     panel_slide(ui_w.p_soul,
-                which == 2 ? scr_h - PANEL_H_SOUL - 6 : scr_h + 12,
-                PANEL_HIDE_MS);
+                which == 2 ? -6 : PANEL_H_SOUL + 16, PANEL_HIDE_MS);
     /* 面板打开时暂停表情解码(全屏 EFC 与面板滑动同帧抢渲染是卡顿主源;
      * 收起即恢复, 视觉上面板近乎不透明无感) */
 #if CONFIG_ESP_CUBE_ENABLE_EFC
@@ -295,6 +300,20 @@ void ui_soul_apply(const ui_model_t *m)
 /* ============================================================ */
 /*                     手势                                       */
 /* ============================================================ */
+/* 面板动作冷却闸: CST820 为 I2C 400kHz/16ms 轮询, 快速滑动必丢帧;
+ * LVGL 丢一帧点即判 RELEASED(panel_acted/axis 全重置), 下一帧又
+ * PRESSED(p0 跳到当前位置) —— 一次物理滑动被切成两段手势, 第二段
+ * 按已切换的 panel 状态反向叠开另一扇("粘连"根因, 2026-11-12 用户
+ * 实测复现)。350ms 内的第二次面板动作/单击收起一律吃掉。 */
+#define PANEL_ACT_COOLDOWN_MS 350
+
+static bool panel_gesture_gate(void)
+{
+    if (lv_tick_elaps(ui_w.panel_act_tick) < PANEL_ACT_COOLDOWN_MS) return false;
+    ui_w.panel_act_tick = lv_tick_get();
+    return true;
+}
+
 static void gesture_press_cb(lv_event_t *e)
 {
     (void)e;
@@ -341,8 +360,10 @@ static void gesture_pressing_cb(lv_event_t *e)
     if (ui_w.axis == AXIS_V && !ui_w.panel_acted &&
         abs(dy) > GEST_PANEL_PX) {
         /* toggle 语义(2026-11-12 用户实测反馈): 已开面板时反向滑=关闭,
-         * 不再叠开另一扇(两窗重叠); 一次手势只触发一次(长拖不连发) */
+         * 不再叠开另一扇(两窗重叠); 一次手势只触发一次(长拖不连发)。
+         * 冷却期内(触摸丢帧切出的第二段手势)整段吃掉不动作 */
         ui_w.panel_acted = true;
+        if (!panel_gesture_gate()) return;
         if (dy > 0) {                    /* 下滑 */
             if (ui_w.panel == 0) ui_panel_show(1);
             else if (ui_w.panel == 2) ui_panel_show(0);
@@ -363,8 +384,9 @@ static void gesture_release_cb(lv_event_t *e)
     if (ui_w.axis == AXIS_SWITCH && abs(dx) > GEST_SW_PX) {
         ui_ctl_switch_station(dx < 0 ? 1 : -1);          /* 左滑=下一曲 */
     } else if (ui_w.axis == AXIS_NONE && !ui_w.on_volbar &&
-               ui_w.panel != 0) {
-        ui_panel_show(0);                /* 单击: 收起面板(开着才收) */
+               ui_w.panel != 0 && panel_gesture_gate()) {
+        ui_panel_show(0);    /* 单击收起; 同冷却闸 —— 丢帧第二段手势的
+                              * "抬指"不该把刚开的面板又点关掉 */
     }
     ui_w.axis = AXIS_NONE;
     ui_w.on_volbar = false;
@@ -393,6 +415,7 @@ static lv_obj_t *panel_make(lv_obj_t *scr, int h)
     lv_obj_set_style_border_width(box, 1, 0);
     lv_obj_set_style_border_color(box, lv_color_hex(0x223050), 0);
     lv_obj_set_style_pad_all(box, 24, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);   /* 滚动链全关 */
     return box;
 }
 
@@ -426,7 +449,9 @@ static lv_obj_t *bar_make(lv_obj_t *parent, const char *name,
 
 void ui_widget_create(lv_obj_t *scr)
 {
-    /* ---- 表情层(全屏): 情绪底色圆 + EFC 常驻 ---- */
+    /* ---- 表情层(全屏): 情绪底色圆 + EFC 常驻 ----
+     * 显示层不吃输入(清 CLICKABLE): 430px 圆几乎全屏, 若可点会抢走
+     * 中心区 press 致手势失灵; press 穿透落到 scr_main 手势层 */
 #if CONFIG_ESP_CUBE_ENABLE_EFC
     ui_w.face_bg = lv_obj_create(scr);
     lv_obj_remove_style_all(ui_w.face_bg);
@@ -435,7 +460,11 @@ void ui_widget_create(lv_obj_t *scr)
     lv_obj_set_style_bg_opa(ui_w.face_bg, 40, 0);
     lv_obj_set_style_bg_color(ui_w.face_bg, lv_color_hex(0x2A3550), 0);
     lv_obj_align(ui_w.face_bg, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_clear_flag(ui_w.face_bg,
+                      LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     ui_w.face_efc = lv_efc_create(scr);
+    lv_obj_clear_flag(ui_w.face_efc,
+                      LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(ui_w.face_efc, 460, 460);
     lv_obj_align(ui_w.face_efc, LV_ALIGN_CENTER, 0, 0);
     lv_image_set_inner_align(ui_w.face_efc,

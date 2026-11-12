@@ -183,6 +183,10 @@ void ui_pages_create(int w, int h)
     /* ---- 主屏 ---- */
     ui_pg.scr_main = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(ui_pg.scr_main, lv_color_hex(C_BG), 0);
+    /* 屏幕对象默认 SCROLLABLE: 拖动会触发 LVGL 原生 elastic 滚动,
+     * 整屏内容(含居中表情)跟手位移再回弹 —— 用户要求表情固定不动,
+     * 上下滑语义由手势层独占, 原生滚动整链关闭(2026-11-12) */
+    lv_obj_clear_flag(ui_pg.scr_main, LV_OBJ_FLAG_SCROLLABLE);
 
     ui_widget_create(ui_pg.scr_main);       /* 表情层 + 双面板 */
     ui_widget_gesture_register(ui_pg.scr_main);

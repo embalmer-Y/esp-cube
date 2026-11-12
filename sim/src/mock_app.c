@@ -361,11 +361,12 @@ static const demo_step_t s_demo_steps[] = {
     /* 下滑状态栏(350ms 滑动 + 落定) */
     { 12000, SIM_ACT_SWIPE_DOWN,     NULL },
     { 12800, DEMO_NONE,              "20_status_panel" },
-    /* 单击收起 + 上滑 AI 状态 */
-    { 14100, SIM_ACT_TAP,            NULL },
-    { 14300, SIM_ACT_SWIPE_UP,       NULL },
-    { 15100, DEMO_NONE,              "21_soul_panel" },
-    { 16400, DEMO_NONE,              "22_soul_panel_late" },
+    /* 单击收起 + 上滑 AI 状态(动作间隔>600ms: 手势冷却闸 350ms,
+     * 贴太近的连续动作会被当丢帧重入吃掉 —— 与真机节奏一致) */
+    { 14000, SIM_ACT_TAP,            NULL },
+    { 14800, SIM_ACT_SWIPE_UP,       NULL },
+    { 15600, DEMO_NONE,              "21_soul_panel" },
+    { 16900, DEMO_NONE,              "22_soul_panel_late" },
     /* AI 会话演示: 聆听/思考/回答(表情帧速变化) */
     { 20300, SIM_ACT_AI_ASK,         NULL },
     { 20600, DEMO_NONE,              "13_ai_listening" },

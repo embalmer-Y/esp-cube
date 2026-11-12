@@ -77,6 +77,7 @@ typedef struct {
     /* 面板状态 */
     int8_t panel;                         /* 0=都收起 1=状态栏 2=AI 状态 */
     lv_timer_t *panel_timer;
+    uint32_t panel_act_tick;              /* 最近一次手势面板动作(冷却用) */
     /* 快照缓存(变更检测) */
     int last_min, last_day;
     char last_sub[UI_SUB_LEN];
