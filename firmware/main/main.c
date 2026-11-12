@@ -225,6 +225,11 @@ void app_main(void)
 #endif
         };
         ESP_ERROR_CHECK(app_ui_start(&ucfg));
+        /* 亮度: DSI init 只开 5%(防点亮瞬态拉塌 3.3V, drv_display_dsi.c
+         * 文件头教训), 计划的"UI 手势调高"从未实装 → 5% 成永久值,
+         * 亮环境下屏幕形同全黑(2026-11-12 用户实测)。UI 稳定后提到
+         * 80%(QSPI 后端同值长期验证; 深色 UI 像素电流低, 无供电风险) */
+        drv_display_set_brightness(80);
         /* M4 手势真机通道: CST820 触摸(与 ES8311 共 I2C0; 失败降级 CLI) */
         ui_port_touch_start();
     } else {
