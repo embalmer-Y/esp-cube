@@ -242,18 +242,22 @@ static void handle_line(char *line)
         printf("  panel -> %d\n", n);
     } else if (strcmp(line, "assistclear") == 0) {
         printf("  clear: %s\n", esp_err_to_name(app_assist_clear()));
+#if CONFIG_ESP_CUBE_ENABLE_AI
     } else if (strcmp(line, "voice") == 0) {
         /* TTS 音色甄选台调: voice <名> 热切(下一轮 ask/announce 生效);
-         * 无参打印当前 + 候选(百炼 cosyvoice-v3-flash 预置, 男/女各 3) */
+         * 无参打印当前 + 候选(v3-flash 预置, _v3 后缀命名) */
         if (arg != NULL && arg[0] != 0) {
             ai_session_set_tts_voice(arg);
             printf("  voice -> %s\n", ai_session_tts_voice());
         } else {
-            printf("  当前: %s\n  候选(voice <名> 切换):\n"
-                   "   女: longwan_v2 温柔知性 | longmiao_v2 甜美 | loongstella_v3 活泼\n"
-                   "   男: longanyang 活泼 | longhua_v2 沉稳 | loongcheng_v3 标准\n",
+            printf("  当前: %s\n  候选(voice <名> 切换, 完整表见官方音色列表):\n"
+                   "   女: longanqin_v3 亲和活泼(默认) | longanrou_v3 温柔闺蜜"
+                   " | longyuan_v3 温暖治愈 | longwan_v3 细腻柔声\n"
+                   "   男: longanyang 阳光(备选) | longanyun_v3 居家暖男"
+                   " | longze_v3 温暖元气 | longtian_v3 磁性理智\n",
                    ai_session_tts_voice());
         }
+#endif
     } else if (strcmp(line, "sdretry") == 0) {
         /* SD 台调: sdretry [0|1] 0=SDMMC slot0 / 1=SDSPI(SPI2);
          * 失败可反复重试(插拔卡后无需重启) */
