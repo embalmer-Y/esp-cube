@@ -39,12 +39,12 @@
 #define PANEL_W     420              /* 面板宽(圆屏内接安全区) */
 #define PANEL_H_STATUS 232           /* 状态栏面板高 */
 #define PANEL_H_SOUL   264           /* AI 状态面板高 */
-#define PANEL_HIDE_MS  260           /* 面板滑入/滑出时长 */
+#define PANEL_HIDE_MS  180           /* 面板滑入/滑出时长(跟手性调优) */
 #define PANEL_AUTO_MS  8000          /* 面板无操作自动收回 */
 
 /* 手势阈值: 轴向判定 14px / 面板触发 46px / 切曲 60px */
 #define GEST_AXIS_PX   14
-#define GEST_PANEL_PX  46
+#define GEST_PANEL_PX  30
 #define GEST_SW_PX     60
 
 /* ================= 页面级(ui_pages.c 持有) ================= */
@@ -88,6 +88,7 @@ typedef struct {
     lv_point_t p0;
     int vol0;                             /* 拖动音量条时的起始值 */
     int8_t axis;                          /* 0=未定 1=竖(面板) 2=横(切曲) */
+    bool panel_acted;                     /* 本手势已触发过面板动作(防连发) */
     bool on_volbar;                       /* 按下点在音量条上 */
     uint32_t rng;                         /* xorshift32 状态 */
 } ui_widget_t;

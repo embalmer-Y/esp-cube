@@ -261,7 +261,8 @@ esp_err_t ui_port_touch_start(void)
     lv_indev_set_type(in, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(in, tp_read_cb);
     lv_indev_set_display(in, lv_display_get_default());
-    lv_indev_set_mode(in, LV_INDEV_MODE_TIMER);   /* LVGL 心跳轮询(30fps) */
+    lv_indev_set_mode(in, LV_INDEV_MODE_TIMER);
+    lv_timer_set_period(lv_indev_get_read_timer(in), 16);  /* 60Hz 跟手 */
     lvgl_port_unlock();
     ESP_LOGI(TAG, "touch indev up");
     return ESP_OK;

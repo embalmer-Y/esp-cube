@@ -120,6 +120,12 @@ void ui_panel_show(int which)
     panel_slide(ui_w.p_soul,
                 which == 2 ? scr_h - PANEL_H_SOUL - 6 : scr_h + 12,
                 PANEL_HIDE_MS);
+    /* 面板打开时暂停表情解码(全屏 EFC 与面板滑动同帧抢渲染是卡顿主源;
+     * 收起即恢复, 视觉上面板近乎不透明无感) */
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+    if (which != 0) lv_efc_pause(ui_w.face_efc);
+    else lv_efc_resume(ui_w.face_efc);
+#endif
     if (which != 0) {
         if (ui_w.panel_timer == NULL) {
             ui_w.panel_timer = lv_timer_create(panel_auto_hide_cb,
@@ -297,6 +303,7 @@ static void gesture_press_cb(lv_event_t *e)
     lv_indev_get_point(in, &ui_w.p0);
     ui_w.axis = AXIS_NONE;
     ui_w.on_volbar = false;
+    ui_w.panel_acted = false;
     /* 按下点落在音量条上 → 直接进入拖音量模式 */
     lv_area_t ta;
     lv_obj_get_coords(ui_w.vol_track, &ta);
@@ -331,9 +338,18 @@ static void gesture_pressing_cb(lv_event_t *e)
         else if (abs(dy) > GEST_AXIS_PX) ui_w.axis = AXIS_V;
         else return;
     }
-    if (ui_w.axis == AXIS_V && abs(dy) > GEST_PANEL_PX) {
-        ui_panel_show(dy > 0 ? 1 : 2);   /* 下滑=状态栏 上滑=AI 状态 */
-        ui_w.p0.y = p.y;                 /* 防连触: 移动基准 */
+    if (ui_w.axis == AXIS_V && !ui_w.panel_acted &&
+        abs(dy) > GEST_PANEL_PX) {
+        /* toggle 语义(2026-11-12 用户实测反馈): 已开面板时反向滑=关闭,
+         * 不再叠开另一扇(两窗重叠); 一次手势只触发一次(长拖不连发) */
+        ui_w.panel_acted = true;
+        if (dy > 0) {                    /* 下滑 */
+            if (ui_w.panel == 0) ui_panel_show(1);
+            else if (ui_w.panel == 2) ui_panel_show(0);
+        } else {                         /* 上滑 */
+            if (ui_w.panel == 0) ui_panel_show(2);
+            else if (ui_w.panel == 1) ui_panel_show(0);
+        }
     }
 }
 
@@ -346,11 +362,13 @@ static void gesture_release_cb(lv_event_t *e)
     int dx = p.x - ui_w.p0.x;
     if (ui_w.axis == AXIS_SWITCH && abs(dx) > GEST_SW_PX) {
         ui_ctl_switch_station(dx < 0 ? 1 : -1);          /* 左滑=下一曲 */
-    } else if (ui_w.axis == AXIS_NONE && !ui_w.on_volbar) {
-        ui_panel_show(0);                /* 单击: 收起面板 */
+    } else if (ui_w.axis == AXIS_NONE && !ui_w.on_volbar &&
+               ui_w.panel != 0) {
+        ui_panel_show(0);                /* 单击: 收起面板(开着才收) */
     }
     ui_w.axis = AXIS_NONE;
     ui_w.on_volbar = false;
+    ui_w.panel_acted = false;
 }
 
 void ui_widget_gesture_register(lv_obj_t *scr)
