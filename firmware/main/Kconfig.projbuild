@@ -83,6 +83,31 @@ menu "EspCube Configuration"
         string "LLM 模型(OpenAI 兼容)"
         default "qwen-plus"
 
+    config ESP_CUBE_AI_LLM_URL
+        string "LLM 端点(OpenAI 兼容 /chat/completions 全 URL)"
+        default "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+        help
+            任意 OpenAI 兼容厂家均可: DeepSeek(api.deepseek.com/v1/...),
+            Kimi(api.moonshot.cn/v1/...), 智谱(open.bigmodel.cn/api/paas/v4/...),
+            MiniMax(api.minimax.chat/v1/text/chatcompletion_v2), 火山方舟
+            (ark.cn-beijing.volces.com/api/v3/...)。五家链根(DigiCert G2/
+            Sectigo R46)均在 IDF 默认证书束内, 2026-11-12 实测可达。
+
+    config ESP_CUBE_AI_TOOL_FAST_ACK
+        bool "技能成功回执直喂 TTS(跳过第二轮 LLM, 首响 -1s)"
+        default y
+        help
+            工具执行成功后, 回执文本("正在播放:《X》- Y")直接进 TTS,
+            不再发起第二轮 LLM 生成自然语言回应。音箱品类惯例(小爱/
+            小度同款), 省 1s 延迟与 token; 关闭则回复更自然但更慢。
+
+    config ESP_CUBE_AI_LLM_DISABLE_THINKING
+        bool "LLM 请求附 thinking disabled(百炼 qwen3 系列专用)"
+        default y
+        help
+            DashScope qwen3 系列 stream 下需显式关闭思考模式; 换其他
+            厂家(DeepSeek/GLM/Kimi 等)设 n, 避免多余字段被拒。
+
     config ESP_CUBE_AI_LLM_SYSTEM
         string "LLM 系统提示词(角色人格, 可空)"
         default "你是 EspCube 桌面AI音箱, 回答简洁口语化, 不超过三句话。"

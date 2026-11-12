@@ -44,6 +44,8 @@ struct ks_llm_ctx {
 	int status;
 	/* ---- function calling(v2): delta.tool_calls 增量拼装 ---- */
 	ks_llm_tool_cb tool_cb;	/* NULL=v1 行为(忽略 tool_calls)   */
+	void (*args_cb)(void *user, const char *tool_name,
+			const char *partial_args);	/* v2 流式提示 */
 	char tool_id[96];
 	char tool_name[96];
 	char *tool_args;	/* 堆缓冲, 按 delta 追加           */
@@ -256,6 +258,11 @@ static void handle_line(struct ks_llm_ctx *c, const char *line, size_t len)
 				tool_args_append(c, fa->valuestring,
 						 strlen(fa->valuestring));
 		}
+		/* speculative 预取提示: arguments 累计值随 delta 推送。
+		 * 回调在 SSE 读循环线程 —— 订阅方只许投递/置标志 */
+		if (c->args_cb && c->tool_name[0])
+			c->args_cb(c->user, c->tool_name,
+				   c->tool_args ? c->tool_args : "");
 		const cJSON *fr = ch ? cJSON_GetObjectItem(ch, "finish_reason") : NULL;
 		if (cJSON_IsString(fr) &&
 		    strcmp(fr->valuestring, "tool_calls") == 0)
@@ -273,8 +280,13 @@ static esp_err_t http_event(esp_http_client_event_t *ev)
 		return ESP_OK;
 	if (c->status == 0)
 		c->status = esp_http_client_get_status_code(ev->client);
-	if (c->status != 200)
+	if (c->status != 200) {
+		/* 错误响应体(百炼 400 会带 code/message, 排查关键) */
+		ESP_LOGE(TAG, "http %d body: %.*s", c->status,
+			 ev->data_len > 220 ? 220 : ev->data_len,
+			 (const char *)ev->data);
 		return ESP_OK;
+	}
 
 	{
 		const char *p = ev->data;
@@ -454,7 +466,8 @@ int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 {
 	struct ks_llm_ctx c = { .cb = cb, .user = user,
 				.cut_clauses = cfg ? cfg->cut_clauses : false,
-				.tool_cb = tool_cb };
+				.tool_cb = tool_cb,
+				.args_cb = cfg ? cfg->args_cb : NULL };
 	char auth[768];
 	char *body;
 	char *s;
@@ -504,7 +517,6 @@ int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 	strcpy(body, s);
 	cJSON_free(s);
 
-	/* 请求体调试日志(400 排查用): 默认关, 需要时改 LOGI */
 	ESP_LOGD(TAG, "v2 req(%u)", strlen(body));
 	snprintf(auth, sizeof(auth), "Bearer %s", cfg->api_key);
 	esp_http_client_config_t hc = {
@@ -542,6 +554,8 @@ int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 	}
 
 	code = esp_http_client_get_status_code(cl);
+	ESP_LOGI(TAG, "v2 done: status=%d tool_seen=%d tool=%s sent_len=%u abort=%d",
+		 code, c.tool_seen, c.tool_name, (unsigned)c.sent_len, c.abort);
 	if (code != 200) {
 		ESP_LOGE(TAG, "v2 http %d", code);
 		ret = -2;

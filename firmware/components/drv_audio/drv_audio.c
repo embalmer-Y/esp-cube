@@ -133,6 +133,10 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg)
     };
     ESP_RETURN_ON_ERROR(esp_codec_dev_open(s_codec, &fs), TAG, "codec open");
     esp_codec_dev_set_out_vol(s_codec, 0);          /* 先静音, 由 mixer 控制实际音量 */
+#ifdef BOARD_AUDIO_MIC_GAIN_DB
+    /* 麦克风增益(板级常量; P4C5 硅麦链 30dB 实证, 见 board_pins_p4c5.h) */
+    esp_codec_dev_set_in_gain(s_codec, BOARD_AUDIO_MIC_GAIN_DB);
+#endif
 
 #ifdef BOARD_AMP_MANUAL_PA
     /* P4C5 板怪癖(Kaleido V-38 实证): es8311 驱动对 pa_pin 的 gpio 配置在

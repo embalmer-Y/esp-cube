@@ -49,15 +49,26 @@ static volatile bool s_running;
 static const esp_afe_sr_iface_t *s_afe;
 static esp_afe_sr_data_t *s_afe_data;
 static volatile bool s_mic_yield;          /* AI_LISTENING 期让渡麦克风 */
+static volatile TickType_t s_resume_tick;  /* wn9 复喂时刻(回声闸门基准) */
 
-/* ---- 麦克风所有权切换: 订阅 AI 会话状态(docs/06 §3) ---- */
+/* ---- 麦克风所有权切换: 订阅 AI 会话状态(docs/06 §3) ----
+ * THINKING 期也让渡: ASR 定稿→wn9 复喂的瞬间, 其内部残留缓冲会对
+ * 刚说过的话回放检出假唤醒(2026-11-11 实测: 每轮必发, 复喂后
+ * 26~64ms, 音量 -29~-35dB 远低于真人 -20dB), 思考期不喂 wn9
+ * 从源头掐掉; barge-in 窗口(SPEAKING 期)不受影响 */
 static void voice_evt_cb(cube_evt_id_t id, const void *data, size_t len,
                          void *ctx)
 {
     (void)len; (void)ctx;
     if (id == CUBE_EVT_AI_STATE && data != NULL) {
-        s_mic_yield = (*(const int *)data == AI_LISTENING);
-        ESP_LOGI(TAG, "mic %s", s_mic_yield ? "yield → asr" : "resume");
+        int st = *(const int *)data;
+        bool yield = (st == AI_LISTENING || st == AI_THINKING);
+        if (!yield && s_mic_yield) {
+            /* 让渡→复喂的边界: 打开回声闸门窗口(见 voice_task) */
+            s_resume_tick = xTaskGetTickCount();
+        }
+        s_mic_yield = yield;
+        ESP_LOGI(TAG, "mic %s", yield ? "yield → asr" : "resume");
     }
 }
 
@@ -110,6 +121,16 @@ static void voice_task(void *arg)
         }
         if (res->wakeup_state == WAKENET_DETECTED) {
             detect_count++;
+            /* 回声闸门: wn9 从让渡恢复后的首帧残留缓冲会对刚才的话
+             * 回放检出假唤醒(实测固定在复喂后 26~64ms, 音量远低于
+             * 真人)。复喂后 500ms 内的检出一律丢弃 —— 人对"AI 开始
+             * 说话"的反应时间 ≥300ms, 真唤醒不可能落进窗口
+             * (2026-11-11/12 两晚连续复现后定位) */
+            if (xTaskGetTickCount() - s_resume_tick < pdMS_TO_TICKS(500)) {
+                ESP_LOGW(TAG, "wake gated as echo #%d vol=%.1fdBFS",
+                         detect_count, res->data_volume);
+                continue;
+            }
             ESP_LOGW(TAG, "★ WAKE #%d vol=%.1fdBFS heap=%u", detect_count,
                      res->data_volume,
                      (unsigned)esp_get_free_heap_size());

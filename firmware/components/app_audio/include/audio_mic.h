@@ -21,6 +21,10 @@ extern "C" {
  * 带进位不丢帧; 返回实际样本数, 0=暂无数据/未初始化) */
 int audio_mic_read_16k(int16_t *mono, int frames);
 
+/* 测试注入口(自动化验证): arm 后 read_16k 按实时节奏供给该 PCM 而非
+ * 真实麦克, 耗尽自动回落; 缓冲由调用方持有(PSRAM) */
+void audio_mic_test_inject(const int16_t *pcm16k_mono, size_t frames);
+
 #ifdef __cplusplus
 }
 #endif

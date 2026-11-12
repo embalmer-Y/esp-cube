@@ -30,6 +30,10 @@ void ai_session_on_wake(void);
  * CLI `ask` 命令/B2 语音链外的调试通道; 会在会话任务异步执行 */
 esp_err_t ai_session_submit_text(const char *text);
 
+/* 自动化验证(无真人): TTS 合成人声注入麦克 → 全链自测 */
+esp_err_t ai_session_selftest(const char *text);   /* 合成 text 并走完整轮 */
+esp_err_t ai_session_stwake(void);                 /* 合成唤醒词测 WakeNet */
+
 #ifdef __cplusplus
 }
 #endif

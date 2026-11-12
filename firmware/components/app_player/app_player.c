@@ -72,6 +72,15 @@ static struct {
 #if CONFIG_ESP_CUBE_ENABLE_BT
     volatile bool bt_pause;                     /* BT 音乐接管: 挂起电台供流 */
 #endif
+    volatile bool ai_pause;                     /* AI 聆听期让路: 暂停网络供流
+                                                 * (单麦无 AEC, 电台声会串进
+                                                 * ASR, 2026-11-11 板上实测) */
+    volatile bool ai_handoff;                   /* 技能换源放行: 轮内点歌
+                                                 * 新曲立即起播(ducking 压低
+                                                 * 供 AI 人声), 不再等播报完 */
+    volatile bool held_pause;                   /* 本次会话经历过让路驻留:
+                                                 * 恢复后被服务器踢线属预期,
+                                                 * 重开不计失败(与 BT 对称) */
     audio_source_handle_t src;
     /* HTTP 响应头捕获(HTTP_EVENT_ON_HEADER 上下文写入) */
     char content_type[64];
@@ -98,10 +107,28 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
  * 订阅回调可能在 BT 栈任务上下文执行 → 只做 volatile 写, 所有实际
  * 动作(停读/关源/恢复)都由播放任务在 bt_pause_gate() 内完成。
  */
-#if CONFIG_ESP_CUBE_ENABLE_BT
 static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)ctx;
+    if (id == CUBE_EVT_AI_STATE && data != NULL && len == sizeof(int)) {
+        /* AI 让路策略(2026-11-12 定稿): 聆听/思考期全压(防串台+防电台
+         * 回灌盖回应); 播报期分两种 —— 技能已换源(ai_handoff)则放行,
+         * 新曲立即起播且被 ducking 压低(首响延迟 -3~4s), 纯聊天则继续
+         * 压到 IDLE; IDLE 清 handoff */
+        int st = *(const int *)data;
+        if (st == AI_IDLE) {
+            s_player.ai_handoff = false;
+        }
+        bool hold = (st == AI_LISTENING || st == AI_THINKING ||
+                     (st == AI_SPEAKING && !s_player.ai_handoff));
+        if (hold != s_player.ai_pause) {
+            s_player.ai_pause = hold;
+            ESP_LOGI(TAG, "ai state=%d -> stream %s", st,
+                     hold ? "suspend" : "resume");
+        }
+        return;
+    }
+#if CONFIG_ESP_CUBE_ENABLE_BT
     if (id != CUBE_EVT_BT_AUDIO_ACTIVE || data == NULL || len != sizeof(bool)) {
         return;                             /* 事件总线全量派发: 必须按 ID 过滤 */
     }
@@ -113,8 +140,8 @@ static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *
         ESP_LOGI(TAG, "BT audio active -> radio suspend");
     }
     s_player.bt_pause = active;
-}
 #endif
+}
 
 esp_err_t app_player_init(void)
 {
@@ -123,41 +150,46 @@ esp_err_t app_player_init(void)
         return ESP_OK;
     }
     inited = true;
-#if CONFIG_ESP_CUBE_ENABLE_BT
+    /* 无条件订阅: AI 聆听让路(P4 无 BT 也要停台); BT 事件在同一回调内
+     * 按 ID 过滤(其在 BT 关闭时无人发布, 天然死分支) */
     return cube_event_subscribe(player_evt_cb, NULL);
-#else
-    return ESP_OK;                          /* 无 BT 目标: 无需订阅 */
-#endif
 }
 
 /* 播放任务内调用: BT 暂停期间在此驻留(不读网络→TCP背压, 不供混音器)。
  * 恢复时重开源通道并返回; 暂停期间连接被服务器断开属预期(直播服务器
  * 踢空闲连接), 由外层循环以"零失败"重开会话。 */
-#if CONFIG_ESP_CUBE_ENABLE_BT
-static void bt_pause_gate(void)
+/* 让路闸门(BT 接管 / AI 聆听共用): 暂停供流驻留; 恢复时等网络再重开。
+ * 注意: 必须无条件编译 —— ai_pause 在无 BT 目标(P4)也要生效
+ * (2026-11-11 实测: 原先裹在 ENABLE_BT 里, P4 上编译为空, 电台不暂停
+ * 导致 ASR 串台) */
+static void player_pause_gate(void)
 {
-    if (!s_player.bt_pause || s_player.src == NULL) {
+    bool bt = false;
+#if CONFIG_ESP_CUBE_ENABLE_BT
+    bt = s_player.bt_pause;
+#endif
+    if ((!bt && !s_player.ai_pause) || s_player.src == NULL) {
         return;
     }
     audio_mixer_set_source_active(s_player.src, false);
     bool held = false;
-    while (s_player.bt_pause && !s_player.stop_req) {
+    while ((bt || s_player.ai_pause) && !s_player.stop_req) {
         vTaskDelay(pdMS_TO_TICKS(100));
         held = true;
+#if CONFIG_ESP_CUBE_ENABLE_BT
+        bt = s_player.bt_pause;
+#endif
     }
     if (held && !s_player.stop_req) {
-        /* BT 模式期间 WiFi 已被 app_net 停掉(BT 独占射频): 先等 IP
-         * 再重开会话, 否则首个连接烧掉宝贵的重试次数 */
+        /* BT 让路期间 WiFi 可能已停(BT 独占射频): 先等 IP 再重开会话 */
         if (app_net_wait_up(10000) != ESP_OK) {
-            ESP_LOGW(TAG, "wifi not up after BT release, retry loop will keep trying");
+            ESP_LOGW(TAG, "wifi not up after pause release, retry loop will keep trying");
         }
         audio_mixer_set_source_active(s_player.src, true);
-        ESP_LOGI(TAG, "radio resumed (BT released)");
+        s_player.held_pause = true;             /* 供 player_task 豁免踢线 */
+        ESP_LOGI(TAG, "radio resumed (pause released)");
     }
 }
-#else
-static void bt_pause_gate(void) {}          /* 无 BT 目标: 空实现, 调用点零改动 */
-#endif
 typedef struct {
     esp_audio_dec_handle_t dec;
     esp_audio_dec_info_t info;
@@ -662,7 +694,7 @@ static bool direct_stream_run(void)
     icy_state_t icy;
     icy_reset(&icy, s_player.icy_metaint);
     while (!s_player.stop_req) {
-        bt_pause_gate();                    /* BT 音乐接管: 挂起读流与供流 */
+        player_pause_gate();                    /* BT 音乐接管: 挂起读流与供流 */
         int n = esp_http_client_read(http, (char *)feed, FEED_BUF_SIZE);
         total_read += (n > 0) ? n : 0;
         read_calls++;
@@ -788,7 +820,7 @@ static bool hls_session_run(void)
 
     /* ---- 帧循环: extractor 帧输出 → 解码 → 推混音器 ---- */
     while (!s_player.stop_req) {
-        bt_pause_gate();                    /* BT 音乐接管: 挂起读帧与供流 */
+        player_pause_gate();                    /* BT 音乐接管: 挂起读帧与供流 */
         esp_extractor_frame_info_t frame = { 0 };
         esp_extractor_err_t fret = esp_extractor_read_frame(ext, &frame);
 #if CONFIG_ESP_CUBE_AUDIO_DEBUG
@@ -923,7 +955,7 @@ static void player_task(void *arg)
     cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
 
     while (!s_player.stop_req && retries < PLAYER_MAX_RETRIES) {
-        bt_pause_gate();                    /* BT 接管期间在此驻留, 恢复后重开会话 */
+        player_pause_gate();                    /* BT 接管期间在此驻留, 恢复后重开会话 */
         /* 按 URL 协议分派: m3u8 → HLS; 其余 → HTTP/ICY 直连 */
         bool eof_ok = strstr(s_player.url, ".m3u8")
                       ? hls_session_run()
@@ -939,6 +971,15 @@ static void player_task(void *arg)
                 continue;
             }
 #endif
+            /* AI 聆听让路同款: 驻留数秒后直播服务器踢空闲连接属预期,
+             * 重开不计失败 —— 否则反复唤醒→恢复×5 次 → PLAYER_ERROR
+             * 永久哑(2026-11-11 排查, 与 BT 路径对称) */
+            if (s_player.held_pause) {
+                s_player.held_pause = false;
+                retries = 0;
+                ESP_LOGI(TAG, "session kicked during pause, reopen");
+                continue;
+            }
             /* EOF → 播放列表轮播下一首; 读取错误 → 原地重试同一URL */
             if (s_player.playlist_idx >= 0 && eof_ok) {
                 s_player.playlist_idx = (s_player.playlist_idx + 1) % PLAYLIST_NUM;
@@ -986,6 +1027,13 @@ esp_err_t app_player_start(const char *url)
         };
         s_player.src = audio_mixer_add_source(&scfg);
         ESP_RETURN_ON_FALSE(s_player.src != NULL, ESP_ERR_NO_MEM, TAG, "add source");
+    }
+    /* 轮内换源(AI 技能点歌): 置 handoff 放行 —— 新曲不等播报结束,
+     * 立即起播由 ducking 让位人声(说完话→听到歌 -3~4s, 2026-11-12) */
+    if (s_player.ai_pause) {
+        s_player.ai_handoff = true;
+        s_player.ai_pause = false;
+        ESP_LOGI(TAG, "ai handoff: new stream released");
     }
     /* 请求切换: 先停旧任务(含等待退出, 避免两任务抢同一解码器) */
     app_player_stop();

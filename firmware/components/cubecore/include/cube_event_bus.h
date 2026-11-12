@@ -41,6 +41,8 @@ typedef enum {
     CUBE_EVT_VOICE_CMD,      /* 本地命令词, payload: int(app_voice_cmd_t) */
     CUBE_EVT_AI_STATE,       /* AI 会话状态, payload: int(ai_state_t) */
     CUBE_EVT_AI_TEXT,        /* AI 文本(字幕/表情), payload: char*(临时) */
+    CUBE_EVT_AI_TOOL_HINT,   /* 工具参数流式提示(speculative 预取),
+                                payload: cube_ai_tool_hint_t(临时) */
 } cube_evt_id_t;
 
 /* AVRCP 曲目元数据(蓝牙播放页显示用) */
@@ -59,6 +61,14 @@ typedef enum {
     AI_THINKING,
     AI_SPEAKING,
 } ai_state_t;
+
+/* 工具参数流式提示(CUBE_EVT_AI_TOOL_HINT payload, 同步派发生命周期):
+ * LLM 吐 tool_calls 的 arguments 期间按 delta 推送累计值, 供技能层
+ * speculative 预取(搜歌抢跑等)。args 为截断的累计 JSON(非完整)。 */
+typedef struct {
+    char name[48];
+    char args[256];
+} cube_ai_tool_hint_t;
 
 /* 事件回调原型: data 生命周期仅限回调期间 */
 typedef void (*cube_evt_cb_t)(cube_evt_id_t id, const void *data, size_t len, void *user_ctx);

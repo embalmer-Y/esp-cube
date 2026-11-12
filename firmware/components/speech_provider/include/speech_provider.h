@@ -159,6 +159,11 @@ struct ks_llm_cfg_v2 {
 	cJSON *tools;		/* OpenAI tools 数组, 可 NULL(纯文本)   */
 	bool cut_clauses;
 	bool no_think;
+	/* 工具参数流式提示(可 NULL): 模型吐 tool_calls 的 arguments 期间,
+	 * 每收到一段 delta 就带当前累计值回调一次(speculative 预取用,
+	 * 2026-11-12; 调用方须轻量, 严禁在此阻塞 —— 与 SSE 读循环同线程) */
+	void (*args_cb)(void *user, const char *tool_name,
+			const char *partial_args);
 };
 
 /* 工具调用回调(与调用同线程): id/name/arguments(JSON 字符串,

@@ -44,3 +44,7 @@ CONFIG_MBEDTLS_SSL_PROTO_TLS1_3=y
 # ---- EFC 表情动画(P4 资源充裕: 32MB PSRAM + PPA 硬件缩放) ----
 CONFIG_ESP_CUBE_ENABLE_EFC=y
 CONFIG_ESP_EFC_LVGL_WIDGET=y
+
+# ---- TLS 内存挪 PSRAM(Kaleido convo-stage 成熟口径): esp-sr 常驻后内部
+# DMA/加密内存紧张, TTS WS 握手超时的根治(2026-11-11 板上定位) ----
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

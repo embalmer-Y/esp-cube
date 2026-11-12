@@ -158,6 +158,19 @@ static void handle_line(char *line)
                    ? "已提交(AI 回复将经 TTS 播出, 串口同步打印)"
                    : esp_err_to_name(err));
         }
+    } else if (strcmp(line, "selftest") == 0) {
+        /* 自动化验证: TTS 合成人声注入麦克走完整轮(唤醒→ASR→LLM→技能) */
+        if (arg == NULL || arg[0] == 0) {
+            printf("  用法: selftest <文本>\n");
+        } else {
+            printf("  ST: submit(\"%s\")\n", arg);
+            esp_err_t err = ai_session_selftest(arg);
+            if (err != ESP_OK) printf("  ST: %s\n", esp_err_to_name(err));
+        }
+    } else if (strcmp(line, "stwake") == 0) {
+        /* 自动化验证: 合成唤醒词注入麦克, 期望 wn9 检出 ★ WAKE */
+        printf("  ST: wake inject\n");
+        ai_session_stwake();
 #endif
     } else {
         printf("  未知命令(%s), help 查看\n", line);

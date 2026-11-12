@@ -64,6 +64,10 @@ extern "C" {
 #define BOARD_AUDIO_DMA_FRAMES      480
 #define BOARD_AUDIO_I2S_AUTO_CLEAR  1
 
+/* 麦克风 ADC 增益(Kaleido V-38 同款板实证 30dB): ES8311 默认增益低,
+ * 不设则 WakeNet/ASR 收音偏小 → 唤醒不灵敏(2026-11-11 板上首验教训) */
+#define BOARD_AUDIO_MIC_GAIN_DB     36.0f
+
 /* ===================== C5 共芯(SDIO, esp_hosted P4 默认值) =====================
  * CLK=18 CMD=19 D0..D3=14..17 —— 与 esp_hosted 在 P4 的预设默认完全一致,
  * app_net 无需 SDIO 引脚配置, 仅登记复位脚 */
