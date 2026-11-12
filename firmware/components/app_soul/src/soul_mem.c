@@ -74,8 +74,14 @@ static char s_block[MEM_BLOCK];   /* prompt 块(重建于写入/启动) */
  * 行格式: t\tseq\tstrength\taffect_v\taffect_a\tlast_access\tuser\treply */
 static void sd_save_all_locked(void)
 {
-    char *buf = malloc(256 * MEM_MAX_SD);
-    if (buf == NULL) return;
+    /* ⚠ 必须走 PSRAM: 128KB 全量回写缓冲在内部堆上被 WiFi/BT/音频挤压
+     * 后大概率分配失败且静默丢写(板上实测 mem #7 写入后重启 0 episodes,
+     * 2026-11-12 验收定位) */
+    char *buf = heap_caps_malloc(256 * MEM_MAX_SD, MALLOC_CAP_SPIRAM);
+    if (buf == NULL) {
+        ESP_LOGW(TAG, "sd save oom");
+        return;
+    }
     size_t off = 0;
     for (int i = 0; i < s_count && off < (256 * MEM_MAX_SD) - 320; i++) {
         mem_item_t *m = &s_items[i];
@@ -85,15 +91,22 @@ static void sd_save_all_locked(void)
                         m->affect_v, m->affect_a, (long long)m->last_access,
                         m->user, m->reply);
     }
-    app_storage_write(MEM_FILE, buf, off);
+    esp_err_t e = app_storage_write(MEM_FILE, buf, off);
     free(buf);
+    /* 台调期留痕: 写盘失败曾是静默丢(2026-11-12 SD 验收 0 episodes 排障) */
+    if (e != ESP_OK) {
+        ESP_LOGW(TAG, "sd save fail: %s", esp_err_to_name(e));
+    }
 }
 
 static void sd_load_all(void)
 {
     size_t len = 0;
     char *buf = app_storage_read(MEM_FILE, &len);
-    if (buf == NULL) return;                 /* 空库: 全新开始 */
+    if (buf == NULL) {
+        ESP_LOGW(TAG, "sd load: read fail/absent");   /* 台调期留痕 */
+        return;                                        /* 空库: 全新开始 */
+    }
     char *p = buf;
     while (p < buf + len && s_count < MEM_MAX_SD) {
         char *nl = strchr(p, '\n');

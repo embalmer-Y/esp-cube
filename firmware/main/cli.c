@@ -30,6 +30,7 @@
 #include "app_ncm.h"
 #include "app_player.h"
 #include "app_assist.h"
+#include "app_storage.h"
 #include "ai_skills.h"
 #include "sdkconfig.h"
 #if CONFIG_ESP_CUBE_ENABLE_AI
@@ -166,6 +167,7 @@ static void handle_line(char *line)
                "  remind <秒> <文本> 定时提醒(到点语音播报) | time 校时状态\n"
                "  skill <名> <json> 直接执行技能(零 LLM 成本调试)\n"
                "  panel <0|1|2>  开关面板(0收起 1状态栏 2AI状态)\n"
+               "  sdretry <0|1> SD 重挂载(0=MMC 1=SDSPI) | sdprobe 电平诊断\n"
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
 #endif
@@ -240,6 +242,19 @@ static void handle_line(char *line)
         printf("  panel -> %d\n", n);
     } else if (strcmp(line, "assistclear") == 0) {
         printf("  clear: %s\n", esp_err_to_name(app_assist_clear()));
+    } else if (strcmp(line, "sdretry") == 0) {
+        /* SD 台调: sdretry [0|1] 0=SDMMC slot0 / 1=SDSPI(SPI2);
+         * 失败可反复重试(插拔卡后无需重启) */
+        int mode = arg != NULL ? atoi(arg) : 0;
+        if (mode != 0 && mode != 1) {
+            printf("  用法: sdretry [0|1]  0=MMC slot0 / 1=SDSPI\n");
+        } else {
+            printf("  sd retry(mode=%d): %s\n", mode,
+                   esp_err_to_name(app_storage_mount_mode(mode)));
+        }
+    } else if (strcmp(line, "sdprobe") == 0) {
+        /* SD 台调: 引脚电平全景(插/拔卡各跑一次对比) */
+        app_storage_probe();
 #if CONFIG_ESP_CUBE_ENABLE_AI
     } else if (strcmp(line, "ask") == 0) {
         if (arg == NULL || arg[0] == 0) {

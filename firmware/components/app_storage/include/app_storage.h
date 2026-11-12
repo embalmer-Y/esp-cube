@@ -25,6 +25,12 @@ extern "C" {
 esp_err_t app_storage_init(void);
 /* 实际挂载(通常由 init 内部在 WiFi 就绪后调度; 幂等) */
 esp_err_t app_storage_mount(void);
+/* 台调入口: 手动重挂载(与自动路径独立, 失败可反复重试)。
+ * mode 0=SDMMC slot0(4-bit) / 1=SDSPI(SPI2, 1-bit); 已挂载时先卸载 */
+esp_err_t app_storage_mount_mode(int mode);
+/* 台调诊断: DET/CLK/CMD/D0..D3 电平打印(卡座在位/走线判断; 未挂载时
+ * 附带手动时钟下 D0 电平测试)。插拔卡各跑一次对比电平 */
+void app_storage_probe(void);
 bool app_storage_ok(void);
 
 /* 组绝对路径: snprintf 语义, 返回长度; 未挂载时仍生成路径(调用方自查) */
