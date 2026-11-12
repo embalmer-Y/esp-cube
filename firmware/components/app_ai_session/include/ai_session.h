@@ -36,8 +36,13 @@ esp_err_t ai_session_stwake(void);                 /* 合成唤醒词测 WakeNet
 
 /* 带外播报(提醒到点/主动交互): 不经 ASR/LLM, 直接出声(M2)。
  * 快线在位走 omni(同一音色), 否则 cosyvoice; 会话忙时挂起,
- * 本轮结束(IDLE)后自动补播。Kaleido "站在会话外对着会话说话" 语义 */
+ * 本轮结束(IDLE)后自动补播。Kaleido "站在会话外对着会话说话"语义 */
 esp_err_t ai_session_announce(const char *text);
+
+/* TTS 音色热切(音色甄选台调/persona 配置): 断当前会话令下轮懒开
+ * 生效; announce 同源一并切换 */
+void ai_session_set_tts_voice(const char *voice);
+const char *ai_session_tts_voice(void);
 
 #ifdef __cplusplus
 }

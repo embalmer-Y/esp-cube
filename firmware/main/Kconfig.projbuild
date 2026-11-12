@@ -141,7 +141,12 @@ menu "EspCube Configuration"
 
     config ESP_CUBE_AI_TTS_VOICE
         string "TTS 音色"
-        default "longanyang"
+        default "longanqin_v3"
+        help
+          2026-11-12 板上甄选(8 款连播试听, 用户定): 女声 longanqin_v3
+          (亲和活泼)出厂默认; 男声备选 longanyang(阳光大男孩, 支持
+          Instruct)。CLI `voice <名>` 运行时热切, 后续进 persona.json。
+          v3-flash 音色名须带 _v3 后缀(v2 命名被 Engine 418 拒绝)。
 
     config ESP_CUBE_AI_TTS_RATE
         int "TTS 输出采样率(16000/24000)"

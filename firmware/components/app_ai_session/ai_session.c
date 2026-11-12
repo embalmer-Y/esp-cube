@@ -158,11 +158,14 @@ static struct ks_rt_events s_rt_ev = {
  * 零等待(GetStream filler 模式, 2026-11-12) */
 extern const uint8_t filler_16k_pcm_start[] asm("_binary_filler_16k_pcm_start");
 extern const uint8_t filler_16k_pcm_end[]   asm("_binary_filler_16k_pcm_end");
+/* TTS 音色热切缓冲(音色甄选台调/persona 配置热更新): ks_tts_cfg.voice
+ * 是指针, 指向本可写数组即可运行时切换 */
+static char s_tts_voice_buf[48] = CONFIG_ESP_CUBE_AI_TTS_VOICE;
 static struct ks_tts_cfg s_tts_cfg = {        /* TTS 配置单例(懒开复用) */
     .url = AI_DASHSCOPE_URL,
     .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
     .model = CONFIG_ESP_CUBE_AI_TTS_MODEL,
-    .voice = CONFIG_ESP_CUBE_AI_TTS_VOICE,
+    .voice = s_tts_voice_buf,
     .sample_rate = AI_TTS_RATE,
     .speech_rate = 0, .pitch = 0,
 };
@@ -194,6 +197,21 @@ static void set_state(ai_state_t st)
     audio_mixer_set_ducking(st == AI_SPEAKING);
     s_state = st;
     cube_event_publish(CUBE_EVT_AI_STATE, &st, sizeof(st));
+}
+
+/* TTS 音色热切(音色甄选台调 CLI / persona 配置): 断当前会话令下轮
+ * 懒开握手新音色; announce 带外播报同走 s_tts_cfg, 一并生效 */
+void ai_session_set_tts_voice(const char *voice)
+{
+    if (voice == NULL || voice[0] == '\0') return;
+    strlcpy(s_tts_voice_buf, voice, sizeof(s_tts_voice_buf));
+    ks_tts_close();               /* 懒开: 下轮重连用新音色 */
+    ESP_LOGI(TAG, "tts voice -> %s", s_tts_voice_buf);
+}
+
+const char *ai_session_tts_voice(void)
+{
+    return s_tts_voice_buf;
 }
 
 /* TTS open 带重试: ASR+TTS 双 WS 并发握手偶发抢不到 esp-aes 长度描述符
