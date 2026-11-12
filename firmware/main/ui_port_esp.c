@@ -322,7 +322,7 @@ esp_err_t ui_port_face_req(const char *rel)
 #if CONFIG_ESP_CUBE_ENABLE_EFC
     char *r = strdup(rel);
     if (r == NULL) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(face_load_task, "faceload", 8192, r, 5, NULL) != pdPASS) {
+    if (xTaskCreate(face_load_task, "faceload", 16384, r, 5, NULL) != pdPASS) {
         free(r);
         return ESP_ERR_NO_MEM;
     }
@@ -351,7 +351,7 @@ static void face_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     if (id != CUBE_EVT_SD_READY) return;
     char *rel = strdup("idle");
     if (rel != NULL) {
-        if (xTaskCreate(face_load_task, "faceload", 8192, rel, 5, NULL)
+        if (xTaskCreate(face_load_task, "faceload", 16384, rel, 5, NULL)
             != pdPASS) {
             free(rel);
         }
