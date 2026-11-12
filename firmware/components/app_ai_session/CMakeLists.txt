@@ -4,5 +4,5 @@ idf_component_register(
     SRCS "ai_session.c"
     INCLUDE_DIRS "include"
     EMBED_FILES "assets/filler_16k.pcm"
-    PRIV_REQUIRES cubecore app_audio speech_provider ai_skills
+    PRIV_REQUIRES cubecore app_audio speech_provider ai_skills app_soul
 )

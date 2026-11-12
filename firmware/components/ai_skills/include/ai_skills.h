@@ -26,7 +26,9 @@ extern "C" {
 #define AI_SKILL_NAME_LEN   32
 #define AI_SKILL_DESC_LEN   192      /* 字节; 中文描述实测 96B 会截断出
                                       * 非法 UTF-8 → LLM 请求体 400 */
-#define AI_SKILL_MAX        8        /* 注册表容量(满即 ESP_ERR_NO_MEM) */
+#define AI_SKILL_MAX        12       /* 注册表容量(满即 ESP_ERR_NO_MEM);
+                                      * M2 后 8 个在册: 音乐/电台/音量/
+                                      * 停止 + 琐事/提醒×4, 留主动交互余量 */
 
 /* 执行体: args=LLM 生成的参数对象(防防御解析, 可能为 NULL);
  * reply 写执行结果文本(回传给 LLM 作 role:"tool" 内容, 也是给

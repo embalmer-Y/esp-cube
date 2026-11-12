@@ -51,7 +51,8 @@ struct ks_llm_ctx {
 	char *tool_args;	/* 堆缓冲, 按 delta 追加           */
 	size_t tool_args_len;
 	size_t tool_args_cap;
-	bool tool_seen;		/* finish_reason==tool_calls       */
+	bool tool_seen;
+	char req_diag[512];   /* 请求体头部片段(400 诊断) */		/* finish_reason==tool_calls       */
 };
 
 /* ---- MiniMax JWT → GroupID → chatcompletion_v2 URL ---- */
@@ -281,10 +282,15 @@ static esp_err_t http_event(esp_http_client_event_t *ev)
 	if (c->status == 0)
 		c->status = esp_http_client_get_status_code(ev->client);
 	if (c->status != 200) {
-		/* 错误响应体(百炼 400 会带 code/message, 排查关键) */
+		/* 错误响应体(百炼 400 会带 code/message, 排查关键);
+		 * 4xx 附带请求体片段(定位非法 UTF-8/超长字段, 2026-11-12
+		 * M3 记忆块 400 排查) */
 		ESP_LOGE(TAG, "http %d body: %.*s", c->status,
 			 ev->data_len > 220 ? 220 : ev->data_len,
 			 (const char *)ev->data);
+		if (c->status >= 400 && c->status < 500 && c->req_diag[0]) {
+			ESP_LOGE(TAG, "req diag: %.500s", c->req_diag);
+		}
 		return ESP_OK;
 	}
 
@@ -516,6 +522,7 @@ int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 	}
 	strcpy(body, s);
 	cJSON_free(s);
+	strlcpy(c.req_diag, body, sizeof(c.req_diag));
 
 	ESP_LOGD(TAG, "v2 req(%u)", strlen(body));
 	snprintf(auth, sizeof(auth), "Bearer %s", cfg->api_key);

@@ -38,7 +38,9 @@
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
 #include "ai_session.h"
+#include "soul.h"
 #endif
+#include "app_assist.h"
 
 /* ui_model.h 设备后端(本目录 ui_port_esp.c, L5 实现 docs/06 §2.1) */
 extern esp_err_t ui_port_init(void);
@@ -49,6 +51,20 @@ extern esp_err_t ui_port_init(void);
 extern void register_ai_skills(void);
 
 static const char *TAG = "main";
+
+/* M2: 提醒到点带外播报桥(app_assist 调度任务 → ai_session_announce,
+ * 异步入队不阻塞调度器; 队列满即弃 —— 提醒洪峰时宁缺勿堵) */
+static void assist_announce_bridge(const char *text)
+{
+#if CONFIG_ESP_CUBE_ENABLE_AI
+    esp_err_t err = ai_session_announce(text);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "announce dropped: %s", esp_err_to_name(err));
+    }
+#else
+    (void)text;
+#endif
+}
 
 /* WiFi 就绪 → 启动播放列表(一次性任务: app_player_start 内含停止等待,
  * 不可在事件循环任务里同步调用 —— 会阻塞所有事件分发) */
@@ -99,6 +115,10 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+    /* ---- 1.5 助理服务(M2): SNTP 时间底座 + 琐事/提醒(NVS) ---- */
+    ESP_ERROR_CHECK(app_assist_init());
+    app_assist_set_announcer(assist_announce_bridge);
+
     /* ---- 2. 音频链路(核心) ---- */
     drv_audio_cfg_t acfg = {
         .sample_rate = CONFIG_ESP_CUBE_MIXER_RATE,
@@ -136,6 +156,15 @@ void app_main(void)
     if (aerr != ESP_OK) {
         ESP_LOGE(TAG, "ai session degraded: %s", esp_err_to_name(aerr));
     }
+    /* M3 灵魂内核: 1Hz 情绪动力学 + 记忆(SOUL=n 时为空实现) */
+    esp_err_t serr = soul_start();
+    if (serr != ESP_OK) {
+        ESP_LOGE(TAG, "soul degraded: %s", esp_err_to_name(serr));
+    }
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+    soul_think_set_speak(ai_session_announce);   /* 点火出声 → 带外播报 */
+    soul_think_start();
+#endif
 #endif
 
 #if CONFIG_ESP_CUBE_ENABLE_UI

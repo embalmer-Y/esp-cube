@@ -28,6 +28,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <time.h>
 #include "esp_check.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -40,6 +41,7 @@
 #include "audio_mic.h"
 #include "speech_provider.h"
 #include "ai_skills.h"
+#include "soul.h"
 #include "sdkconfig.h"
 
 #if !CONFIG_ESP_CUBE_ENABLE_AI
@@ -48,6 +50,11 @@
 esp_err_t ai_session_start(void) { return ESP_OK; }
 void ai_session_on_wake(void) {}
 esp_err_t ai_session_submit_text(const char *text)
+{
+    (void)text;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+esp_err_t ai_session_announce(const char *text)
 {
     (void)text;
     return ESP_ERR_NOT_SUPPORTED;
@@ -103,10 +110,13 @@ static volatile bool s_tts_closed;            /* TTS 会话已收口(排空判�
 static bool s_tts_opened;                     /* TTS 懒开(见 on_llm_sent) */
 static volatile bool s_tts_dead;              /* 本轮 TTS 已失败(不再喂/不再等) */
 static volatile bool s_round_spoken;          /* 本轮已有句子成功进 TTS */
+static char s_round_reply1st[96];             /* 回复首句(soul 记忆/回执) */
 static volatile bool s_tts_armed;             /* 排空上报武装(run_round 收口置位) */
 static int64_t  s_tts_armed_us;               /* 武装时刻(超时兜底) */
 static int64_t s_listen_start_us;             /* 唤醒防抖基准 */
 static volatile bool s_filler_req;            /* tts_task 待播 filler */
+static bool s_announce_pend;                  /* 会话忙时挂起的带外播报 */
+static char s_announce_text[176];
 /* selftest 采集(见文件尾 st_*): on_tts_pcm 采集优先, TTS→注入素材 */
 static int16_t *s_st_buf;                      /* PSRAM, 首用分配 */
 static volatile bool s_st_capture;
@@ -167,6 +177,7 @@ enum {
     EVT_MIC_DONE,
     EVT_TTS_DONE,          /* TTS 缓冲排空且已收口(tts_task 发) */
     EVT_TEXT_IN,           /* payload: char*(文本注入, 跳过 ASR 直进 LLM) */
+    EVT_ANNOUNCE,          /* payload: char*(带外播报, M2 提醒/主动交互) */
 };
 
 /* 队列元素(带指针的事件) */
@@ -268,11 +279,14 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
         s_tts_opened = true;
     }
     if (sentence[0] != '\0') {
-        cube_event_publish(CUBE_EVT_AI_TEXT, sentence,
-                           strlen(sentence) + 1);
         char clean[512];
         strlcpy(clean, sentence, sizeof(clean));
+        soul_strip_mood_tag(clean);           /* mood 标签: 回写灵魂, 不上屏不出声 */
         tts_sanitize(clean);
+        cube_event_publish(CUBE_EVT_AI_TEXT, clean, strlen(clean) + 1);
+        if (s_round_reply1st[0] == '\0') {
+            strlcpy(s_round_reply1st, clean, sizeof(s_round_reply1st));
+        }
         ESP_LOGI(TAG, "llm sentence(final=%d): %s", final, clean);  /* DIAG */
         /* 永远只发 continue-task(last=false): v2 的 final=true 表示
          * "本次 chat 调用结束", 带工具的轮后面还有第二轮 LLM ——
@@ -606,8 +620,18 @@ static void run_round(const char *user_text)
 {
     set_state(AI_THINKING);
     s_round_spoken = false;
+    s_round_reply1st[0] = '\0';
     s_tts_dead = false;
     s_tts_armed = false;
+
+    /* 灵魂 TTS 调制: 情绪 → 语速/音高(cosyvoice 每会话参数) */
+    {
+        soul_tts_hint_t h;
+        soul_tts_hint(&h);
+        s_tts_cfg.speech_rate = h.rate;
+        s_tts_cfg.pitch = (int)(h.pitch > 0 ? h.pitch + 0.5f
+                                            : h.pitch - 0.5f);
+    }
 #if CONFIG_ESP_CUBE_AI_RT_ENABLE
     s_rt_spoken = false;
 #endif
@@ -616,13 +640,29 @@ static void run_round(const char *user_text)
      * 禁 URL: LLM 回复带链接会被 cosyvoice 拒绝合成(url error))。
      * "先调用再回应"硬约束: 实测 qwen 对"我想听XX"类委婉表达会只口头
      * 答应而不调工具(幻觉顺从, 用户听到的就是"没反应"), 2026-11-12 */
-    char system_full[448];
+    char system_full[1408];   /* 人格+时间+硬约束+soul 内在状态+记忆块 */
+    /* 当前时间注入: reminder.add 的口语时间换算(明天早上八点)必须有
+     * "现在"作参照, 否则 LLM 只能瞎猜(M2); 未同步时提示模型说明 */
+    char now_str[40] = "时间未同步";
+    {
+        time_t t = time(NULL);
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        if (t > 1000000000LL) {
+            static const char *wd[] = { "日","一","二","三","四","五","六" };
+            snprintf(now_str, sizeof(now_str), "%d-%02d-%02d %02d:%02d 周%s",
+                     tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                     tmv.tm_hour, tmv.tm_min, wd[tmv.tm_wday]);
+        }
+    }
     snprintf(system_full, sizeof(system_full),
-             "%s 你是音箱的语音助手。凡用户表达任何播放意图(想听/放/播/"
-             "切歌/换台/调音量/停止), 你必须先调用相应工具, 工具执行成功后"
-             "才能回应; 严禁不调用工具就口头答应。回应一句话口语化简短, "
-             "不要出现任何网址或链接。",
-             CONFIG_ESP_CUBE_AI_LLM_SYSTEM);
+             "%s 现在是%s。%s %s 凡用户表达任何播放意图(想听/放/播/切歌/"
+             "换台/调音量/停止), 你必须先调用相应工具, 工具执行成功后才能"
+             "回应; 用户要记事或定提醒时也必须调用 memo/reminder 工具; "
+             "严禁不调用工具就口头答应。回应一句话口语化简短, 不要出现任何"
+             "网址或链接。",
+             CONFIG_ESP_CUBE_AI_LLM_SYSTEM, now_str,
+             soul_prompt_suffix(), soul_mem_prompt_block());
 
     cJSON *messages = cJSON_CreateArray();
     cJSON *um = cJSON_CreateObject();
@@ -726,6 +766,13 @@ static void run_round(const char *user_text)
 
     cJSON_Delete(messages);
     cJSON_Delete(tools);
+    /* 灵魂回执: 有声且健康 = 圆满轮(驱力大恢复); 记忆层顺带记录 */
+    soul_on_round((s_round_spoken
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+                   || s_rt_spoken
+#endif
+                  ) && !s_tts_dead,
+                  user_text ? user_text : "", s_round_reply1st);
     /* ---- 轮收尾: 三种情况都不允许卡死在 THINKING/SPEAKING ----
      * a) 本轮有语音且 TTS 健康 → 收口 + 武装排空上报(tts_task 报 DONE)
      * b) TTS 失败/无语音 → 直接收口回 IDLE(不等永远不会来的排空) */
@@ -789,6 +836,60 @@ static void wake_chime(void)
                                      pdMS_TO_TICKS(100));
         }
     }
+}
+
+/* ---- 带外播报(M2): 提醒到点/主动交互出口, "站在会话外说话" ----
+ * 快线在位 → ks_rt_say(等首帧 ≤3s, omni 音频回流偶发迟滞的保守窗);
+ * 回落 cosyvoice: 开→喂→收口→关, 复用轮内排空机制等播完。
+ * 供 session_task(EVT_ANNOUNCE/排空补播)调用, 前置条件 s_state==IDLE */
+static void announce_start(const char *text)
+{
+    char clean[192];
+    strlcpy(clean, text, sizeof(clean));
+    tts_sanitize(clean);
+    if (clean[0] == '\0') return;
+
+    set_state(AI_SPEAKING);               /* ducking 让位(音乐压低) */
+    audio_mixer_set_source_active(s_tts_src, true);
+    cube_event_publish(CUBE_EVT_AI_TEXT, clean, strlen(clean) + 1);
+    ESP_LOGI(TAG, "announce: %s", clean);
+
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+    if (ks_rt_ok()) {
+        if (ks_rt_say(clean) == 0) {
+            /* 等首帧(否则空环立刻判"排空" → 闪断): 3s 无回流仍武装,
+             * 由 15s 排空超时兜底收口 */
+            int64_t t0 = esp_timer_get_time();
+            while (!s_rt_spoken &&
+                   esp_timer_get_time() - t0 < 3000000) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            s_tts_closed = true;
+            s_tts_armed = true;
+            s_tts_armed_us = esp_timer_get_time();
+            return;
+        }
+        ESP_LOGW(TAG, "rt_say failed -> tts fallback");
+    }
+#endif
+    if (tts_open_retry(&s_tts_cfg, &s_tts_ev) != 0) {
+        ESP_LOGE(TAG, "announce tts open failed");
+        set_state(AI_IDLE);
+        return;
+    }
+    s_tts_opened = true;
+    cube_resampler_init(&s_rs, AI_TTS_RATE, 48000);
+    if (ks_tts_feed(clean, false, 8000) == 0) {
+        ks_tts_feed("", true, 5000);      /* 收口(零 continue+finish 会被
+                                             服务端拒, 直接 close) */
+    } else {
+        ESP_LOGW(TAG, "announce tts feed failed");
+    }
+    ks_tts_close();
+    s_tts_opened = false;
+    s_tts_closed = true;
+    s_tts_armed = true;                   /* tts_task 排空后回 IDLE */
+    s_tts_armed_us = esp_timer_get_time();
 }
 
 /* ---- 会话任务 ---- */
@@ -934,8 +1035,32 @@ static void session_task(void *arg)
             if (s_state == AI_SPEAKING && !s_abort_req) {
                 set_state(AI_IDLE);
                 ESP_LOGI(TAG, "round complete -> IDLE");
+                if (s_announce_pend) {           /* 会话期挂起的播报补上 */
+                    s_announce_pend = false;
+                    char buf[sizeof(s_announce_text)];
+                    strlcpy(buf, s_announce_text, sizeof(buf));
+                    announce_start(buf);
+                    break;
+                }
             }
             break;
+
+        case EVT_ANNOUNCE: {                     /* 带外播报(任意任务来源) */
+            char *text = (char *)e.payload;
+            if (s_state != AI_IDLE) {            /* 忙: 挂起(单槽, 新覆盖旧) */
+                strlcpy(s_announce_text, text, sizeof(s_announce_text));
+                if (!s_announce_pend) {
+                    s_announce_pend = true;
+                    ESP_LOGI(TAG, "announce deferred (state=%d)", s_state);
+                } else {
+                    ESP_LOGW(TAG, "announce slot busy, replaced");
+                }
+            } else {
+                announce_start(text);
+            }
+            free(text);
+            break;
+        }
 
         case EVT_ASR_TEXT: {
             char *text = (char *)e.payload;
@@ -976,6 +1101,7 @@ static void ai_evt_cb(cube_evt_id_t id, const void *data, size_t len,
         if (s_state == AI_SPEAKING) {
             s_abort_req = true;
             s_ring_r = s_ring_w;         /* 快进读指针=tts_task 见空即哑 */
+            soul_on_barge();             /* 打断: 强社交在场信号 */
         }
         ai_session_on_wake();
     }
@@ -1035,6 +1161,19 @@ void ai_session_on_wake(void)
 {
     session_evt_t e = { .id = EVT_WAKE };
     xQueueSend(s_evtq, &e, 0);
+}
+
+esp_err_t ai_session_announce(const char *text)
+{
+    if (text == NULL || text[0] == '\0') return ESP_ERR_INVALID_ARG;
+    session_evt_t e = { .id = EVT_ANNOUNCE,
+                        .payload = strdup(text) };
+    if (e.payload == NULL) return ESP_ERR_NO_MEM;
+    if (xQueueSend(s_evtq, &e, 0) != pdPASS) {
+        free(e.payload);
+        return ESP_ERR_INVALID_STATE;       /* 队列满: 调用方自行取舍 */
+    }
+    return ESP_OK;
 }
 
 /* ================= selftest: TTS 回环注入(自动化验证) =================

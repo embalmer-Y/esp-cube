@@ -13,7 +13,9 @@
 #include "ui_model.h"
 
 #include <string.h>
+#include <time.h>
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
@@ -21,6 +23,7 @@
 #include "audio_mixer.h"
 #include "app_player.h"
 #include "app_bt.h"
+#include "app_assist.h"
 #include "app_ui.h"
 #include "drv_display.h"
 #include "esp_lvgl_port.h"
@@ -53,6 +56,53 @@ static void source_recalc(void)
         s_model.source = UI_SRC_RADIO;
     } else {
         s_model.source = UI_SRC_IDLE;
+    }
+}
+
+/* ---- 助理快照刷新(事件上下文: 静态缓冲拷贝, 短平快) ---- */
+static void assist_refresh(void)
+{
+    static assist_item_t items[ASSIST_MAX_ITEMS];
+    int n = app_assist_list(items, ASSIST_MAX_ITEMS);
+    int memos = 0, reminds = 0;
+    int64_t soonest = 0;
+    char soonest_txt[UI_STR_LEN] = "";
+    int64_t now = app_assist_now();
+    for (int i = 0; i < n; i++) {
+        if (items[i].due > 0) {
+            reminds++;
+            if (soonest == 0 || items[i].due < soonest) {
+                soonest = items[i].due;
+                strlcpy(soonest_txt, items[i].text, sizeof(soonest_txt));
+            }
+        } else {
+            memos++;
+        }
+    }
+    s_model.memo_cnt = (uint8_t)memos;
+    s_model.remind_cnt = (uint8_t)reminds;
+    model_set_str(s_model.next_remind, soonest_txt,
+                  sizeof(s_model.next_remind));
+    s_model.next_remind_in_min = soonest > 0
+        ? (int32_t)((soonest - now + 59) / 60) : -1;
+}
+
+/* ---- 1s 时钟拍(int 字段天然原子; esp_timer 任务上下文) ---- */
+static void port_tick_cb(void *arg)
+{
+    time_t t = time(NULL);
+    if (t > 1000000000LL) {
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        s_model.time_synced = true;
+        s_model.hour = (uint8_t)tmv.tm_hour;
+        s_model.min = (uint8_t)tmv.tm_min;
+        s_model.mon = (uint8_t)(tmv.tm_mon + 1);
+        s_model.day = (uint8_t)tmv.tm_mday;
+        s_model.wday = (uint8_t)tmv.tm_wday;
+        if (s_model.next_remind_in_min > 0) {
+            s_model.next_remind_in_min--;       /* 粗倒计时(事件来时校准) */
+        }
     }
 }
 
@@ -109,6 +159,23 @@ static void port_evt_cb(cube_evt_id_t id, const void *data, size_t len,
         if (data != NULL) model_set_str(s_model.ai_text, (const char *)data,
                                         sizeof(s_model.ai_text));
         break;
+    case CUBE_EVT_TIME_SYNCED:
+        s_model.time_synced = true;
+        assist_refresh();
+        break;
+    case CUBE_EVT_ASSIST_CHANGED:
+    case CUBE_EVT_REMINDER_FIRED:
+        assist_refresh();                   /* 计数/下条提醒快照重拉 */
+        break;
+    case CUBE_EVT_SOUL_MOOD: {
+        const cube_soul_mood_t *mood =
+            (const cube_soul_mood_t *)data;
+        if (mood != NULL && len >= sizeof(*mood)) {
+            model_set_str(s_model.mood_tag, mood->anim_tag,
+                          sizeof(s_model.mood_tag));
+        }
+        break;
+    }
     default:
         break;
     }
@@ -138,9 +205,23 @@ esp_err_t ui_port_init(void)
         ESP_LOGE(TAG, "evt subscribe: %s", esp_err_to_name(err));
         return err;
     }
+    /* 1s 时钟拍(时间/倒计时; M4 助理主页) */
+    esp_timer_handle_t tick;
+    const esp_timer_create_args_t ta = {
+        .name = "uiport_tick", .callback = port_tick_cb,
+    };
+    if (esp_timer_create(&ta, &tick) == ESP_OK) {
+        esp_timer_start_periodic(tick, 1000000);
+    }
     ESP_LOGI(TAG, "ui_port ready (stations=%d vol=%d)",
              s_model.station_num, s_model.volume);
     return ESP_OK;
+}
+
+/* 面板命令(CLI/语音, 无触摸期入口; 单写者纪律仍在本文件) */
+void ui_port_panel_req(int which)
+{
+    s_model.panel_req = which;
 }
 
 /* ---- ui_model.h 契约实现 ---- */

@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* 合成输入回放(main.c 实现; mock/demo 调用) */
+void sim_swipe_playback(int dy);
+void sim_tap_playback(void);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +28,9 @@ typedef enum {
     SIM_ACT_VOL_UP,
     SIM_ACT_VOL_DOWN,
     SIM_ACT_AI_ASK,            /* 演示一轮 AI 会话(聆听→思考→回答) */
+    SIM_ACT_SWIPE_DOWN,        /* 合成下滑(开状态栏; M4 面板演示) */
+    SIM_ACT_SWIPE_UP,          /* 合成上滑(开 AI 状态) */
+    SIM_ACT_TAP,               /* 合成单击(收起面板) */
 } sim_action_t;
 
 /* mock_app.c 实现 */

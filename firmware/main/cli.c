@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -28,6 +29,8 @@
 #include "cube_tasks.h"
 #include "app_ncm.h"
 #include "app_player.h"
+#include "app_assist.h"
+#include "ai_skills.h"
 #include "sdkconfig.h"
 #if CONFIG_ESP_CUBE_ENABLE_AI
 #include "ai_session.h"
@@ -118,6 +121,35 @@ static void cmd_ncm(char *keywords)
     }
 }
 
+/* M2 助理: 琐事/提醒查看与测试注入(零 API 成本的本地通道) */
+static void cmd_assist_list(void)
+{
+    static assist_item_t items[ASSIST_MAX_ITEMS];
+    int n = app_assist_list(items, ASSIST_MAX_ITEMS);
+    char ts[40];
+    time_t t = (time_t)app_assist_now();
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    strftime(ts, sizeof(ts), "%Y-%m-%d %H:%M:%S", &tmv);
+    printf("  时间: %s(%s)\n", ts,
+           app_assist_time_synced() ? "已同步" : "未同步");
+    if (n == 0) {
+        printf("  (空, note <文本> 记一条 / remind <秒> <文本> 定提醒)\n");
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        char when[32];
+        if (items[i].due > 0) {
+            app_assist_fmt_compact(items[i].due, when, sizeof(when));
+            printf("  #%-3u [提醒 %s] %s\n",
+                   (unsigned)items[i].id, when, items[i].text);
+        } else {
+            printf("  #%-3u [琐事] %s\n",
+                   (unsigned)items[i].id, items[i].text);
+        }
+    }
+}
+
 static void handle_line(char *line)
 {
     char *sp = strchr(line, ' ');
@@ -130,6 +162,10 @@ static void handle_line(char *line)
     if (strcmp(line, "help") == 0) {
         printf("  ncm <关键词>  网易云搜索+播放 | ncmn <n> 播第n条\n"
                "  radio 回电台轮播 | st <n> 切台 | stop 停止\n"
+               "  note <文本>   记琐事 | notes 看全部 | adel <n> 删一条\n"
+               "  remind <秒> <文本> 定时提醒(到点语音播报) | time 校时状态\n"
+               "  skill <名> <json> 直接执行技能(零 LLM 成本调试)\n"
+               "  panel <0|1|2>  开关面板(0收起 1状态栏 2AI状态)\n"
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
 #endif
@@ -148,6 +184,62 @@ static void handle_line(char *line)
     } else if (strcmp(line, "stop") == 0) {
         app_player_stop();
         printf("  stopped\n");
+    } else if (strcmp(line, "time") == 0 || strcmp(line, "notes") == 0) {
+        cmd_assist_list();
+    } else if (strcmp(line, "note") == 0) {
+        if (arg == NULL || arg[0] == 0) {
+            printf("  用法: note <文本>\n");
+        } else {
+            uint32_t id = 0;
+            esp_err_t err = app_assist_add(arg, 0, &id);
+            printf("  note: %s (id=%u)\n", esp_err_to_name(err),
+                   (unsigned)id);
+        }
+    } else if (strcmp(line, "remind") == 0) {
+        /* remind <秒> <文本>: 秒级相对时间(测试友好, 语音走分钟) */
+        char *sp = arg ? strchr(arg, ' ') : NULL;
+        int secs = arg ? atoi(arg) : 0;
+        if (sp == NULL || secs <= 0) {
+            printf("  用法: remind <秒> <文本>\n");
+        } else if (!app_assist_time_synced()) {
+            printf("  时间未同步, 稍等 SNTP\n");
+        } else {
+            uint32_t id = 0;
+            esp_err_t err = app_assist_add(sp + 1,
+                                           app_assist_now() + secs, &id);
+            printf("  remind: %s (id=%u, %ds 后)\n", esp_err_to_name(err),
+                   (unsigned)id, secs);
+        }
+    } else if (strcmp(line, "adel") == 0) {
+        if (arg == NULL) {
+            printf("  用法: adel <编号>\n");
+        } else {
+            printf("  adel: %s\n",
+                   esp_err_to_name(app_assist_remove((uint32_t)atoi(arg))));
+        }
+    } else if (strcmp(line, "skill") == 0) {
+        /* skill <名> <json>: 直接路由到技能执行体(不经 LLM) */
+        char *sp = arg ? strchr(arg, ' ') : NULL;
+        if (arg == NULL || sp == NULL) {
+            printf("  用法: skill <名> <json>(如: skill memo.add "
+                   "{\"text\":\"买菜\"})\n");
+        } else {
+            *sp = 0;
+            cJSON *args = cJSON_Parse(sp + 1);
+            char reply[256];
+            esp_err_t err = ai_skill_exec(arg, args, reply, sizeof(reply));
+            cJSON_Delete(args);
+            printf("  skill %s: %s\n  reply: %s\n", arg,
+                   err == ESP_OK ? "ok" : esp_err_to_name(err), reply);
+        }
+    } else if (strcmp(line, "panel") == 0) {
+        /* 面板开关(无触摸期 CLI 入口): panel 1 状态栏 / 2 AI状态 / 0 收起 */
+        extern void ui_port_panel_req(int which);
+        int n = arg != NULL ? atoi(arg) : 0;
+        ui_port_panel_req(n == 0 ? 3 : n);
+        printf("  panel -> %d\n", n);
+    } else if (strcmp(line, "assistclear") == 0) {
+        printf("  clear: %s\n", esp_err_to_name(app_assist_clear()));
 #if CONFIG_ESP_CUBE_ENABLE_AI
     } else if (strcmp(line, "ask") == 0) {
         if (arg == NULL || arg[0] == 0) {

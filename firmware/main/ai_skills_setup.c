@@ -17,6 +17,7 @@
 #include "cubecore.h"
 #include "app_ncm.h"
 #include "app_player.h"
+#include "app_assist.h"
 #include "audio_mixer.h"
 
 static const char *TAG = "ai_skills";
@@ -207,6 +208,130 @@ static esp_err_t sk_player_stop(const cJSON *args, char *reply, size_t cap)
     return ESP_OK;
 }
 
+/* ================= M2 助理技能: 琐事/提醒 =================
+ * 存储与调度在 app_assist(NVS + 1s tick); 到点播报走 L5 接线的
+ * announcer → ai_session_announce。回执要口语化(fast_ack 直播)。 */
+
+static esp_err_t sk_memo_add(const cJSON *args, char *reply, size_t cap)
+{
+    const cJSON *t = cJSON_GetObjectItem(args, "text");
+    if (!cJSON_IsString(t) || t->valuestring[0] == 0) {
+        snprintf(reply, cap, "错误: 缺少 text 参数");
+        return ESP_ERR_INVALID_ARG;
+    }
+    uint32_t id = 0;
+    esp_err_t err = app_assist_add(t->valuestring, 0, &id);
+    if (err == ESP_OK) {
+        snprintf(reply, cap, "已记下:%s", t->valuestring);
+    } else {
+        snprintf(reply, cap, "记录失败(%s), 请稍后再试",
+                 esp_err_to_name(err));
+    }
+    return err;
+}
+
+static esp_err_t sk_reminder_add(const cJSON *args, char *reply, size_t cap)
+{
+    const cJSON *t = cJSON_GetObjectItem(args, "text");
+    if (!cJSON_IsString(t) || t->valuestring[0] == 0) {
+        snprintf(reply, cap, "错误: 缺少 text 参数");
+        return ESP_ERR_INVALID_ARG;
+    }
+    /* LLM 责任: 口语时间 → 绝对时间(time)或相对分钟(delay_minutes) */
+    int64_t due = 0;
+    const cJSON *dm = cJSON_GetObjectItem(args, "delay_minutes");
+    const cJSON *tm = cJSON_GetObjectItem(args, "time");
+    char when[48] = "";
+    if (cJSON_IsNumber(dm) && dm->valueint > 0) {
+        due = app_assist_now() + (int64_t)dm->valueint * 60;
+        snprintf(when, sizeof(when), "%d分钟后", dm->valueint);
+    } else if (cJSON_IsString(tm) && app_assist_parse_localtime(tm->valuestring, &due)) {
+        app_assist_fmt_speak(due, when, sizeof(when));
+    } else {
+        snprintf(reply, cap,
+                 "错误: 时间参数无效。time 必须是\"YYYY-MM-DD HH:MM\"格式"
+                 "(如 2026-11-13 10:00), 或改用 delay_minutes 整数分钟; "
+                 "两个参数只给一个");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!app_assist_time_synced()) {
+        snprintf(reply, cap, "错误: 设备时间还没校准, 请过一会儿再设");
+        return ESP_ERR_INVALID_STATE;
+    }
+    uint32_t id = 0;
+    esp_err_t err = app_assist_add(t->valuestring, due, &id);
+    if (err == ESP_OK) {
+        snprintf(reply, cap, "好的, 已定好提醒:%s, %s我会叫你",
+                 t->valuestring, when);
+    } else {
+        snprintf(reply, cap, "提醒设置失败(%s)", esp_err_to_name(err));
+    }
+    return err;
+}
+
+static esp_err_t sk_assist_list(const cJSON *args, char *reply, size_t cap)
+{
+    (void)args;
+    static assist_item_t items[ASSIST_MAX_ITEMS];  /* 会话任务单线程消费 */
+    int n = app_assist_list(items, ASSIST_MAX_ITEMS);
+    if (n == 0) {
+        snprintf(reply, cap, "目前没有记录任何琐事和提醒");
+        return ESP_OK;
+    }
+    /* 口播友好: 每类最多报 3 条, 超出报总数(逐条念 24 条会念到天荒地老,
+     * 回执同时给 LLM: 多了它会主动问用户要哪条) */
+    size_t off = 0;
+    int rem_shown = 0, memo_shown = 0, rem_total = 0, memo_total = 0;
+    for (int i = 0; i < n; i++) {
+        (items[i].due > 0) ? rem_total++ : memo_total++;
+    }
+    if (rem_total > 0) {
+        off += snprintf(reply + off, cap - off, "提醒%d条: ", rem_total);
+        for (int i = 0; i < n && rem_shown < 3 && off < cap - 96; i++) {
+            if (items[i].due <= 0) continue;
+            char when[32];
+            app_assist_fmt_compact(items[i].due, when, sizeof(when));
+            off += snprintf(reply + off, cap - off, "%s#%u %s %s",
+                            rem_shown++ ? "; " : "", (unsigned)items[i].id,
+                            when, items[i].text);
+        }
+        if (rem_total > rem_shown) {
+            off += snprintf(reply + off, cap - off, "; 等共%d条", rem_total);
+        }
+    }
+    if (memo_total > 0) {
+        off += snprintf(reply + off, cap - off, "%s琐事%d条: ",
+                        rem_total ? "。" : "", memo_total);
+        for (int i = 0; i < n && memo_shown < 3 && off < cap - 96; i++) {
+            if (items[i].due != 0) continue;
+            off += snprintf(reply + off, cap - off, "%s#%u %s",
+                            memo_shown++ ? "; " : "",
+                            (unsigned)items[i].id, items[i].text);
+        }
+        if (memo_total > memo_shown) {
+            off += snprintf(reply + off, cap - off, "; 等共%d条", memo_total);
+        }
+    }
+    snprintf(reply + off, cap - off, "。");
+    return ESP_OK;
+}
+
+static esp_err_t sk_assist_remove(const cJSON *args, char *reply, size_t cap)
+{
+    const cJSON *id = cJSON_GetObjectItem(args, "id");
+    if (!cJSON_IsNumber(id)) {
+        snprintf(reply, cap, "错误: 缺少 id 参数");
+        return ESP_ERR_INVALID_ARG;
+    }
+    esp_err_t err = app_assist_remove((uint32_t)id->valueint);
+    if (err == ESP_OK) {
+        snprintf(reply, cap, "已删除#%d", id->valueint);
+    } else {
+        snprintf(reply, cap, "没找到编号 %d 的记录", id->valueint);
+    }
+    return err;
+}
+
 void register_ai_skills(void)
 {
     cube_event_subscribe(sk_hint_evt_cb, NULL);
@@ -233,4 +358,38 @@ void register_ai_skills(void)
                       "\"required\":[\"level\"]}",
                       sk_set_volume);
     ai_skill_register("player.stop", "停止当前所有播放", NULL, sk_player_stop);
+    ai_skill_register("memo.add",
+                      "帮用户记一条琐事/备忘(用户说\"记一下/帮我记住/"
+                      "别忘了\"这类没有具体时间点的交代时用)",
+                      "{\"type\":\"object\",\"properties\":{"
+                      "\"text\":{\"type\":\"string\","
+                      "\"description\":\"要记住的内容, 保留用户原意\"}},"
+                      "\"required\":[\"text\"]}",
+                      sk_memo_add);
+    ai_skill_register("reminder.add",
+                      "设置定时提醒, 到点设备会主动语音提醒用户"
+                      "(用户说\"XX分钟后/明天早上八点/几点提醒我\"时用)",
+                      "{\"type\":\"object\",\"properties\":{"
+                      "\"text\":{\"type\":\"string\","
+                      "\"description\":\"提醒事项内容\"},"
+                      "\"time\":{\"type\":\"string\","
+                      "\"description\":\"提醒的绝对时间, 必须把用户的口语"
+                      "时间(明天早上八点/下周三下午三点半)换算成本地"
+                      "时间, 格式 YYYY-MM-DD HH:MM(24小时制)\"},"
+                      "\"delay_minutes\":{\"type\":\"integer\","
+                      "\"description\":\"距现在的分钟数(用户说几分钟后时"
+                      "优先用这个)\"}},"
+                      "\"required\":[\"text\"]}",
+                      sk_reminder_add);
+    ai_skill_register("assist.list",
+                      "列出已记录的所有琐事和提醒(带编号, 用户问\"我记了"
+                      "什么/有什么提醒\"时用; 编号用于删除/取消)",
+                      NULL, sk_assist_list);
+    ai_skill_register("assist.remove",
+                      "按编号删除一条琐事或取消一条提醒",
+                      "{\"type\":\"object\",\"properties\":{"
+                      "\"id\":{\"type\":\"integer\","
+                      "\"description\":\"assist.list 返回的编号\"}},"
+                      "\"required\":[\"id\"]}",
+                      sk_assist_remove);
 }

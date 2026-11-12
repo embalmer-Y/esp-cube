@@ -133,7 +133,7 @@ menu "EspCube Configuration"
 
     config ESP_CUBE_AI_LLM_SYSTEM
         string "LLM 系统提示词(角色人格, 可空)"
-        default "你是 EspCube 桌面AI音箱, 回答简洁口语化, 不超过三句话。"
+        default "你是贴心的桌面语音助理, 能点歌放电台、记琐事、定提醒、闲聊陪伴与情绪疏导。回答简洁口语化, 不超过三句话。"
 
     config ESP_CUBE_AI_TTS_MODEL
         string "TTS 模型(cosyvoice)"
@@ -146,6 +146,25 @@ menu "EspCube Configuration"
     config ESP_CUBE_AI_TTS_RATE
         int "TTS 输出采样率(16000/24000)"
         default 16000
+
+    config ESP_CUBE_ENABLE_SOUL
+        bool "灵魂内核(驱力+九维情绪+记忆, 移植 Kaleido)"
+        default y
+        depends on ESP_CUBE_ENABLE_AI
+        help
+            1Hz 确定性情感动力学: 三驱力内稳态(social/stim/rest) →
+            九维感受态(valence/arousal/...) → 每轮 LLM prompt 注入
+            内在状态 + mood 标签回写 + TTS 语速/音高调制 + UI 情绪
+            事件; 附轻量情节记忆(NVS, top-3 注入)。关闭则全部旁路。
+
+    config ESP_CUBE_SOUL_PROACTIVE
+        bool "主动交互(点火: 闲置时主动搭话)"
+        default n
+        depends on ESP_CUBE_ENABLE_SOUL
+        help
+            Kaleido ignition 防打扰框架: 五因子打分 + 勿扰时段 +
+            日配额 + 冷静期, 触发后 LLM 深思单句 → 带外播报。
+            默认关(验收后再开, 避免意外说话)。
 
     # ============ 网络 ============
     config ESP_CUBE_WIFI_SSID

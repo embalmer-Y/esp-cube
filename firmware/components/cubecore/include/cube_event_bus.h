@@ -43,7 +43,32 @@ typedef enum {
     CUBE_EVT_AI_TEXT,        /* AI 文本(字幕/表情), payload: char*(临时) */
     CUBE_EVT_AI_TOOL_HINT,   /* 工具参数流式提示(speculative 预取),
                                 payload: cube_ai_tool_hint_t(临时) */
+    /* 助理服务(app_assist) */
+    CUBE_EVT_TIME_SYNCED,    /* SNTP 首次校时成功, payload: NULL */
+    CUBE_EVT_ASSIST_CHANGED, /* 琐事/提醒增删/到点移除, payload: NULL(UI 重拉) */
+    CUBE_EVT_REMINDER_FIRED, /* 提醒到点, payload: cube_reminder_t(临时) */
+    /* 灵魂(app_soul) */
+    CUBE_EVT_SOUL_MOOD,      /* 情绪快照(节流: anim_tag 变化或 60s) */
 } cube_evt_id_t;
+
+/* 提醒到点(CUBE_EVT_REMINDER_FIRED payload; 与 app_assist 存储解耦,
+ * UI/日志只消费此快照) */
+typedef struct {
+    uint32_t id;
+    int64_t  due;            /* unix 秒 */
+    char     text[128];
+} cube_reminder_t;
+
+/* 情绪快照(CUBE_EVT_SOUL_MOOD payload; anim_tag 词表: happy/relaxed/
+ * angry/sad/surprised/confused/sleepy —— valence×arousal 平面查表) */
+typedef struct {
+    char  anim_tag[16];
+    float valence;           /* [-1,1] */
+    float arousal;           /* [0,1] */
+    float urgency;           /* [0,1] */
+    float social_bond;       /* [0,1] 互动强度积分 */
+    bool  ethics_latched;    /* 安抚模式(只允许温柔语气) */
+} cube_soul_mood_t;
 
 /* AVRCP 曲目元数据(蓝牙播放页显示用) */
 typedef struct {

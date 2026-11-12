@@ -88,6 +88,20 @@ typedef struct {
     ui_ai_state_t ai_state;
     char ai_text[UI_SUB_LEN];      /* 最近一次 ASR/AI 文本 */
 
+    /* 助理服务(M2/M3): 时间/琐事/提醒/灵魂情绪(后端单写者) */
+    bool time_synced;              /* SNTP 已校时 */
+    uint8_t hour, min;             /* 本地时间(1Hz 刷新) */
+    uint8_t mon, day, wday;        /* 月/日/周(日粒度刷新) */
+    uint8_t memo_cnt, remind_cnt;  /* 在册琐事/待触发提醒数 */
+    char next_remind[UI_STR_LEN];  /* 最近一条提醒文本(空 = 无) */
+    int32_t next_remind_in_min;    /* 距其分钟数; <0 = 无 */
+    char mood_tag[16];             /* happy/relaxed/angry/sad/
+                                    * surprised/confused/sleepy; 空 = 无 */
+
+    /* 命令(后端写, UI 轮询消费后缓存去重; 0=无 1=开状态栏 2=开AI状态
+     * 3=收起 —— P4C5 无触摸期的 CLI/语音入口, sim/真触摸同样可用) */
+    int panel_req;
+
     /* 杂项 */
     char fw_info[32];              /* 版本/构建信息 */
 } ui_model_t;

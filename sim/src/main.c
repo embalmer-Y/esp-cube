@@ -35,6 +35,9 @@ static bool s_running = true;
 static bool s_demo_mode;
 static int s_mouse_x, s_mouse_y;
 static bool s_mouse_down;
+static bool s_swipe_active;
+static uint32_t s_swipe_t0, s_swipe_dur;
+static int s_swipe_x0, s_swipe_y0, s_swipe_x1, s_swipe_y1;
 static int s_wheel_acc;
 
 /* ================= 截图(RGB565 → BMP24) ================= */
@@ -98,6 +101,29 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px)
         SDL_RenderPresent(s_rend);
     }
     lv_display_flush_ready(disp);
+}
+
+void sim_swipe_playback(int dy)   /* dy>0 下滑 / dy<0 上滑 */
+{
+    s_swipe_x0 = s_swipe_x1 = 230;
+    s_swipe_y0 = 230 - dy / 2;
+    s_swipe_y1 = 230 + dy / 2;
+    s_mouse_x = s_swipe_x0; s_mouse_y = s_swipe_y0;
+    s_mouse_down = true;
+    s_swipe_t0 = SDL_GetTicks();
+    s_swipe_dur = 350;
+    s_swipe_active = true;
+}
+
+void sim_tap_playback(void)       /* 短按即放(单击收起) */
+{
+    s_mouse_x = s_mouse_y = 230;
+    s_mouse_down = true;
+    s_swipe_t0 = SDL_GetTicks();
+    s_swipe_dur = 80;
+    s_swipe_x0 = s_swipe_x1 = 230;
+    s_swipe_y0 = s_swipe_y1 = 230;
+    s_swipe_active = true;
 }
 
 static void pointer_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
@@ -235,6 +261,19 @@ int main(int argc, char **argv)
                 }
                 break;
             case SDL_KEYDOWN: handle_key(ev.key.keysym.sym); break;
+            }
+        }
+
+        /* 合成输入回放(demo 时间线驱动; 无真鼠标也可测面板手势) */
+        if (s_swipe_active) {
+            uint32_t t = SDL_GetTicks() - s_swipe_t0;
+            if (t >= s_swipe_dur) {
+                s_mouse_x = s_swipe_x1; s_mouse_y = s_swipe_y1;
+                s_mouse_down = false;
+                s_swipe_active = false;
+            } else {
+                s_mouse_x = s_swipe_x0 + (s_swipe_x1 - s_swipe_x0) * (int)t / (int)s_swipe_dur;
+                s_mouse_y = s_swipe_y0 + (s_swipe_y1 - s_swipe_y0) * (int)t / (int)s_swipe_dur;
             }
         }
 

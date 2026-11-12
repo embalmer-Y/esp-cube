@@ -1,15 +1,9 @@
 /*
- * ui_pages.c —— 极简氛围 UI: 场景切换/主循环/启动页/构建入口
+ * ui_pages.c —— 虚拟角色 UI: 主循环/启动页/构建入口
  *
- * 设计原则(2026-11-11 定稿): 屏幕小(2寸 460×460), 不做传统控件界面 ——
- *   整屏就是一个"正在播放"的动画舞台:
- *   · 电台/纯音乐: 一条随音频跳动的发光直线(频谱动画, 全屏主角)
- *   · BT 音乐有歌词: 歌词动画(当前行飞入/下一行预示), 直线让位
- *   · 待机: 直线呼吸 + 微弱品牌标
- *   · 上下滑动 = 调音量(实时 HUD), 左右滑动 = 切曲目/电台(带 toast)
- *
- * 本文件只做场景编排; 渲染在 ui_render.c, 歌词在 ui_lyrics.c,
- * 部件/手势在 ui_widget.c(共享状态见 ui_internal.h)。
+ * M4 重设计(2026-11-12 用户定案): 无多场景机器 —— 全屏动画表情常驻,
+ * 下滑状态栏 / 上滑 AI 状态(见 ui_widget.c); 音频可视化(频谱直线/
+ * 歌词飞行)已退役。本文件只做: splash → 主屏 → 30fps 快照同步。
  * 平台无关: 固件/模拟器同源编译。
  */
 #include "ui_pages.h"
@@ -23,22 +17,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-/* ================= EFC 表情动画(IDLE 场景主角; P4C5 默认开) =================
- * esp_efc_codec lv_efc 控件: RGB565 无损 tile 编码动画。嵌入素材 =
- * 乐鑫 test_app giphy_z.efc(480×480, zlib 容器); sim 无 sdkconfig.h 时
- * 整段不参与编译(__has_include 门控, ui 子树平台无关惯例)。 */
-#if __has_include("sdkconfig.h")
-#include "sdkconfig.h"
-#endif
-#if CONFIG_ESP_CUBE_ENABLE_EFC
-#include "lv_efc.h"
-extern const uint8_t giphy_z_efc_start[] asm("_binary_giphy_z_efc_start");
-extern const uint8_t giphy_z_efc_end[] asm("_binary_giphy_z_efc_end");
-#define EFC_DEMO_SIZE       300             /* 控件边长(素材480 等比缩小, P4 走 PPA) */
-#define EFC_FRAME_DELAY_MS  50              /* .efc 不存帧率, 应用侧设定 */
-static lv_obj_t *s_efc_player;
-#endif
-
 ui_page_t ui_pg;
 
 /* ================= 启动页(仅本文件使用) ================= */
@@ -49,69 +27,12 @@ static lv_color16_t *s_buf_splash;          /* SPLASH_CUBE^2 */
 static void cube_draw(lv_color16_t *buf, int size, float ax, float ay,
                       float scale, uint8_t r, uint8_t g, uint8_t b);
 
-/* ============================================================ */
-/*                     场景切换                                  */
-/* ============================================================ */
-static void scene_apply(int scene)
-{
-    if (scene == ui_pg.last_scene) return;
-    int prev = ui_pg.last_scene;
-    ui_pg.last_scene = scene;
-    ui_pg.scene = scene;
-
-#if CONFIG_ESP_CUBE_ENABLE_EFC
-    /* EFC 表情: IDLE 场景播放, 其余场景暂停并隐藏(首帧场景也生效) */
-    if (scene == SCENE_IDLE) {
-        lv_obj_clear_flag(s_efc_player, LV_OBJ_FLAG_HIDDEN);
-        lv_efc_resume(s_efc_player);
-        if (prev != -1) ui_fade_in(s_efc_player, 10, 300);
-    } else {
-        lv_efc_pause(s_efc_player);
-        lv_obj_add_flag(s_efc_player, LV_OBJ_FLAG_HIDDEN);
-    }
-#endif
-
-    if (prev == -1) return;                 /* 启动页后首帧不做退场动画 */
-    if (scene == SCENE_IDLE) {
-        ui_fade_in(ui_w.brand, 6, 300);
-        if (prev == SCENE_LYRICS) ui_lyric_fly_out();   /* 尾句飞离 */
-        else lv_obj_add_flag(ui_lyr.img_cur, LV_OBJ_FLAG_HIDDEN);
-        ui_fade_out(ui_lyr.lbl_next, 260);
-        ui_fade_out(ui_w.title, 260);
-        ui_fade_out(ui_w.artist, 260);
-        if (prev == SCENE_SPECTRUM || prev == SCENE_LYRICS) {
-            ui_fade_out(ui_w.station, 400);
-        }
-    } else {
-        ui_fade_out(ui_w.brand, 200);
-        if (scene == SCENE_LYRICS) {
-            /* 歌词是唯一主角: 直线让位(每帧不再画), 清掉残留帧 */
-            if (ui_gfx.buf != NULL) {
-                memset(ui_gfx.buf, 0, sizeof(uint32_t) * LINE_W * LINE_H);
-                lv_obj_invalidate(ui_gfx.canvas);
-            }
-            lv_obj_set_style_opa(ui_lyr.lbl_next, 255, 0);
-        } else {
-            if (prev == SCENE_LYRICS) ui_lyric_fly_out();  /* 切纯音乐: 句尾飞离 */
-            else lv_obj_add_flag(ui_lyr.img_cur, LV_OBJ_FLAG_HIDDEN);
-            ui_fade_out(ui_lyr.lbl_next, 260);
-        }
-    }
-}
-
 /* 快照轮询(30fps) + 变更检测 */
 static void model_sync(const ui_model_t *m)
 {
-    bool playing = m->player == UI_PLAYER_PLAYING ||
-                   (m->source == UI_SRC_BT && m->bt_connected);
-    int scene = !playing ? SCENE_IDLE
-              : (m->source == UI_SRC_BT && m->has_lyrics) ? SCENE_LYRICS
-              : SCENE_SPECTRUM;
-    scene_apply(scene);
-    ui_info_apply(m);
-    ui_lyrics_apply(m);
-    ui_ai_apply(m);
-    ui_volume_sync(m->volume);
+    ui_face_apply(m);       /* 表情: 情绪底色 + 会话状态帧速 */
+    ui_status_apply(m);     /* 状态栏: 时钟/网络/音量条 */
+    ui_soul_apply(m);       /* AI 状态: 心情/三条/字幕/待办 */
 }
 
 /* ============================================================ */
@@ -122,10 +43,6 @@ static void master_timer_cb(lv_timer_t *t)
     (void)t;
     const ui_model_t *m = ui_model();
     ui_pg.tick_cnt++;
-
-    bool playing = m->player == UI_PLAYER_PLAYING ||
-                   (m->source == UI_SRC_BT && m->bt_connected);
-    ui_bands_update(playing);
 
     if (ui_pg.splash_active) {
         uint32_t el = ui_pg.tick_cnt * 33;
@@ -156,9 +73,6 @@ static void master_timer_cb(lv_timer_t *t)
         return;
     }
 
-    if (ui_pg.scene != SCENE_LYRICS) {
-        ui_line_draw(m);                    /* 歌词场景: 直线让位 */
-    }
     model_sync(m);
 }
 
@@ -237,7 +151,7 @@ static lv_obj_t *splash_create(void)
     lv_obj_align(s_splash_title, LV_ALIGN_CENTER, 0, 66);
 
     s_splash_sub = ui_label_make(scr, FONT_M14, C_TXT2);
-    lv_label_set_text(s_splash_sub, "AI CUBE SPEAKER");
+    lv_label_set_text(s_splash_sub, "AI VOICE COMPANION");
     lv_obj_set_style_text_opa(s_splash_sub, 0, 0);
     lv_obj_align(s_splash_sub, LV_ALIGN_CENTER, 0, 100);
 
@@ -260,56 +174,18 @@ static lv_obj_t *splash_create(void)
 /* ============================================================ */
 void ui_pages_create(int w, int h)
 {
-    /* 状态初值(等价原 static 声明处的初始化器; 全局零 init 不够) */
     ui_pg.splash_active = true;
-    ui_pg.last_scene = -1;
     ui_pg.screen_w = w > 0 ? w : 460;
     ui_pg.screen_h = h > 0 ? h : 460;
-    ui_gfx.prev_y0 = LINE_H;
-    ui_gfx.prev_y1 = -1;
-    memset(ui_w.last_title, 0, sizeof(ui_w.last_title));
-    ui_w.last_title[0] = 0x01;          /* 非空哨兵: 首次同步必触发 */
-    ui_w.last_artist[0] = 0x01;
-    ui_lyr.last[0] = 0x01;
-    ui_lyr.last_next[0] = 0x01;
-    ui_w.last_volume = -1;
-    ui_w.last_station = -1;
-    ui_w.last_station_num = -1;
-    ui_w.last_source = -1;
-    ui_w.last_player = -1;
-    ui_w.last_ai_state = -1;
-    ui_w.rng = lv_tick_get() | 1u;      /* |1 保证非零种子 */
-    ui_render_tables_init();            /* 倒数表/光盘 sprite/频带边界 */
+    memset(&ui_w, 0, sizeof(ui_w));        /* 面板收起态/缓存全零 */
+    ui_w.rng = lv_tick_get() | 1u;          /* |1 保证非零种子 */
 
     /* ---- 主屏 ---- */
     ui_pg.scr_main = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(ui_pg.scr_main, lv_color_hex(C_BG), 0);
 
-    ui_render_create(ui_pg.scr_main);      /* 音频直线画布(ARGB) */
-    ui_widget_create(ui_pg.scr_main);      /* 品牌标/toast/AI/标题/HUD */
-    ui_lyrics_create(w);                   /* 歌词层(layer_top) */
+    ui_widget_create(ui_pg.scr_main);       /* 表情层 + 双面板 */
     ui_widget_gesture_register(ui_pg.scr_main);
-
-#if CONFIG_ESP_CUBE_ENABLE_EFC
-    /* IDLE 场景表情动画: 嵌入 blob(EMBED_FILES → flash rodata, 控件内
-     * 部再拷入 PSRAM); 等比缩小 480→300(P4 PPA 加速路径); 循环播放 */
-    s_efc_player = lv_efc_create(ui_pg.scr_main);
-    lv_obj_set_size(s_efc_player, EFC_DEMO_SIZE, EFC_DEMO_SIZE);
-    lv_obj_align(s_efc_player, LV_ALIGN_CENTER, 0, -20);
-    lv_image_set_inner_align(s_efc_player, LV_IMAGE_ALIGN_CONTAIN_DOWNSCALE);
-    lv_efc_set_src_data(s_efc_player, giphy_z_efc_start,
-                        (size_t)(giphy_z_efc_end - giphy_z_efc_start));
-    lv_efc_set_loop_enabled(s_efc_player, true);
-    lv_efc_set_frame_delay(s_efc_player, EFC_FRAME_DELAY_MS);
-    if (lv_efc_is_loaded(s_efc_player)) {
-        lv_efc_play(s_efc_player);
-        LV_LOG_INFO("efc: demo clip ok, %d frames @%dms",
-                    (int)lv_efc_get_total_frames(s_efc_player), EFC_FRAME_DELAY_MS);
-    } else {
-        LV_LOG_WARN("efc: demo clip load failed, idle scene falls back");
-        lv_obj_add_flag(s_efc_player, LV_OBJ_FLAG_HIDDEN);
-    }
-#endif
 
     /* ---- 启动页 ---- */
     lv_obj_t *scr_splash = splash_create();

@@ -3,7 +3,7 @@ set(main_priv_reqs
     cubecore boardcfg
     drv_display drv_audio
     app_audio app_player app_net app_ncm app_ui
-    app_bt app_voice app_ai_session ai_skills
+    app_bt app_voice app_ai_session ai_skills app_assist app_soul
     espressif__esp_lvgl_port
     nvs_flash esp_wifi esp_event esp_netif esp_timer esp_driver_uart
 )

@@ -263,7 +263,38 @@ void mock_app_action(sim_action_t a)
         s_ai_t0 = s_now;
         printf("[mock] AI session demo\n");
         break;
+    case SIM_ACT_SWIPE_DOWN:
+        sim_swipe_playback(200);
+        break;
+    case SIM_ACT_SWIPE_UP:
+        sim_swipe_playback(-200);
+        break;
+    case SIM_ACT_TAP:
+        sim_tap_playback();
+        break;
     }
+}
+
+/* ================= 助理服务演示拍(时间/待办/情绪, M4) ================= */
+static void assist_demo_tick(void)
+{
+    /* 时钟: 每整分跳; 日期固定(演示) */
+    s_model.time_synced = true;
+    static uint32_t base = 9 * 60 + 41;          /* 09:41 起 */
+    uint32_t m = base + s_now / 1000;
+    s_model.hour = m / 60;
+    s_model.min = m % 60;
+    s_model.mon = 11; s_model.day = 12; s_model.wday = 4;
+    /* 待办: 固定两条演示 */
+    s_model.memo_cnt = 2;
+    s_model.remind_cnt = 1;
+    snprintf(s_model.next_remind, UI_STR_LEN, "%s", "取快递");
+    int32_t left = 25 - (int32_t)(s_now / 1000);
+    s_model.next_remind_in_min = left;
+    /* 情绪: 每 6s 轮播一档(HOME 光环演示) */
+    static const char *tags[] = { "relaxed", "happy", "sleepy", "sad" };
+    snprintf(s_model.mood_tag, sizeof(s_model.mood_tag), "%s",
+             tags[(s_now / 6000) % 4]);
 }
 
 /* ================= AI 会话演示脚本(状态时间线) ================= */
@@ -321,35 +352,21 @@ typedef struct {
  *   fly_in 480ms / fly_out 420ms → 14450..14930 密集连拍 */
 static const demo_step_t s_demo_steps[] = {
     { 1200,  DEMO_NONE,              "01_splash" },
-    { 3600,  SIM_ACT_TOGGLE_PLAY,    NULL },         /* 开电台(仅一次) */
-    { 5000,  DEMO_NONE,              "02_radio_connecting" },
-    /* 直线频谱跳动连拍(8600 起每 120ms) */
-    { 8600,  DEMO_NONE,              "10_line_a" },
-    { 8720,  DEMO_NONE,              "10_line_b" },
-    { 8840,  DEMO_NONE,              "10_line_c" },
-    { 8960,  DEMO_NONE,              "10_line_d" },
-    { 9200,  SIM_ACT_NEXT_STATION,   NULL },
-    /* toast 滑入连拍(动作后 80/200ms) */
-    { 9280,  DEMO_NONE,              "11_toast_a" },
-    { 9420,  DEMO_NONE,              "11_toast_b" },
-    { 10200, SIM_ACT_BT_TOGGLE,      NULL },         /* BT 接管: 晴天(歌词) */
-    { 11200, DEMO_NONE,              "05_bt_lyrics" },
-    /* 歌词切句(14401)交叉飞行连拍: 飞入 480ms / 飞离 420ms */
-    { 14450, DEMO_NONE,              "12_fly_050ms" },
-    { 14550, DEMO_NONE,              "12_fly_150ms" },
-    { 14650, DEMO_NONE,              "12_fly_250ms" },
-    { 14750, DEMO_NONE,              "12_fly_350ms" },
-    { 14850, DEMO_NONE,              "12_fly_450ms" },
-    { 15300, DEMO_NONE,              "12_fly_settled" },
-    { 15600, SIM_ACT_BT_META,        NULL },         /* 切纯音乐 Summer */
-    { 16600, DEMO_NONE,              "07_bt_instrumental" },
-    { 17200, SIM_ACT_VOL_DOWN,       NULL },
-    { 17300, SIM_ACT_VOL_DOWN,       NULL },
-    { 17600, DEMO_NONE,              "08_volume_hud" },
-    { 18000, SIM_ACT_BT_TOGGLE,      NULL },         /* 断 BT → 电台恢复 */
-    { 18600, SIM_ACT_TOGGLE_PLAY,    NULL },         /* 停电台 → 待机 */
-    { 19800, DEMO_NONE,              "09_idle" },
-    /* AI 会话演示: 聆听(20300+0)/思考(+1200)/回答(+2200)/回 IDLE(+4600) */
+    { 3600,  SIM_ACT_TOGGLE_PLAY,    NULL },         /* 开电台 */
+    { 5000,  DEMO_NONE,              "02_face_music" },
+    { 9200,  SIM_ACT_NEXT_STATION,   NULL },         /* 切台(表情常驻) */
+    { 9600,  DEMO_NONE,              "03_face_station" },
+    { 10200, SIM_ACT_VOL_DOWN,       NULL },
+    { 10600, DEMO_NONE,              "04_face_vol" },
+    /* 下滑状态栏(350ms 滑动 + 落定) */
+    { 12000, SIM_ACT_SWIPE_DOWN,     NULL },
+    { 12800, DEMO_NONE,              "20_status_panel" },
+    /* 单击收起 + 上滑 AI 状态 */
+    { 14100, SIM_ACT_TAP,            NULL },
+    { 14300, SIM_ACT_SWIPE_UP,       NULL },
+    { 15100, DEMO_NONE,              "21_soul_panel" },
+    { 16400, DEMO_NONE,              "22_soul_panel_late" },
+    /* AI 会话演示: 聆听/思考/回答(表情帧速变化) */
     { 20300, SIM_ACT_AI_ASK,         NULL },
     { 20600, DEMO_NONE,              "13_ai_listening" },
     { 21900, DEMO_NONE,              "13_ai_thinking" },
@@ -425,6 +442,7 @@ void mock_app_periodic(uint32_t now_ms_val)
 
     lyrics_tick();
     ai_demo_tick();
+    assist_demo_tick();
 
     if (s_demo) demo_tick();
 }
