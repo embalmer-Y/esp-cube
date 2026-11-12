@@ -517,14 +517,19 @@ static void tts_task(void *arg)
         }
 #endif /* RT */
         /* 排空上报: 已收口且缓冲排空 → 本轮语音播完; 若 15s 仍未排空
-         * (PCM 流中途停滞) 也强制收口, 不让会话卡死在 SPEAKING */
+         * (PCM 流中途停滞) 也强制收口, 不让会话卡死在 SPEAKING。
+         * ⚠ 双层水位: 生产者环(s_ring)排空 ≠ 播完 —— mixer 源环里还有
+         * 存量(网络 PCM 快于实时时积压数秒), 必须等混音环也近排空再报
+         * DONE, 否则 ducking 提前解除 → 电台叠语音尾巴 + 突变噪音
+         * (2026-11-12 用户实测)。余量 4KB≈20ms@48kstereo, 人耳无感 */
         if (s_tts_armed && s_tts_closed && !s_abort_req &&
             s_state == AI_SPEAKING &&
 #if CONFIG_ESP_CUBE_AI_RT_ENABLE
             (s_rt_ring == NULL || s_rt_r == s_rt_w) &&   /* 快线也排空 */
 #endif
             (s_ring_r == s_ring_w ||
-             esp_timer_get_time() - s_tts_armed_us > 15000000)) {
+             esp_timer_get_time() - s_tts_armed_us > 15000000) &&
+            audio_mixer_source_buffered(s_tts_src) <= 4096) {
             if (s_ring_r != s_ring_w) {
                 ESP_LOGW(TAG, "tts drain timeout, force done");
                 s_ring_r = s_ring_w;

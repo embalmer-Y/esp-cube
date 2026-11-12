@@ -160,6 +160,11 @@ void audio_mixer_set_source_active(audio_source_handle_t src, bool active)
     src->gating_full = true;
 }
 
+size_t audio_mixer_source_buffered(audio_source_handle_t src)
+{
+    return (src == NULL) ? 0 : cube_ringbuf_available(src->rb);
+}
+
 /* ================= 混音主循环 ================= */
 static uint32_t s_tick_count;   /* 混音节拍累计(应≈100/s, 用于验证输出时钟) */
 

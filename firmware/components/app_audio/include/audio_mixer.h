@@ -62,6 +62,10 @@ void audio_mixer_set_source_active(audio_source_handle_t src, bool active);
 /* 取最近输出的 frames 帧拷贝(UI 频谱), 无新数据返回 false */
 bool audio_mixer_take_spectrum(int16_t *out, int frames);
 
+/* 源已缓冲未播字节数(排空判定用): 生产者环排空 ≠ 已播完, 混音环
+ * 还有存量 —— 提前判完会令 ducking 过早解除(电台叠语音尾巴, 2026-11-12) */
+size_t audio_mixer_source_buffered(audio_source_handle_t src);
+
 /* 注册 AEC 参考抽头(app_voice 在里程碑2调用; fn 在混音任务上下文执行, 不得阻塞) */
 typedef void (*audio_ref_sink_fn)(const int16_t *stereo, int frames, void *user_ctx);
 void audio_mixer_set_ref_sink(audio_ref_sink_fn fn, void *user_ctx);
