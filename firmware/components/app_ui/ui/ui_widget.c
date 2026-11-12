@@ -31,6 +31,12 @@ extern const uint8_t giphy_z_efc_end[]   asm("_binary_giphy_z_efc_end");
 
 ui_widget_t ui_w;
 
+/* 设备后端(ui_port_esp)取表情控件句柄(类型不外泄) */
+lv_obj_t *ui_face_efc_obj(void)
+{
+    return ui_w.face_efc;
+}
+
 enum { AXIS_NONE = 0, AXIS_V, AXIS_SWITCH };
 
 /* ============================================================ */

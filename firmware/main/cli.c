@@ -31,6 +31,8 @@
 #include "app_player.h"
 #include "app_assist.h"
 #include "app_storage.h"
+#include "esp_http_client.h"
+#include "esp_heap_caps.h"
 #include "ai_skills.h"
 #include "sdkconfig.h"
 #if CONFIG_ESP_CUBE_ENABLE_AI
@@ -151,6 +153,45 @@ static void cmd_assist_list(void)
     }
 }
 
+/* wget: 局域网 http 拉文件到 SD(素材/配置传输通道, ≤5MB PSRAM 缓冲) */
+static void cmd_wget(const char *arg)
+{
+    if (arg == NULL || arg[0] == 0) {
+        printf("  用法: wget <url> [rel](如 wget http://192.168.2.6:8000/cat.efc face/cat)\n");
+        return;
+    }
+    char url[192], rel[80] = "";
+    int n = sscanf(arg, "%191s %79s", url, rel);
+    if (n < 1) { printf("  url 解析失败\n"); return; }
+    char *slash = strrchr(url, '/');
+    if (n < 2 && slash != NULL) {
+        snprintf(rel, sizeof(rel), "face/%s", slash + 1);
+    }
+    esp_http_client_config_t hc = { .url = url, .timeout_ms = 15000 };
+    esp_http_client_handle_t c = esp_http_client_init(&hc);
+    if (c == NULL) { printf("  http init fail\n"); return; }
+    esp_err_t e = esp_http_client_open(c, 0);
+    int64_t total = (e == ESP_OK) ? esp_http_client_fetch_headers(c) : -1;
+    if (e != ESP_OK || total <= 0 || total > 5 * 1024 * 1024) {
+        printf("  fetch fail/过大: %s(%lldB)\n", esp_err_to_name(e), (long long)total);
+        esp_http_client_cleanup(c);
+        return;
+    }
+    char *buf = heap_caps_malloc((size_t)total, MALLOC_CAP_SPIRAM);
+    if (buf == NULL) { esp_http_client_cleanup(c); printf("  oom\n"); return; }
+    int64_t got = 0;
+    while (got < total) {
+        int r = esp_http_client_read(c, buf + got, (size_t)(total - got));
+        if (r <= 0) break;
+        got += r;
+    }
+    esp_http_client_cleanup(c);
+    e = (got == total) ? app_storage_write(rel, buf, (size_t)got) : ESP_FAIL;
+    free(buf);
+    printf("  wget %s: %d/%lldB -> %s\n", rel, (int)got,
+           (long long)total, esp_err_to_name(e));
+}
+
 static void handle_line(char *line)
 {
     char *sp = strchr(line, ' ');
@@ -258,6 +299,24 @@ static void handle_line(char *line)
                    ai_session_tts_voice());
         }
 #endif
+    } else if (strcmp(line, "face") == 0) {
+        /* 表情素材热切: face <名> = /sdcard/face/<名>.efc(M4+ 素材库) */
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+        if (arg == NULL || arg[0] == 0) {
+            printf("  用法: face <名>(SD face/ 下不含 .efc 后缀, 如 face idle)\n");
+        } else {
+            extern esp_err_t ui_port_face_req(const char *rel);
+            esp_err_t e = ui_port_face_req(arg);
+            printf("  face %s: %s(结果见 uiport 日志)\n", arg,
+                   e == ESP_OK ? "已提交" : esp_err_to_name(e));
+        }
+#else
+        printf("  face: EFC 未启用\n");
+#endif
+    } else if (strcmp(line, "wget") == 0) {
+        /* 素材/配置传输通道: wget <url> [相对路径](缺省 face/下载名.efc);
+         * PC 侧 python3 -m http.server 配合, http 明文(局域网) */
+        cmd_wget(arg);
     } else if (strcmp(line, "sdretry") == 0) {
         /* SD 台调: sdretry [0|1] 0=SDMMC slot0 / 1=SDSPI(SPI2);
          * 失败可反复重试(插拔卡后无需重启) */

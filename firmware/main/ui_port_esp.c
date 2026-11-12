@@ -24,11 +24,14 @@
 #include "app_player.h"
 #include "app_bt.h"
 #include "app_assist.h"
+#include "app_storage.h"
+#include <stdlib.h>
 #include "app_ui.h"
 #include "drv_display.h"
 #include "drv_audio.h"
 #include "drv_touch.h"
 #include "esp_lvgl_port.h"
+#include "lv_efc.h"
 
 static const char *TAG = "uiport";
 
@@ -183,6 +186,8 @@ static void port_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     }
 }
 
+static void face_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx);
+
 /* ---- 初始化(main 在 app_ui_start 之前调用) ---- */
 esp_err_t ui_port_init(void)
 {
@@ -207,6 +212,7 @@ esp_err_t ui_port_init(void)
         ESP_LOGE(TAG, "evt subscribe: %s", esp_err_to_name(err));
         return err;
     }
+    cube_event_subscribe(face_sd_evt_cb, NULL);   /* SD 就绪自动换脸 */
     /* 1s 时钟拍(时间/倒计时; M4 助理主页) */
     esp_timer_handle_t tick;
     const esp_timer_create_args_t ta = {
@@ -272,6 +278,85 @@ esp_err_t ui_port_touch_start(void)
 void ui_port_panel_req(int which)
 {
     s_model.panel_req = which;
+}
+
+/* ---- 表情素材热载(M4+/docs/09 face/ 目录) ----
+ * SD 上的 .efc → PSRAM 缓冲 → lv_efc_set_src_data; 替换烧录换动画。
+ * 生命周期: 缓冲读完即转交控件(imgdsc 引用), 不再单独释放(常驻)。 */
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+esp_err_t ui_port_face_load(const char *rel)
+{
+    extern lv_obj_t *ui_face_efc_obj(void);   /* ui_widget.c getter(类型不外泄) */
+    char path[80];
+    snprintf(path, sizeof(path), "face/%s.efc", rel);
+    size_t len = 0;
+    char *buf = app_storage_read(path, &len);   /* PSRAM 侧堆(SPIRAM 优先) */
+    if (buf == NULL) {
+        ESP_LOGW(TAG, "face '%s' 不存在/读取失败(保留当前)", rel);
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (!lvgl_port_lock(pdMS_TO_TICKS(500))) {
+        free(buf);
+        return ESP_ERR_TIMEOUT;
+    }
+    lv_obj_t *efc = ui_face_efc_obj();
+    lv_efc_set_src_data(efc, buf, len);
+    bool ok = lv_efc_is_loaded(efc);
+    if (ok) {
+        lv_efc_set_loop_enabled(efc, true);
+        lv_efc_set_frame_delay(efc, 55);
+        lv_efc_play(efc);
+        ESP_LOGI(TAG, "face '%s' 播放中(%uKB)", rel, (unsigned)(len / 1024));
+    } else {
+        ESP_LOGW(TAG, "face '%s' 解析失败(格式/版本?), 保留当前", rel);
+    }
+    lvgl_port_unlock();
+    return ok ? ESP_OK : ESP_FAIL;
+}
+
+static void face_load_task(void *arg);   /* 前向(定义在其后) */
+
+/* CLI face 命令入口: 异步化(CLI 任务栈浅, EFC 解析深链同步调会溢出) */
+esp_err_t ui_port_face_req(const char *rel)
+{
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+    char *r = strdup(rel);
+    if (r == NULL) return ESP_ERR_NO_MEM;
+    if (xTaskCreate(face_load_task, "faceload", 8192, r, 5, NULL) != pdPASS) {
+        free(r);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+#else
+    (void)rel;
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+static void face_load_task(void *arg)
+{
+    char *rel = (char *)arg;
+    ui_port_face_load(rel);
+    free(rel);
+    vTaskDelete(NULL);
+}
+#endif
+
+/* SD 就绪 → 自动加载 face/idle.efc(存在则替换内嵌演示素材) */
+static void face_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
+                           void *ctx)
+{
+    (void)data; (void)len; (void)ctx;
+#if CONFIG_ESP_CUBE_ENABLE_EFC
+    if (id != CUBE_EVT_SD_READY) return;
+    char *rel = strdup("idle");
+    if (rel != NULL) {
+        if (xTaskCreate(face_load_task, "faceload", 8192, rel, 5, NULL)
+            != pdPASS) {
+            free(rel);
+        }
+    }
+#endif
 }
 
 /* ---- ui_model.h 契约实现 ---- */

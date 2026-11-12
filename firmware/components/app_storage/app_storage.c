@@ -9,6 +9,7 @@
 
 #include <stdio.h>
 #include <errno.h>
+#include "esp_heap_caps.h"
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -234,7 +235,9 @@ char *app_storage_read(const char *rel, size_t *len)
         fclose(f);
         return NULL;
     }
-    char *buf = malloc((size_t)n + 1);
+    /* ⚠ PSRAM: 素材/模型尺寸到几十 KB 起步, 内部堆挤不过(pulse.efc
+     * 63KB 板上实测 malloc 失败 → 热切"读取失败", 2026-11-13) */
+    char *buf = heap_caps_malloc((size_t)n + 1, MALLOC_CAP_SPIRAM);
     if (buf == NULL) {
         fclose(f);
         return NULL;
