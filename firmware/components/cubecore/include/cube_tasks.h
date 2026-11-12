@@ -32,10 +32,12 @@
 #define CUBE_TASK_PLAYER_CORE      1
 
 /* ---- AI 会话编排(app_ai_session 三任务) ----
- * 12KB: LLM v2 调用链实测 8KB 溢出(ks_llm_ctx 2.8K + http_event 行缓冲
- * 2K + TLS/读缓冲叠加, 2026-11-11 板上实测) */
+ * 14KB: LLM 调用链 8KB 溢出(2026-11-11)→12KB; M3 灵魂注入(system 拼接
+ * + mem block)再把 12KB 顶穿(TTS 期 Stack protection fault 轮崩,
+ * 2026-11-12 用户实测"语音没播完电台进来+爆音"真凶)→14KB, 大缓冲
+ * 同步挪静态(system_full 1.4KB) */
 #define CUBE_TASK_AISESS_NAME  "aisess"
-#define CUBE_TASK_AISESS_STACK 12288
+#define CUBE_TASK_AISESS_STACK 14336
 #define CUBE_TASK_AISESS_PRIO  5
 #define CUBE_TASK_AISESS_CORE  0
 

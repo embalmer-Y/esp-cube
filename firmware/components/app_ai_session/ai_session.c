@@ -663,7 +663,10 @@ static void run_round(const char *user_text)
      * 禁 URL: LLM 回复带链接会被 cosyvoice 拒绝合成(url error))。
      * "先调用再回应"硬约束: 实测 qwen 对"我想听XX"类委婉表达会只口头
      * 答应而不调工具(幻觉顺从, 用户听到的就是"没反应"), 2026-11-12 */
-    char system_full[1408];   /* 人格+时间+硬约束+soul 内在状态+记忆块 */
+    /* 静态而非栈: 1.4KB 栈缓冲把 aisess 顶穿(Stack protection fault,
+     * TTS 期崩溃重启→电台自启+爆音, 2026-11-12 用户实测); session_task
+     * 单写者, 无重入 */
+    static char system_full[1408];   /* 人格+时间+硬约束+soul 内在状态+记忆块 */
     /* 当前时间注入: reminder.add 的口语时间换算(明天早上八点)必须有
      * "现在"作参照, 否则 LLM 只能瞎猜(M2); 未同步时提示模型说明 */
     char now_str[40] = "时间未同步";

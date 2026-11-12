@@ -357,7 +357,11 @@ int audio_mixer_get_master_volume(void)
 
 void audio_mixer_set_ducking(bool ai_talking)
 {
+    if (s_mixer.ducking == ai_talking) return;
     s_mixer.ducking = ai_talking;
+    /* 台调取证: 解除/压低时刻与 TTS_DONE 对齐排(2026-11-12 用户实测
+     * 电台提前叠入排障) */
+    ESP_LOGI("mixer", "ducking %s", ai_talking ? "ON(-14dB)" : "OFF");
 }
 
 bool audio_mixer_take_spectrum(int16_t *out, int frames)
