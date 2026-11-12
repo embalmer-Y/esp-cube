@@ -41,9 +41,11 @@
 #include "soul.h"
 #endif
 #include "app_assist.h"
+#include "app_storage.h"
 
 /* ui_model.h 设备后端(本目录 ui_port_esp.c, L5 实现 docs/06 §2.1) */
 extern esp_err_t ui_port_init(void);
+extern esp_err_t ui_port_touch_start(void);   /* M4 触摸 indev */
 
 /* 串口命令行(本目录 cli.c) */
 #include "cli.h"
@@ -119,6 +121,11 @@ void app_main(void)
     ESP_ERROR_CHECK(app_assist_init());
     app_assist_set_announcer(assist_announce_bridge);
 
+    /* ---- 1.6 SD 卡存储(M3+ 记忆系统强制底座; 无卡降级不阻塞) ---- */
+    if (app_storage_init() != ESP_OK) {
+        ESP_LOGW(TAG, "storage degraded: mem->NVS, assets->flash");
+    }
+
     /* ---- 2. 音频链路(核心) ---- */
     drv_audio_cfg_t acfg = {
         .sample_rate = CONFIG_ESP_CUBE_MIXER_RATE,
@@ -167,6 +174,22 @@ void app_main(void)
 #endif
 #endif
 
+    /* ---- 3.5 网络(整块自"音源"前移, P4 关键) ----
+     * P4: net 必须先于显示/触摸 —— esp_hosted 初始化要 15872B 连续
+     * 内部 DMA 缓冲, 显示(LVGL/EFC)+触摸先吃会碎片化 → hosted
+     * "cannot allocate" assert 重启循环(hosted 必须先挑内存,
+     * 2026-11-12 板上两次定位)。 */
+    ESP_ERROR_CHECK(app_player_init());     /* 订阅 BT 接管事件(须先于 BT 启动) */
+#if CONFIG_ESP_CUBE_ENABLE_NET
+    /* NET 先于 BT(2026-11-10 实机教训): WiFi 初始化需要大块连续内部 RAM
+     * (10×1700B 静态rx缓冲), 放在 BT(控制器+Bluedroid ~80KB)之后启动时
+     * 内存余量临界, 实机出现 malloc buffer fail → ESP_ERROR_CHECK abort
+     * → 开机循环(每秒功放"噗"声)。WiFi 需求最硬故最先初始化。
+     * 失败一律降级(蓝牙/本地仍可用), 绝不 abort。 */
+    esp_err_t nerr = app_net_start();
+    ESP_LOGI(TAG, "wifi: %s", nerr == ESP_OK ? "ok" : esp_err_to_name(nerr));
+#endif
+
 #if CONFIG_ESP_CUBE_ENABLE_UI
     /* ---- 4. 显示(独立失败域) ---- */
 #if CONFIG_ESP_CUBE_LCD_SINGLE_LANE_TEST
@@ -188,6 +211,8 @@ void app_main(void)
     esp_err_t derr = drv_display_init(&dcfg);
     if (derr == ESP_OK) {
         ESP_ERROR_CHECK(ui_port_init());                /* ui_model 设备后端 */
+        extern bool app_net_is_up(void);                /* net 早于 UI 启动 */
+        if (app_net_is_up()) cube_event_publish(CUBE_EVT_WIFI_CONNECTED, NULL, 0);
         app_ui_boot_cfg_t ucfg = {
             .io_handle = drv_display_get_io(),
             .panel_handle = drv_display_get_panel(),
@@ -200,22 +225,13 @@ void app_main(void)
 #endif
         };
         ESP_ERROR_CHECK(app_ui_start(&ucfg));
+        /* M4 手势真机通道: CST820 触摸(与 ES8311 共 I2C0; 失败降级 CLI) */
+        ui_port_touch_start();
     } else {
         ESP_LOGE(TAG, "display init failed(%s), audio-only mode", esp_err_to_name(derr));
     }
 #endif
 
-    /* ---- 4. 音源(网络 / 蓝牙) ---- */
-    ESP_ERROR_CHECK(app_player_init());     /* 订阅 BT 接管事件(须先于 BT 启动) */
-#if CONFIG_ESP_CUBE_ENABLE_NET
-    /* NET 先于 BT(2026-11-10 实机教训): WiFi 初始化需要大块连续内部 RAM
-     * (10×1700B 静态rx缓冲), 放在 BT(控制器+Bluedroid ~80KB)之后启动时
-     * 内存余量临界, 实机出现 malloc buffer fail → ESP_ERROR_CHECK abort
-     * → 开机循环(每秒功放"噗"声)。WiFi 需求最硬故最先初始化。
-     * 失败一律降级(蓝牙/本地仍可用), 绝不 abort。 */
-    esp_err_t nerr = app_net_start();
-    ESP_LOGI(TAG, "wifi: %s", nerr == ESP_OK ? "ok" : esp_err_to_name(nerr));
-#endif
 #if CONFIG_ESP_CUBE_ENABLE_VOICE && CONFIG_IDF_TARGET_ESP32P4
     /* P4: WakeNet 在 WiFi 之后初始化(Kaleido V-45 铁律: wakenet 必须
      * 后于 wifi; P4 内部 RAM 充裕, 无 S31 的模型解密挤压问题) */

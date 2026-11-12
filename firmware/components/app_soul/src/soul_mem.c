@@ -15,6 +15,9 @@
 #include <string.h>
 #include <time.h>
 #include "soul.h"
+#include "app_storage.h"
+#include "cubecore.h"
+#include "esp_heap_caps.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -29,7 +32,9 @@
 #define MEM_NS      "soulmem"
 #define MEM_KEY_NXT "nextseq"
 #define MEM_KEY_PFX "e"           /* eXXXXXXXX */
-#define MEM_MAX     60
+#define MEM_MAX     60       /* NVS 后端容量(SD 后端 512, 跨年对话不丢) */
+#define MEM_MAX_SD  512
+#define MEM_FILE    "mem/episodes.jsonl"
 #define MEM_USR     96            /* 用户句(UTF-8 截断) */
 #define MEM_REP     48            /* 回复首句 */
 #define MEM_BLOCK   384           /* prompt 块预算 */
@@ -52,15 +57,93 @@ typedef struct {
 
 #define MEM_MAGIC 0x534D3031
 
-static mem_item_t s_items[MEM_MAX];
+/* ⚠ 必须 PSRAM: 512 条×~168B≈86KB, 静态数组会把内部堆压垮 ——
+ * esp_hosted SDIO 聚合缓冲(15872B 连续内部 DMA)分配失败, 轻则 WiFi
+ * 不通重则 assert 重启循环(2026-11-12 板上定位: 静态 86KB BSS 是
+ * M4→本批唯一的大额内部内存增量) */
+static mem_item_t *s_items;
+static int s_cap = MEM_MAX;             /* 运行时后端容量 */
+static bool s_sd;                       /* SD 后端在位 */
 static int s_count;
 static SemaphoreHandle_t s_lock;
 static uint32_t s_next_seq = 1;
 static char s_block[MEM_BLOCK];   /* prompt 块(重建于写入/启动) */
 
+/* ---- SD 后端: episodes.jsonl(实际 TSV 行; RAM 镜像为事实源,
+ * 记录/淘汰后全量回写 —— 87KB@512 条 ≈0.2s, 记忆频度下可接受) ----
+ * 行格式: t\tseq\tstrength\taffect_v\taffect_a\tlast_access\tuser\treply */
+static void sd_save_all_locked(void)
+{
+    char *buf = malloc(256 * MEM_MAX_SD);
+    if (buf == NULL) return;
+    size_t off = 0;
+    for (int i = 0; i < s_count && off < (256 * MEM_MAX_SD) - 320; i++) {
+        mem_item_t *m = &s_items[i];
+        off += snprintf(buf + off, 256 * MEM_MAX_SD - off,
+                        "%lld\t%u\t%.3f\t%d\t%d\t%lld\t%s\t%s\n",
+                        (long long)m->t, (unsigned)m->seq, m->strength,
+                        m->affect_v, m->affect_a, (long long)m->last_access,
+                        m->user, m->reply);
+    }
+    app_storage_write(MEM_FILE, buf, off);
+    free(buf);
+}
+
+static void sd_load_all(void)
+{
+    size_t len = 0;
+    char *buf = app_storage_read(MEM_FILE, &len);
+    if (buf == NULL) return;                 /* 空库: 全新开始 */
+    char *p = buf;
+    while (p < buf + len && s_count < MEM_MAX_SD) {
+        char *nl = strchr(p, '\n');
+        if (nl == NULL) break;
+        *nl = 0;
+        mem_item_t m;
+        long long t, la; unsigned seq; int av, aa; float st;
+        if (sscanf(p, "%lld\t%u\t%f\t%d\t%d\t%lld\t",
+                   &t, &seq, &st, &av, &aa, &la) == 6) {
+            char *u = strchr(p, '\t');       /* 第7字段起手工切(user 不含 \t) */
+            for (int i = 0; i < 6 && u; i++) u = strchr(u + 1, '\t');
+            if (u != NULL) {
+                memset(&m, 0, sizeof(m));
+                m.magic = MEM_MAGIC;
+                m.t = t; m.seq = seq; m.strength = st;
+                m.affect_v = (int8_t)av; m.affect_a = (int8_t)aa;
+                m.last_access = la;
+                char *r = strchr(u + 1, '\t');
+                if (r != NULL) {
+                    *r = 0;
+                    strlcpy(m.reply, r + 1, MEM_REP);
+                }
+                strlcpy(m.user, u + 1, MEM_USR);
+                s_items[s_count++] = m;
+                if (m.seq >= s_next_seq) s_next_seq = m.seq + 1;
+            }
+        }
+        p = nl + 1;
+    }
+    free(buf);
+}
+
 static void mem_key(char *k, size_t cap, uint32_t seq)
 {
     snprintf(k, cap, MEM_KEY_PFX "%08lx", (unsigned long)seq);
+}
+
+static void nvs_save(const mem_item_t *it);   /* 前向(NVS 后端) */
+static void nvs_drop(uint32_t seq);
+
+static void persist_item(const mem_item_t *it)
+{
+    if (s_sd) { sd_save_all_locked(); return; }
+    nvs_save(it);
+}
+
+static void persist_drop(uint32_t seq)
+{
+    if (s_sd) { sd_save_all_locked(); return; }
+    nvs_drop(seq);
 }
 
 static void nvs_save(const mem_item_t *it)
@@ -86,10 +169,41 @@ static void nvs_drop(uint32_t seq)
     nvs_close(h);
 }
 
+/* SD 就绪热切换: NVS 条目并入 SD 后端(首次记录时随全量回写迁移),
+ * 之后容量升 512 —— soul_start 早于 WiFi, 后端必须可迟到 */
+static void mem_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
+                          void *ctx)
+{
+    (void)data; (void)len; (void)ctx;
+    if (id != CUBE_EVT_SD_READY || s_sd || s_lock == NULL) return;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) != pdTRUE) return;
+    s_sd = true;
+    s_cap = MEM_MAX_SD;
+    sd_load_all();                       /* SD 既有条目追加进镜像 */
+    xSemaphoreGive(s_lock);
+    ESP_LOGI(TAG, "mem backend -> sd (%d episodes)", s_count);
+}
+
 void soul_mem_boot(void)
 {
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return;
+    s_items = heap_caps_malloc(MEM_MAX_SD * sizeof(mem_item_t),
+                               MALLOC_CAP_SPIRAM);
+    if (s_items == NULL) {                 /* PSRAM 也紧张: 退 NVS 小容量 */
+        ESP_LOGW(TAG, "mem items oom, cap=%d", MEM_MAX);
+    }
+    if (s_items == NULL) {
+        s_items = heap_caps_malloc(MEM_MAX * sizeof(mem_item_t),
+                                   MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+    }
+    if (app_storage_ok()) {                 /* SD 后端优先(M3+ 强制底座) */
+        s_sd = true;
+        s_cap = MEM_MAX_SD;
+        sd_load_all();
+        ESP_LOGI(TAG, "mem boot(sd): %d episode(s)", s_count);
+        return;
+    }
     nvs_handle_t h;
     if (nvs_open(MEM_NS, NVS_READONLY, &h) == ESP_OK) {
         uint32_t ns = 0;
@@ -98,7 +212,7 @@ void soul_mem_boot(void)
     }
     nvs_iterator_t it = NULL;
     esp_err_t err = nvs_entry_find(MEM_NS, MEM_KEY_PFX, NVS_TYPE_BLOB, &it);
-    while (err == ESP_OK && it != NULL && s_count < MEM_MAX) {
+    while (err == ESP_OK && it != NULL && s_count < s_cap) {
         nvs_entry_info_t info;
         nvs_entry_info(it, &info);
         nvs_handle_t rh;
@@ -124,7 +238,8 @@ void soul_mem_boot(void)
         }
         s_items[j + 1] = k;
     }
-    ESP_LOGI(TAG, "mem boot: %d episode(s)", s_count);
+    ESP_LOGI(TAG, "mem boot(nvs): %d episode(s)", s_count);
+    cube_event_subscribe(mem_sd_evt_cb, NULL);
 }
 
 /* 相对时间(Kaleido 口径: 今天/昨天/N天前/上周) */
@@ -207,7 +322,7 @@ static void rebuild_block_locked(const char *query)
             off += snprintf(s_block + off, sizeof(s_block) - off,
                             "(印象深)");
         }
-        nvs_save(m);                /* reinforce 持久化(小blob重写) */
+        persist_item(m);            /* reinforce 持久化 */
     }
 }
 
@@ -217,12 +332,12 @@ void soul_mem_record(const char *user, const char *reply,
     if (s_lock == NULL || user == NULL || user[0] == '\0') return;
     if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return;
 
-    if (s_count >= MEM_MAX) {       /* 淘汰最旧 */
+    if (s_count >= s_cap) {           /* 淘汰最旧 */
         uint32_t victim = s_items[0].seq;
         memmove(&s_items[0], &s_items[1],
                 sizeof(s_items[0]) * (s_count - 1));
         s_count--;
-        nvs_drop(victim);
+        persist_drop(victim);
     }
     mem_item_t *m = &s_items[s_count];
     memset(m, 0, sizeof(*m));
@@ -236,7 +351,7 @@ void soul_mem_record(const char *user, const char *reply,
     strlcpy(m->user, user, MEM_USR);
     strlcpy(m->reply, reply ? reply : "", MEM_REP);
     s_count++;
-    nvs_save(m);
+    persist_item(m);
     rebuild_block_locked(NULL);     /* 无 query 的默认块 */
     xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "mem #%u: %s", (unsigned)m->seq, m->user);

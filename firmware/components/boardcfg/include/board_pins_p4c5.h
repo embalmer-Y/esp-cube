@@ -32,11 +32,24 @@ extern "C" {
 #define BOARD_PIN_LCD_RST           (-1)        /* 模组无复位脚 */
 #define BOARD_LCD_DSI_NUM_FBS       2
 
-/* 触摸: 屏模组带 CST820, I2C0 与 ES8311 共总线(SDA=7/SCL=8) —— 占位未接入 */
+/* 触摸: 屏模组带 CST820(I2C 0x15), I2C0 与 ES8311 共总线(SDA=7/SCL=8);
+ * 驱动 = kodediy esp_lcd_touch_cst820(Apache-2.0, 已 vendor 进 drv_touch) */
+#define BOARD_HAS_TP_CST820         1
 #define BOARD_PIN_TP_SDA            GPIO_NUM_7
 #define BOARD_PIN_TP_SCL            GPIO_NUM_8
 #define BOARD_PIN_TP_RST            GPIO_NUM_6
 #define BOARD_PIN_TP_INT            GPIO_NUM_21
+
+/* ===================== TF 卡槽(microSD, SDMMC slot0, 底板 V1.3) =====================
+ * Kaleido 26 号调研三重验证: C5 SDIO 在 slot1(GPIO14-19), TF 在 slot0
+ * (GPIO39-44) —— 两槽独立, WiFi 与 TF 可同时使用; DET=45 卡插拔检测 */
+#define BOARD_PIN_TF_CLK            GPIO_NUM_43
+#define BOARD_PIN_TF_CMD            GPIO_NUM_44
+#define BOARD_PIN_TF_D0             GPIO_NUM_39
+#define BOARD_PIN_TF_D1             GPIO_NUM_40
+#define BOARD_PIN_TF_D2             GPIO_NUM_41
+#define BOARD_PIN_TF_D3             GPIO_NUM_42
+#define BOARD_PIN_TF_DET            GPIO_NUM_45
 
 /* ===================== 板载音频(ES8311 + NS4150B, 底板 U13) =====================
  * 与 S31 核心板同款 codec/功放/模拟麦链(LMA3729 硅麦 → MIC1), 仅引脚不同。

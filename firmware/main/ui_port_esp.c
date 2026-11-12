@@ -26,6 +26,8 @@
 #include "app_assist.h"
 #include "app_ui.h"
 #include "drv_display.h"
+#include "drv_audio.h"
+#include "drv_touch.h"
 #include "esp_lvgl_port.h"
 
 static const char *TAG = "uiport";
@@ -215,6 +217,53 @@ esp_err_t ui_port_init(void)
     }
     ESP_LOGI(TAG, "ui_port ready (stations=%d vol=%d)",
              s_model.station_num, s_model.volume);
+    return ESP_OK;
+}
+
+/* ================= 触摸(LVGL pointer indev; M4 手势真机通道) ================= */
+static esp_lcd_touch_handle_t s_tp;
+static int16_t s_last_x, s_last_y;
+static bool s_tp_down;
+
+static void tp_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    if (s_tp == NULL) {
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+    esp_lcd_touch_read_data(s_tp);           /* INT 未接中断: 轮询读 */
+    esp_lcd_touch_point_data_t pt[1];
+    uint8_t n = 0;
+    bool pressed = esp_lcd_touch_get_data(s_tp, pt, &n, 1) == ESP_OK && n > 0;
+    if (pressed) {
+        s_last_x = pt[0].x;
+        s_last_y = pt[0].y;
+        s_tp_down = true;
+    } else if (s_tp_down) {
+        s_tp_down = false;
+    }
+    data->point.x = s_last_x;
+    data->point.y = s_last_y;
+    data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+}
+
+esp_err_t ui_port_touch_start(void)
+{
+    esp_err_t err = drv_touch_start(drv_audio_i2c_bus());
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "touch degraded: %s", esp_err_to_name(err));
+        return err;                          /* UI 无触摸仍完整(面板 CLI 通道) */
+    }
+    s_tp = drv_touch_handle();
+    if (!lvgl_port_lock(100)) return ESP_ERR_TIMEOUT;
+    lv_indev_t *in = lv_indev_create();
+    lv_indev_set_type(in, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(in, tp_read_cb);
+    lv_indev_set_display(in, lv_display_get_default());
+    lv_indev_set_mode(in, LV_INDEV_MODE_TIMER);   /* LVGL 心跳轮询(30fps) */
+    lvgl_port_unlock();
+    ESP_LOGI(TAG, "touch indev up");
     return ESP_OK;
 }
 

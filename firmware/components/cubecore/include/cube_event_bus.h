@@ -49,6 +49,8 @@ typedef enum {
     CUBE_EVT_REMINDER_FIRED, /* 提醒到点, payload: cube_reminder_t(临时) */
     /* 灵魂(app_soul) */
     CUBE_EVT_SOUL_MOOD,      /* 情绪快照(节流: anim_tag 变化或 60s) */
+    /* 存储(app_storage) */
+    CUBE_EVT_SD_READY,       /* SD 卡挂载成功(记忆/素材切 SD 后端), payload: NULL */
 } cube_evt_id_t;
 
 /* 提醒到点(CUBE_EVT_REMINDER_FIRED payload; 与 app_assist 存储解耦,

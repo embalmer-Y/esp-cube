@@ -15,6 +15,8 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <esp_err.h>
+#include "driver/i2c_master.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +30,9 @@ typedef struct {
 
 /* 初始化 codec + I2S(幂等); 成功后即可以 drv_audio_output 播放 */
 esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg);
+
+/* I2C0 总线句柄(codec 与 CST820 触摸共总线; init 后有效, 可为 NULL) */
+i2c_master_bus_handle_t drv_audio_i2c_bus(void);
 
 /* 阻塞式输出 PCM(交错 int16, 帧数 frames; 返回实际写入帧数)
  * 混音器以本函数为节拍: DMA 缓冲欠载时阻塞, 天然形成 10ms  pacing */

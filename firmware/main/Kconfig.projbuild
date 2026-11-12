@@ -147,6 +147,17 @@ menu "EspCube Configuration"
         int "TTS 输出采样率(16000/24000)"
         default 16000
 
+    config ESP_CUBE_ENABLE_SD
+        bool "SD 卡存储服务(TF 卡槽 SDMMC, 记忆系统底座)"
+        default y if ESP_CUBE_BOARD_P4C5
+        default n
+        depends on IDF_TARGET_ESP32P4
+        help
+            底板 TF 卡槽(microSD, slot0 GPIO39-44, 与 C5 WiFi 独立)。
+            /sdcard: mem(记忆)/face(表情素材)/wake(唤醒词模型)/
+            voice(复刻参考)/etc(人格配置)/logs。无卡优雅降级
+            (记忆回退 NVS, 素材回退 flash 内置)。
+
     config ESP_CUBE_ENABLE_SOUL
         bool "灵魂内核(驱力+九维情绪+记忆, 移植 Kaleido)"
         default y

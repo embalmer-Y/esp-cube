@@ -35,6 +35,7 @@ static const char *TAG = "drv_audio";
 static i2s_chan_handle_t s_tx = NULL;
 static i2s_chan_handle_t s_rx = NULL;
 static esp_codec_dev_handle_t s_codec = NULL;
+static i2c_master_bus_handle_t s_i2c_bus = NULL;
 static drv_audio_cfg_t s_cfg;
 static bool s_pa_on = false;
 
@@ -96,6 +97,7 @@ esp_err_t drv_audio_init(const drv_audio_cfg_t *cfg)
         .flags.enable_internal_pullup = true,   /* 原型期免外部上拉 */
     };
     ESP_RETURN_ON_ERROR(i2c_new_master_bus(&i2c_cfg, &i2c_bus), TAG, "i2c bus");
+    s_i2c_bus = i2c_bus;                   /* 导出: 触摸共总线(drv_touch) */
 
     audio_codec_i2c_cfg_t ctrl_cfg = {
         .addr = BOARD_CODEC_I2C_ADDR,           /* 8位形式(内部>>1 得7位地址) */
@@ -207,6 +209,10 @@ esp_err_t drv_audio_pa_set(bool on)
     s_pa_on = on;
     ESP_LOGI(TAG, "PA %s", on ? "ON" : "OFF");
     return ret;
+
 }
 
-
+i2c_master_bus_handle_t drv_audio_i2c_bus(void)
+{
+    return s_i2c_bus;
+}
