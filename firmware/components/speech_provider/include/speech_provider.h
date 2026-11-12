@@ -177,6 +177,33 @@ typedef void (*ks_llm_tool_cb)(void *user, const char *id,
 int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 		   ks_llm_tool_cb tool_cb, void *user);
 
+/* ---- 快线: qwen-omni realtime(OpenAI Realtime 风格 WS, B3 快慢路径) ----
+ * "嘴和耳": 语音上行(16k PCM)/即兴语音下行(24k PCM)/文本注入播报。
+ * 工具调用不在此线(tool_choice=none) —— 可靠性由慢线文本 FC 保证。
+ * 协议/音色(PC 探针 2026-11-12): 旧域名可用, voice 支持复刻 ID。 */
+struct ks_rt_cfg {
+	const char *url;        /* wss://…/api-ws/v1/realtime?model=… */
+	const char *api_key;    /* Bearer                              */
+	const char *voice;      /* Tina/Serena/复刻ID                  */
+	const char *instructions; /* 社交人格(即兴应答约束)           */
+	bool transcript;        /* 是否要转写事件(UI 参考)            */
+};
+
+struct ks_rt_events {
+	void *user;
+	/* 24k mono s16le 音频帧(网络任务上下文: 上层只许写环形缓冲) */
+	void (*on_audio)(void *user, const uint8_t *pcm24k, size_t len);
+	void (*on_transcript)(void *user, const char *text);
+	void (*on_error)(void *user, int code);
+};
+
+int ks_rt_open(const struct ks_rt_cfg *cfg, const struct ks_rt_events *ev);
+void ks_rt_close(void);
+bool ks_rt_ok(void);
+int ks_rt_feed(const int16_t *pcm16k, size_t samples);  /* 聆听期上行 */
+int ks_rt_say(const char *text);   /* 注入播报(自动 cancel 在播应答) */
+int ks_rt_cancel(void);            /* 打断在播应答 */
+
 /* 便捷：由 MiniMax JWT 拼 chatcompletion_v2 URL（内含 GroupID 提取，
  * 免去调用方接触 JWT 细节）；解析失败返回 -1 */
 int ks_llm_minimax_url(char *buf, size_t n, const char *jwt);

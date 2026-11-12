@@ -111,6 +111,37 @@ static volatile bool s_filler_req;            /* tts_task 待播 filler */
 static int16_t *s_st_buf;                      /* PSRAM, 首用分配 */
 static volatile bool s_st_capture;
 static size_t s_st_w, s_st_cap;
+static volatile bool s_st_pending;             /* 注入待武装(见 EVT_WAKE) */
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+/* ---- 快线(qwen-omni realtime): 嘴和耳, 工具可靠性在慢线 ----
+ * 双路上行: 同一麦克流同时喂 paraformer(慢线精确转写)与 omni(快线
+ * 即兴应答); omni 音频(24k)入专用环形, 由 tts_task 泵出(24k→48k);
+ * 慢线技能回执经 ks_rt_say 注入快线出声(单一 omni 音色)。 */
+static volatile bool s_rt_spoken;        /* 本轮快线已出声 */
+static int16_t *s_rt_ring;               /* 24k mono(PSRAM) */
+#define RT_RING_SHIFT   17               /* 131072 帧 ≈ 5.5s@24k */
+#define RT_RING_FRAMES  (1 << RT_RING_SHIFT)
+#define RT_RING_MASK    (RT_RING_FRAMES - 1)
+static volatile size_t s_rt_r, s_rt_w;
+static uint32_t s_rt_drops;
+static cube_resampler_t s_rt_rs;         /* 24k mono → 48k stereo */
+static bool s_rt_rs_init;
+static struct ks_rt_cfg s_rt_cfg = {
+    .url = CONFIG_ESP_CUBE_AI_RT_URL "?model=" CONFIG_ESP_CUBE_AI_RT_MODEL,
+    .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+    .voice = CONFIG_ESP_CUBE_AI_RT_VOICE,
+    .instructions = "你是音箱的语音伙伴, 回应热情简短自然。用户想听歌/"
+                    "点歌时就说马上去挑之类的热情话, 但不许编造具体歌名,"
+                    "也不许说已经放好了(你不负责放歌)。闲聊就自然接话。",
+    .transcript = true,
+};
+static void on_rt_audio(void *user, const uint8_t *pcm24k, size_t len);
+static void on_rt_transcript(void *user, const char *text);
+static struct ks_rt_events s_rt_ev = {
+    .user = NULL, .on_audio = on_rt_audio,
+    .on_transcript = on_rt_transcript,
+};
+#endif /* RT */
 
 /* 本地 filler("好的，正在为您找歌", cosyvoice 预合成 16k mono, 构建期
  * EMBED 嵌入 flash): 工具调用确定即播, 遮蔽搜歌网络时延 —— 用户感知
@@ -216,6 +247,16 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
 {
     (void)user;
     if (s_abort_req || s_tts_dead) return false;
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+    if (ks_rt_ok()) {
+        /* 快线在位: 闲聊由 omni 即兴自答, 慢线文本只上屏不重复出声 */
+        if (sentence[0]) {
+            cube_event_publish(CUBE_EVT_AI_TEXT, sentence,
+                               strlen(sentence) + 1);
+        }
+        return true;
+    }
+#endif
     /* TTS 懒开: 唤醒路径下 ASR 已收线, 此刻开 TTS 免双 TLS 并发
      * (esp-aes DMA 描述符争抢, 2026-11-11 板上实测互撞超时) */
     if (!s_tts_opened) {
@@ -273,6 +314,9 @@ static void on_llm_tool(void *user, const char *id, const char *name,
 static void on_llm_args(void *user, const char *name, const char *args)
 {
     (void)user;
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+    if (!ks_rt_ok())                /* 快线即兴应答替代本地 filler */
+#endif
     if (strcmp(name, "music.search_play") == 0) {
         s_filler_req = true;
     }
@@ -319,6 +363,55 @@ static void on_tts_err(void *user, int stage, int code)
     s_tts_dead = true;    /* WS 任务上下文: 掐断本轮续喂, 收尾走兜底 */
 }
 
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+/* 快线音频(WS 任务上下文): 只写环形 + 状态推进, 不做重活 */
+static void on_rt_audio(void *user, const uint8_t *pcm24k, size_t len)
+{
+    (void)user;
+    if (s_rt_ring == NULL) return;
+    const int16_t *in = (const int16_t *)pcm24k;
+    size_t frames = len / 2;
+    for (size_t i = 0; i < frames; i++) {
+        size_t next = (s_rt_w + 1) & RT_RING_MASK;
+        if (next == s_rt_r) {            /* 满: 丢整段保最新节奏 */
+            if ((s_rt_drops++ & 0x3F) == 0) {
+                ESP_LOGW(TAG, "rt ring full, dropped x%u",
+                         (unsigned)(s_rt_drops + 63));
+            }
+            return;
+        }
+        s_rt_ring[s_rt_w] = in[i];
+        s_rt_w = next;
+    }
+    if (!s_rt_spoken) {
+        ESP_LOGI(TAG, "rt audio first frame");
+    }
+    s_rt_spoken = true;
+    /* 状态推进交给 tts_task(泵出时): WS 任务上下文不做总线发布
+     * (板上 IWDT 嫌疑排除项, 2026-11-12) */
+}
+
+static void on_rt_transcript(void *user, const char *text)
+{
+    (void)user;
+    /* 快线转写可靠性弱(PC 探针实测), 仅作 UI/日志参考 */
+    ESP_LOGI(TAG, "rt transcript: %s", text);
+}
+
+/* 快线保障: 失联即整体重建(半死会话不如重开); 失败回落纯级联 */
+static void rt_ensure(void)
+{
+    if (ks_rt_ok()) return;
+    ks_rt_close();
+    if (s_rt_ring == NULL) return;
+    if (ks_rt_open(&s_rt_cfg, &s_rt_ev) == 0) {
+        ESP_LOGI(TAG, "rt fast-line up (%s)", CONFIG_ESP_CUBE_AI_RT_VOICE);
+    } else {
+        ESP_LOGW(TAG, "rt fast-line down -> cascade fallback");
+    }
+}
+#endif /* RT */
+
 /* ---- TTS 播放任务: 环形缓冲 → 重采样 48k stereo → mixer;
  * 兼任排空检测: run_round 收口武装(s_tts_armed)后, 缓冲排空即上报
  * EVT_TTS_DONE。原实现要求"缓冲曾有过数据"才上报 —— TTS 服务端
@@ -360,16 +453,55 @@ static void tts_task(void *arg)
             s_filler_req = false;
             continue;
         }
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+        /* 快线音频泵出: 24k mono → 48k stereo(独立重采样器)。
+         * 不按 SPEAKING 门控 —— omni 可能在聆听尾即开始应答 */
+        if (s_rt_ring != NULL && s_rt_r != s_rt_w) {
+            if (s_state == AI_THINKING) {
+                set_state(AI_SPEAKING);   /* WS 侧只置标志, 此处推进 */
+            }
+            if (!s_rt_rs_init) {
+                cube_resampler_init(&s_rt_rs, 24000, 48000);
+                s_rt_rs_init = true;
+            }
+            /* 复用本任务的 in_mono/out48 栈缓冲(320 帧一块):
+             * 320@24k → 640stereo@48k, 输出容量 960stereo 富余;
+             * 曾另开 2.8KB 缓冲直接打爆 aitts 栈(2026-11-12 板上
+             * Stack protection fault 启动循环) */
+            int n = 0;
+            while (n < 320 && s_rt_r != s_rt_w) {
+                in_mono[n++] = s_rt_ring[s_rt_r];
+                s_rt_r = (s_rt_r + 1) & RT_RING_MASK;
+            }
+            size_t of = cube_resampler_process_mono_to_stereo(
+                    &s_rt_rs, in_mono, n, out48,
+                    sizeof(out48) / sizeof(out48[0]) / 2);
+            if (of > 0 && !s_abort_req) {
+                audio_mixer_source_write(s_tts_src, out48,
+                                         of * 2 * sizeof(int16_t),
+                                         pdMS_TO_TICKS(500));
+            }
+            continue;      /* 快线优先, 排空再回 tts/filler */
+        }
+#endif /* RT */
         /* 排空上报: 已收口且缓冲排空 → 本轮语音播完; 若 15s 仍未排空
          * (PCM 流中途停滞) 也强制收口, 不让会话卡死在 SPEAKING */
         if (s_tts_armed && s_tts_closed && !s_abort_req &&
             s_state == AI_SPEAKING &&
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            (s_rt_ring == NULL || s_rt_r == s_rt_w) &&   /* 快线也排空 */
+#endif
             (s_ring_r == s_ring_w ||
              esp_timer_get_time() - s_tts_armed_us > 15000000)) {
             if (s_ring_r != s_ring_w) {
                 ESP_LOGW(TAG, "tts drain timeout, force done");
                 s_ring_r = s_ring_w;
             }
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            if (s_rt_ring != NULL && s_rt_r != s_rt_w) {
+                s_rt_r = s_rt_w;
+            }
+#endif
             session_evt_t e = { .id = EVT_TTS_DONE };
             xQueueSend(s_evtq, &e, 0);
             s_tts_armed = false;
@@ -420,6 +552,9 @@ static void mic_task(void *arg)
             for (int i = 0; i < n; i++) sq += (int64_t)pcm[i] * pcm[i];
             int rms = (int)(sq / n);
             ks_asr_feed(pcm, n);
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            if (ks_rt_ok()) ks_rt_feed(pcm, n);  /* 快线同流上行 */
+#endif
             total_ms += 20;
 
             if (noise_n < 15) {                  /* 前 300ms: 噪声底标定 */
@@ -473,6 +608,9 @@ static void run_round(const char *user_text)
     s_round_spoken = false;
     s_tts_dead = false;
     s_tts_armed = false;
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+    s_rt_spoken = false;
+#endif
 
     /* system 追加技能引导(tools 描述已含语义, 此处强化"点播必须用工具";
      * 禁 URL: LLM 回复带链接会被 cosyvoice 拒绝合成(url error))。
@@ -529,7 +667,31 @@ static void run_round(const char *user_text)
             /* 快速应答: 成功回执直喂 TTS 跳过第二轮 LLM(首响 -1s);
              * 失败仍走 LLM 轮生成自然道歉 */
             if (err == ESP_OK && reply[0] != '\0') {
-                on_llm_sent(NULL, reply, false);
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+                int src = ks_rt_ok() ? ks_rt_say(reply) : -100;
+                if (src == 0) {
+                    cube_event_publish(CUBE_EVT_AI_TEXT, reply,
+                                       strlen(reply) + 1);
+                    ESP_LOGI(TAG, "llm sentence(rt-say): %s", reply);
+                    s_round_spoken = true;    /* 等快线音频排空 */
+                } else if (src != -100) {
+                    /* 快线半死(say 失败): 回落 cosyvoice 直喂 */
+                    ESP_LOGW(TAG, "rt_say rc=%d -> tts fallback", src);
+                    if (!s_tts_opened &&
+                        tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0) {
+                        s_tts_opened = true;
+                    }
+                    if (s_tts_opened && ks_tts_feed(reply, false, 8000) == 0) {
+                        cube_event_publish(CUBE_EVT_AI_TEXT, reply,
+                                           strlen(reply) + 1);
+                        s_round_spoken = true;
+                        if (s_state != AI_SPEAKING) set_state(AI_SPEAKING);
+                    }
+                } else
+#endif
+                {
+                    on_llm_sent(NULL, reply, false);
+                }
                 break;
             }
 #endif
@@ -574,7 +736,11 @@ static void run_round(const char *user_text)
         ks_tts_close();
         s_tts_opened = false;
         s_tts_closed = true;
-        if (frc == 0 && s_round_spoken && !s_tts_dead) {
+        if ((frc == 0 && s_round_spoken && !s_tts_dead)
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            || s_rt_spoken                       /* 快线出声也等排空 */
+#endif
+        ) {
             s_tts_armed = true;                  /* 等 tts_task 排空上报 */
             s_tts_armed_us = esp_timer_get_time();
             return;
@@ -582,6 +748,15 @@ static void run_round(const char *user_text)
         ESP_LOGW(TAG, "round end w/o speech (frc=%d spoken=%d dead=%d)",
                  frc, (int)s_round_spoken, (int)s_tts_dead);
     }
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+    else if (ks_rt_ok() && s_rt_spoken) {
+        s_tts_closed = true;                     /* 复用排空判定语义 */
+        s_tts_armed = true;
+        s_tts_armed_us = esp_timer_get_time();
+        return;
+    }
+#endif
+    ESP_LOGI(TAG, "round end (silent) -> IDLE");
     set_state(AI_IDLE);                          /* 兜底: 无声轮直接结束 */
     /* TODO(M2.3): 连续对话; 现为单轮, 排空事件驱动回 IDLE */
 }
@@ -644,12 +819,20 @@ static void session_task(void *arg)
             if (s_state == AI_SPEAKING) {
                 ESP_LOGW(TAG, "barge-in: abort current round");
             }
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            rt_ensure();                     /* 失联重建(≤2s) */
+#endif
             s_abort_req = true;
             ks_tts_close();
             ks_asr_close();
             s_ring_r = s_ring_w;
             s_abort_req = false;
             s_tts_closed = false;
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            ks_rt_cancel();                  /* 快线在播应答即停 */
+            s_rt_r = s_rt_w;
+            s_rt_spoken = false;
+#endif
             s_tts_armed = false;
             s_filler_req = false;               /* 打断: filler 即停 */
             s_last_asr[0] = '\0';                /* 防串轮: 旧文本不作本轮输入 */
@@ -678,6 +861,13 @@ static void session_task(void *arg)
             /* TTS 不预开(懒开, 首句时): 唤醒期 ASR+TTS 双 TLS 并发会
              * 争抢 esp-aes DMA 描述符(P4 内部 DMA 内存紧张, 2026-11-11
              * 板上实测互撞超时); 代价 = 首句语音回应延迟 ~1s */
+            /* 自测注入此刻才武装: 提前武装会被 voice_task 在 chime+
+             * ASR 开握手期吃掉开头(含静音垫), 校准窗吃到语音把阈值
+             * 抬到天文数字 → 6s 假"无语音"(2026-11-12 板上定位) */
+            if (s_st_pending) {
+                audio_mic_test_inject(s_st_buf, s_st_w);
+                s_st_pending = false;
+            }
             vTaskResume(s_mic_task);             /* 开始录音 */
             break;
 
@@ -697,10 +887,17 @@ static void session_task(void *arg)
 
             /* 文本注入路径无 ASR 并发, 预开安全(首音低延迟);
              * 仅成功才登记 s_tts_opened —— 失败也置 true 会让懒开
-             * 路径跳过重试, 全轮 feed -2 无声(2026-11-11 排查) */
-            if (tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0) {
+             * 路径跳过重试, 全轮 feed -2 无声(2026-11-11 排查)。
+             * 快线在位: 出声走 omni, 不预开 */
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            bool skip_pre = ks_rt_ok();
+#else
+            bool skip_pre = false;
+#endif
+            if (!skip_pre &&
+                tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0) {
                 s_tts_opened = true;
-            } else {
+            } else if (!skip_pre) {
                 ESP_LOGE(TAG, "tts open failed(text-in)");
             }
             ESP_LOGI(TAG, "text-in: %s", text);
@@ -719,9 +916,16 @@ static void session_task(void *arg)
                 break;
             }
             /* TTS 预热(延迟优化): 此刻 ASR WS 已收线, 无 esp-aes 描述符
-             * 争抢, 与 LLM 第 1 趟并行握手 —— 懒开路径保留为失败回退 */
-            if (!s_tts_opened && tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0) {
-                s_tts_opened = true;
+             * 争抢, 与 LLM 第 1 趟并行握手 —— 懒开路径保留为失败回退。
+             * 快线在位时出声走 omni, 不预开 cosyvoice(省一条连接) */
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+            if (!ks_rt_ok())
+#endif
+            {
+                if (!s_tts_opened &&
+                    tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0) {
+                    s_tts_opened = true;
+                }
             }
             run_round(s_last_asr);
             break;
@@ -792,6 +996,12 @@ esp_err_t ai_session_start(void)
     };
     s_tts_src = audio_mixer_add_source(&scfg);
     ESP_RETURN_ON_FALSE(s_tts_src != NULL, ESP_FAIL, TAG, "tts src");
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+    s_rt_ring = heap_caps_malloc(RT_RING_FRAMES * 2, MALLOC_CAP_SPIRAM);
+    if (s_rt_ring == NULL) {
+        ESP_LOGW(TAG, "rt ring oom, fast-line disabled");
+    }
+#endif
 
     ESP_RETURN_ON_ERROR(cube_event_subscribe(ai_evt_cb, NULL), TAG,
                         "evt subscribe");
@@ -810,8 +1020,14 @@ esp_err_t ai_session_start(void)
                                             &s_mic_task, CUBE_TASK_AIMIC_CORE) == pdPASS;
     ESP_RETURN_ON_FALSE(ok, ESP_FAIL, TAG, "tasks");
     vTaskSuspend(s_mic_task);
-    ESP_LOGI(TAG, "ai session ready (dashscope byok, tts=%dk)",
-             AI_TTS_RATE);
+    ESP_LOGI(TAG, "ai session ready (dashscope byok, tts=%dk, fastline=%d)",
+             AI_TTS_RATE,
+#if CONFIG_ESP_CUBE_AI_RT_ENABLE
+             s_rt_ring != NULL
+#else
+             0
+#endif
+    );
     return ESP_OK;
 }
 
@@ -833,6 +1049,10 @@ static bool st_synth(const char *text)
     }
     s_st_w = 0;
     s_st_capture = true;
+    /* 头部垫 300ms 静音: mic_task 噪声底标定窗(前 15 块)不应吃到
+     * 语音, 否则阈值被抬到语音电平(板上实测 floor=4.5M) */
+    memset(s_st_buf, 0, 4800);
+    s_st_w = 4800;
     bool ok = tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0;
     if (ok) {
         ok = ks_tts_feed(text, true, 10000) == 0;
@@ -856,7 +1076,7 @@ esp_err_t ai_session_selftest(const char *text)
     }
     if (text == NULL || text[0] == 0) return ESP_ERR_INVALID_ARG;
     if (!st_synth(text)) return ESP_FAIL;
-    audio_mic_test_inject(s_st_buf, s_st_w);
+    s_st_pending = true;                 /* 唤醒处理内武装(见 EVT_WAKE) */
     ESP_LOGI(TAG, "ST: round start");
     ai_session_on_wake();                       /* 唤醒轮由注入音频走完 */
     return ESP_OK;

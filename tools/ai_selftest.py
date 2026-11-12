@@ -34,8 +34,8 @@ FAULTS = [
 # (key, 正则, 超时s, 必备)
 STEPS = [
     ("synth",    re.compile(r"ST: synth ok \(([\d.]+)s\)"),    30,  True),
-    ("inject",   re.compile(r"mic inject armed"),               5,  True),
     ("listen",   re.compile(r"state=2 -> stream suspend"),     20,  True),
+    ("inject",   re.compile(r"mic inject armed"),               5,  True),
     ("asr",      re.compile(r"asr: (.+?)\s*$"),                40,  True),
     ("hint",     re.compile(r"tool hint: music"),              25, False),
     ("filler",   re.compile(r"filler play"),                   25, False),
@@ -198,8 +198,10 @@ class Runner:
             if key in marks:
                 dt = marks[key] - marks[STEPS_ORDER[0]]
                 print(f"  [ok] {key} (+{dt:.2f}s)")
-        # 故障扫描(整轮)
-        for _, line in events:
+        # 故障扫描(仅本轮: 从 ST: round start 起, 上一轮尾线不算)
+        sub_i = next((i for i, (_, l) in enumerate(events)
+                      if "ST: round start" in l), 0)
+        for _, line in events[sub_i:]:
             for fname, fp in FAULTS:
                 if fp.search(line):
                     self.faults.append(f"R{idx} {fname}: {line[:70]}")

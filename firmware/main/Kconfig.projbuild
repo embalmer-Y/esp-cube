@@ -93,6 +93,29 @@ menu "EspCube Configuration"
             (ark.cn-beijing.volces.com/api/v3/...)。五家链根(DigiCert G2/
             Sectigo R46)均在 IDF 默认证书束内, 2026-11-12 实测可达。
 
+    config ESP_CUBE_AI_RT_ENABLE
+        bool "快线: qwen-omni realtime 即兴应答(B3 快慢路径)"
+        default n
+        help
+            语音进语音出常驻连接(server_vad 自动应答), 负责即兴语音/
+            注入播报; 工具可靠性仍由慢线(paraformer+文本 LLM FC)保证。
+            失联自动回落纯级联三段链("一根线都不拆")。需配套 RT_* 配置。
+
+    config ESP_CUBE_AI_RT_MODEL
+        string "快线模型"
+        default "qwen3.8-omni-flash-realtime"
+        depends on ESP_CUBE_AI_RT_ENABLE
+
+    config ESP_CUBE_AI_RT_VOICE
+        string "快线音色(Tina/Serena/复刻ID)"
+        default "Serena"
+        depends on ESP_CUBE_AI_RT_ENABLE
+
+    config ESP_CUBE_AI_RT_URL
+        string "快线端点(Realtime WS 全 URL)"
+        default "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
+        depends on ESP_CUBE_AI_RT_ENABLE
+
     config ESP_CUBE_AI_TOOL_FAST_ACK
         bool "技能成功回执直喂 TTS(跳过第二轮 LLM, 首响 -1s)"
         default y
