@@ -39,6 +39,10 @@ esp_err_t ai_session_stwake(void);                 /* 合成唤醒词测 WakeNet
  * 本轮结束(IDLE)后自动补播。Kaleido "站在会话外对着会话说话"语义 */
 esp_err_t ai_session_announce(const char *text);
 
+/* 灵魂 2.0 深思通道(soul_think brain 注入): 整句收集 LLM 回复,
+ * 0=成功有回复; system=深思协议 prompt */
+int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap);
+
 /* TTS 音色热切(音色甄选台调/persona 配置): 断当前会话令下轮懒开
  * 生效; announce 同源一并切换 */
 void ai_session_set_tts_voice(const char *voice);

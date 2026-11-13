@@ -49,6 +49,7 @@ typedef enum {
     CUBE_EVT_REMINDER_FIRED, /* 提醒到点, payload: cube_reminder_t(临时) */
     /* 灵魂(app_soul) */
     CUBE_EVT_SOUL_MOOD,      /* 情绪快照(节流: anim_tag 变化或 60s) */
+    CUBE_EVT_SOUL_ACT,       /* 灵魂 2.0 行动广播(深思/底色/瞬态) */
     /* 存储(app_storage) */
     CUBE_EVT_SD_READY,       /* SD 卡挂载成功(记忆/素材切 SD 后端), payload: NULL */
 } cube_evt_id_t;
@@ -71,6 +72,14 @@ typedef struct {
     float social_bond;       /* [0,1] 互动强度积分 */
     bool  ethics_latched;    /* 安抚模式(只允许温柔语气) */
 } cube_soul_mood_t;
+
+/* 灵魂 2.0 行动(CUBE_EVT_SOUL_ACT payload; 全局广播空间出口:
+ * 深思 LLM 意图(ki_intent)与表情底色/瞬态经此广播, 各执行器订阅
+ * (ui=换脸, ai_session=announce, player=音乐), soul 不直依赖执行器) */
+typedef struct {
+    uint8_t kind;             /* 0=底色表情 1=瞬态表情 2=说话 3=音乐 */
+    char content[80];         /* 段名/话语(≤25字)/music:next|random */
+} cube_soul_act_t;
 
 /* AVRCP 曲目元数据(蓝牙播放页显示用) */
 typedef struct {

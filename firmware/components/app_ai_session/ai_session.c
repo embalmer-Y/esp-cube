@@ -199,6 +199,45 @@ static void set_state(ai_state_t st)
     cube_event_publish(CUBE_EVT_AI_STATE, &st, sizeof(st));
 }
 
+/* ---- 灵魂 2.0 深思通道(soul_think brain 注入) ----
+ * 整句收集(不切子句; 游标随实例 —— Kaleido 缺陷 L 教训: static off
+ * 跨轮累计曾致 size 下溢无界写)。返回 0=有回复。 */
+struct deliberate_ctx {
+    char *buf;
+    size_t off, cap;
+};
+
+static bool deliberate_cb(void *user, const char *sent, bool final)
+{
+    struct deliberate_ctx *c = user;
+    (void)final;
+    if (c->off >= c->cap - 1) return false;
+    c->off += strlcpy(c->buf + c->off, sent, c->cap - c->off);
+    return true;
+}
+
+int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap)
+{
+    if (system_prompt == NULL || reply == NULL || cap == 0) return -1;
+    reply[0] = '\0';
+    struct deliberate_ctx c = { .buf = reply, .off = 0, .cap = cap };
+    struct ks_llm_cfg cfg = {
+        .url = CONFIG_ESP_CUBE_AI_LLM_URL,
+        .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+        .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
+        .system = system_prompt,
+        .user_msg = "(内心思考)",
+        .cut_clauses = false,
+#if CONFIG_ESP_CUBE_AI_LLM_DISABLE_THINKING
+        .no_think = true,
+#else
+        .no_think = false,
+#endif
+    };
+    int rc = ks_llm_chat(&cfg, deliberate_cb, &c, NULL);
+    return (rc == 0 && reply[0]) ? 0 : -1;
+}
+
 /* TTS 音色热切(音色甄选台调 CLI / persona 配置): 断当前会话令下轮
  * 懒开握手新音色; announce 带外播报同走 s_tts_cfg, 一并生效 */
 void ai_session_set_tts_voice(const char *voice)
@@ -998,7 +1037,11 @@ static void session_task(void *arg)
             vTaskResume(s_mic_task);             /* 开始录音 */
             break;
 
-        case EVT_TEXT_IN: {
+        case EVT_TEXT_IN:
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+            soul_think_note_voice();   /* 深思结算窗证据 */
+#endif
+        {
             /* 文本注入(CLI ask / 调试): 复位轮状态 → 直接 LLM+TTS */
             char *text = (char *)e.payload;
             s_abort_req = true;

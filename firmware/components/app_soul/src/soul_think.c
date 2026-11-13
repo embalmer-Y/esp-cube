@@ -1,222 +1,344 @@
 /*
- * soul_think.c —— 主动交互(点火, M3; Kconfig ESP_CUBE_SOUL_PROACTIVE)
+ * soul_think.c — 灵魂 2.0 深思轮(W3 意图协议 × EspCube 多行动出口)
  *
- * Kaleido ignition 防打扰框架最小版(22 号 §5 八条中实装六条):
- *   触发: ki_think_gate(驱力空闲∨低唤起∨显著分∨新事件 + 新意门);
- *   深思: LLM 单发(无 tools)产出 typed 意图 JSON, ki_intent_parse
- *         拒非降级(schema 违例绝不猜, 含数字无证据拒 —— 防幻觉);
- *   出口: announce 带外播报(不经 ASR 轮, "站在会话外说话");
- *   防打扰: 开机静默 3min / 勿扰 23:00-08:00(候选丢弃不排队) /
- *         日配额 4 / 冷静期 30min(被忽略 ×2 封顶) / 5min 内容去重。
- * 30s 轮询(触发密度低, 云钱节流: 思维最小间隔 10min 在 gate 内)。
+ * 移植自 Kaleido tools/hil/convo-stage/main/soul_think.c, 适配 EspCube:
+ *   - LLM 通道: brain 回调注入(ai_session_deliberate, 不依赖
+ *     speech_provider —— app_soul 组件零语音依赖, 分层纪律);
+ *   - 行动扩展: ki_act 的 ACT 词表位启用 —— content "face:段名" 换表情 /
+ *     "music:next|random" 音乐; SPEAK 走注入回调(announce 带外);
+ *   - 行动广播: face/music 经 CUBE_EVT_SOUL_ACT 广播(执行器订阅,
+ *     全局广播空间语义); speak 保留回调(同进程最短路径);
+ *   - 结算: speak 播后 20s 观察窗, 用户输入侧记(note_voice)=RESPONDED,
+ *     静默=IGNORED → ki_settle2 冷静期翻倍; 非说话行动直接 RESPONDED。
+ *
+ * 安全边界(Kaleido 29 号 §9 逐条):
+ *   - LLM 产出只经 ki_intent_parse 进固件, 无字段可写 ke/ki 内部态;
+ *   - 拒非降级: parse 非 OK/非 LONG → 不行动 + 码落痕, 绝不猜;
+ *   - 去重窗: content 与上次实播同且 <5min → 拒;
+ *   - content 含数字且无 mem 证据 → 拒(UncitedClaim, 防幻觉统计)。
+ *
+ * 任务纪律: 常驻 think 任务 + 静态内部栈 16KB(TLS 深度, 禁落 PSRAM);
+ * notify 门控(soul tick 触发, 不在现场起任务); 单飞(忙则丢弃不排队)。
  */
 #include "soul.h"
 #include "soul_ignition.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 
+#include "esp_timer.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_log.h"
-#include "cJSON.h"
-#include "speech_provider.h"
+
+#include "cubecore.h"
 #include "sdkconfig.h"
 
-#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+#if CONFIG_ESP_CUBE_ENABLE_SOUL && CONFIG_ESP_CUBE_SOUL_PROACTIVE
+
+#define THINK_STACK        (16 * 1024)
+#define THINK_PRIO         4
+#define THINK_REPLY_MAX    512
+#define THINK_SETTLE_S     20           /* speak 播后用户反应观察窗 */
+#define THINK_DEDUP_MIN    5            /* content 去重窗(分钟) */
 
 static const char *TAG = "soulthink";
 
-#define THINK_POLL_SEC   30
-#define THINK_BOOT_SILENCE 180       /* 开机静默( WiFi/校时稳住再说话) */
-#define THINK_OBSERVE_SEC 20         /* 播报后观察窗(有无回应) */
-
+/* 深思 brain 回调(注入: ai_session_deliberate) */
+static int (*s_brain)(const char *system_prompt, char *reply, size_t cap);
+/* speak 出口(注入: ai_session_announce) */
 static esp_err_t (*s_speak)(const char *text);
-static char s_last_content[KI_CONTENT_MAX + 1];
-static time_t s_last_fire;
-static time_t s_boot_at;
-static int s_fired_today = -1;       /* 日配额计数(负=未初始化) */
 
-void soul_think_set_speak(esp_err_t (*fn)(const char *text))
+static volatile bool s_busy;
+static volatile bool s_voice_seen;
+static uint8_t  s_reason;
+static bool     s_forced;
+static float    s_trig_score;
+
+static uint32_t s_last_think_min;
+static uint8_t  s_thought_today;
+static bool     s_last_silent;
+static float    s_last_silent_score;
+static uint32_t s_last_fire_min;
+static uint8_t  s_fired_today;
+static char     s_last_content[KI_CONTENT_MAX + 1];
+static uint32_t s_last_content_min;
+static TaskHandle_t s_handle;
+
+static StackType_t s_thk_stack[THINK_STACK / sizeof(StackType_t)];
+static StaticTask_t s_thk_tcb;
+
+static uint32_t uptime_min(void)
+{
+    return (uint32_t)(esp_timer_get_time() / 60000000LL) % 1440u;
+}
+
+/* ---- 接线(main.c; brain 必接, 否则深思不触发) ---- */
+void soul_think_set_brain(int (*fn)(const char *, char *, size_t))
+{
+    s_brain = fn;
+}
+
+void soul_think_set_speak(esp_err_t (*fn)(const char *))
 {
     s_speak = fn;
 }
 
-/* ---- LLM 整句收集 ---- */
-static bool think_sent(void *user, const char *sentence, bool final)
+void soul_think_note_voice(void)
 {
-    (void)final;
-    strlcat((char *)user, sentence, 512);
-    return true;
+    s_voice_seen = true;              /* 结算窗证据(用户输入侧记) */
 }
 
-static bool llm_think(const char *prompt, char *out, size_t cap)
+bool soul_think_busy(void)
 {
-    cJSON *messages = cJSON_CreateArray();
-    cJSON *um = cJSON_CreateObject();
-    cJSON_AddStringToObject(um, "role", "user");
-    cJSON_AddStringToObject(um, "content", prompt);
-    cJSON_AddItemToArray(messages, um);
-    struct ks_llm_cfg_v2 cfg = {
-        .url = CONFIG_ESP_CUBE_AI_LLM_URL,
-        .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
-        .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
-        .system = "你是桌面语音助理的内心。根据内在状态决定要不要主动"
-                  "跟用户说一句话。必须只输出一行 JSON: {\"act\":\"speak\""
-                  "或\"silent\",\"content\":\"不超过25字的一句话\","
-                  "\"confidence\":0.0到1.0,\"reason\":\"简短理由\"}。"
-                  "没有充分理由必须 silent; content 不许出现数字; 语气"
-                  "自然, 像家人搭话, 不许说教。",
-        .messages = messages,
-        .tools = NULL,
-        .cut_clauses = false,
-#if CONFIG_ESP_CUBE_AI_LLM_DISABLE_THINKING
-        .no_think = true,
-#else
-        .no_think = false,
-#endif
-    };
-    out[0] = '\0';
-    int rc = ks_llm_chat_v2(&cfg, think_sent, NULL, out);
-    cJSON_Delete(messages);
-    return rc >= 0 && out[0] != '\0';
+    return s_busy;
 }
 
-/* ---- 一次深思维度 ---- */
-static void think_once(void)
+/* 触发闸上下文供给(soul tick 每拍调) */
+void soul_think_gate_ctx(struct ki_think_ctx *tc)
+{
+    if (tc == NULL) return;
+    tc->now_min = uptime_min();
+    tc->last_think_min = s_last_think_min;
+    tc->thought_today = s_thought_today;
+    tc->last_was_silent = s_last_silent;
+    tc->last_silent_score = s_last_silent_score;
+}
+
+/* ---- 行动执行 ---- */
+static void act_broadcast(uint8_t kind, const char *content)
+{
+    cube_soul_act_t a = { .kind = kind };
+    strlcpy(a.content, content, sizeof(a.content));
+    cube_event_publish(CUBE_EVT_SOUL_ACT, &a, sizeof(a));
+}
+
+static void act_execute(const struct ki_intent *it)
+{
+    if (it->act == KI_SPEAK) {
+        if (s_speak != NULL) {
+            s_speak(it->content);
+        }
+        return;
+    }
+    if (it->act == KI_ACT) {
+        /* content 词表: "face:段名" / "music:next|random" */
+        if (strncmp(it->content, "face:", 5) == 0 &&
+            it->content[5] != '\0') {
+            act_broadcast(1, it->content + 5);   /* 瞬态: 深思点名段 */
+        } else if (strncmp(it->content, "music:", 6) == 0 &&
+                   it->content[6] != '\0') {
+            act_broadcast(3, it->content + 6);
+        } else {
+            ESP_LOGW(TAG, "act verb 未知: %s", it->content);
+        }
+    }
+    /* KI_STAY_SILENT: 无行动(一等输出) */
+}
+
+/* ---- 深思 prompt(EspCube persona + 内在状态 + 多行动词表) ---- */
+static void think_prompt(char *buf, size_t n)
 {
     soul_state_t st;
-    if (!soul_state_get(&st) || !st.ai_idle) return;
+    const char *v, *a, *u;
 
-    time_t now = time(NULL);
-    struct tm tmv;
-    localtime_r(&now, &tmv);
-    uint32_t now_min = tmv.tm_hour * 60 + tmv.tm_min;
-
-    /* 日配额(日界重置) */
-    if (s_fired_today < 0 || s_last_fire / 86400 != now / 86400) {
-        s_fired_today = 0;
-    }
-
-    /* 五因子(简化供给: 作息/情感/事件/在场; mem_hook 未接=0) */
-    struct ki_factors f = {
-        .time_rhythm = (tmv.tm_hour >= 9 && tmv.tm_hour < 21) ? 0.6f : 0.2f,
-        .affect_motive = st.urgency,
-        .memory_hook = 0.0f,
-        .event_hook = st.idle_sec > 1800 ? 0.8f : 0.1f,
-        .presence = st.idle_sec < 300 ? 0.7f : 0.2f,
-    };
-    float urg_max = 0;
-    for (int i = 0; i < 3; i++) {
-        float e = 1.0f - st.drive_level[i];
-        if (e > urg_max) urg_max = e;
-    }
-    struct ki_context kctx = {
-        .user_speaking = false,
-        .quiet_hours = (tmv.tm_hour >= 23 || tmv.tm_hour < 8),
-        .now_min = now_min,
-        .last_fire_min = s_last_fire ? (uint32_t)(s_last_fire % 86400 / 60) : 0,
-        .fired_today = (uint8_t)s_fired_today,
-    };
-    struct ki_decision dec;
-    ki_step(&kctx, ki_config_default(), &f, &dec);
-
-    struct ki_think_ctx tctx = {
-        .arousal = st.arousal,
-        .urgency_max = urg_max,
-        .pending_command = false,
-        .quiet_hours = kctx.quiet_hours,
-        .new_event = (st.idle_sec > 1800),
-        .now_min = now_min,
-        .last_think_min = s_last_fire ? (uint32_t)(s_last_fire % 86400 / 60) : 0,
-        .thought_today = (uint8_t)s_fired_today,
-        .score = dec.score,
-        .mem_hook = 0.0f,
-    };
-    struct ki_think_gate gate;
-    ki_think_gate(&tctx, &gate);
-    if (!gate.trigger) {
-        if (gate.blocked_mask) {
-            ESP_LOGI(TAG, "think blocked mask=0x%x", gate.blocked_mask);
-        }
+    if (!soul_state_get(&st)) {
+        buf[0] = '\0';
         return;
     }
+    v = st.valence >= 0.15f ? "愉悦偏正" :
+        st.valence <= -0.15f ? "低落偏负" : "平静";
+    a = st.arousal >= 0.55f ? "较高" :
+        st.arousal >= 0.30f ? "中等" : "低";
+    u = st.urgency >= 0.5f ? "强" :
+        st.urgency >= 0.10f ? "轻微" : "无";
+    snprintf(buf, n,
+        "[主动行为决策] 你是桌面伙伴, 现在没有人在和你说话。"
+        "内在状态: 心情%s、活力%s、表达冲动%s; 已安静%d秒。"
+        "%s"
+        "请决定此刻做什么。你不必等到情绪强烈才行动 —— 安静很久后"
+        "主动换一个表情(face)或放首歌(music)也是好的陪伴方式; 但没有"
+        "充分理由时必须 stay_silent。只输出一行 JSON, 格式: "
+        "{\"act\":\"...\",\"content\":\"...\",\"confidence\":0.8,"
+        "\"evidence\":[\"affect:mood\"],\"reason\":\"一句话理由\"}。"
+        "act 只能是: speak(说一句不超过25字的话)/stay_silent(什么都不做)/"
+        "face(切换表情动画)/music(放歌或切台)。content 规则: speak=那句话; "
+        "face=如 \"face:laugh\", 段名可选 smile|laugh|angry|sad|cry|shy|"
+        "shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|mock|"
+        "snigger|confident|investigate|yummy|mute|badminton; music=next"
+        "(切台)或random(随便放)。没有充分理由必须 stay_silent(content "
+        "留空)。content 不要出现数字。evidence 至少一条, 前缀只能是 "
+        "drive|affect|mem|dialog。",
+        v, a, u, st.idle_sec,
+        st.ethics_latched ? "(安抚模式: 任何输出只能温柔安抚。) " : "");
+}
 
-    /* 深思(云钱): 内在状态 + 场景 → 单句意图 */
-    char prompt[320];
-    snprintf(prompt, sizeof(prompt),
-             "现在是%d点%d分, 用户已经%d分钟没理你。你的内在状态: 心情"
-             "%.2f(%s), 活力%.2f, 想说话的冲动%.2f, 社交联结%.2f。决定"
-             "要不要说句话。",
-             tmv.tm_hour, tmv.tm_min, st.idle_sec / 60,
-             st.valence, st.anim_tag, st.arousal, st.urgency,
-             st.social_bond);
-    char raw[512];
-    if (!llm_think(prompt, raw, sizeof(raw))) {
-        ESP_LOGW(TAG, "think llm failed");
-        return;
-    }
-    struct ki_intent intent;
-    if (ki_intent_parse(raw, strlen(raw), &intent) != KI_PARSE_OK ||
-        intent.act != KI_SPEAK || intent.confidence < KI_CONF_FLOOR) {
-        ESP_LOGI(TAG, "think -> silent (raw=%.60s)", raw);
-        return;
-    }
-    /* 5min 内容去重 */
-    if (s_last_fire && now - s_last_fire < 300 &&
-        strcmp(intent.content, s_last_content) == 0) {
-        return;
-    }
-    strlcpy(s_last_content, intent.content, sizeof(s_last_content));
-    s_last_fire = now;
-    s_fired_today++;
-    ESP_LOGI(TAG, "ignite: %s (%.2f, %s)",
-             intent.content, intent.confidence, intent.reason);
-
-    if (s_speak && s_speak(intent.content) == ESP_OK) {
-        /* 观察窗结算: 20s 内有互动(非 idle)=responded, 否则 ignored ×2 */
-        bool responded = false;
-        for (int i = 0; i < THINK_OBSERVE_SEC; i++) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            soul_state_t s2;
-            if (soul_state_get(&s2) && !s2.ai_idle) {
-                responded = true;
-                break;
-            }
-        }
-        ki_settle2(responded ? KI_SETTLE_RESPONDED : KI_SETTLE_IGNORED);
-        ESP_LOGI(TAG, "settle: %s", responded ? "responded" : "ignored");
+/* act 名归一: kaleido ki_intent_parse 只认 speak/stay_silent(其余
+ * act 是词表位); EspCube 扩展的 face/music 归一到 KI_ACT, content
+ * 词表("face:x"/"music:x")由 act_execute 解释 —— parse 侧零改动 */
+static void act_normalize(char *reply)
+{
+    static const char *names[] = { "\"act\":\"face\"", "\"act\":\"music\"" };
+    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        char *p = strstr(reply, names[i]);
+        if (p == NULL) continue;
+        size_t oldn = strlen(names[i]);
+        memcpy(p, "\"act\":\"act\"", 12);
+        memmove(p + 12, p + oldn, strlen(p + oldn) + 1);
     }
 }
 
-static void soul_think_task(void *arg)
+/* ---- 深思任务(常驻, notify 门控, 单飞) ---- */
+static void think_task(void *arg)
 {
+    static char prompt[1600];
+    static char reply[THINK_REPLY_MAX];
+
     (void)arg;
-    s_boot_at = time(NULL);
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(THINK_POLL_SEC * 1000));
-        if (time(NULL) - s_boot_at < THINK_BOOT_SILENCE) continue;
-        think_once();
-    }
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        struct ki_intent intent;
+        struct ki_decision dec;
+        enum ki_parse_err pe;
+        uint32_t now = uptime_min();
+
+        reply[0] = 0;
+        if (s_brain == NULL) {
+            /* 无 brain: 不盲动(接线纪律) */
+            goto out;
+        }
+        think_prompt(prompt, sizeof(prompt));
+        ESP_LOGI(TAG, "THINK reason=%u forced=%d score=%.2f",
+                 s_reason, s_forced, s_trig_score);
+        if (s_brain(prompt, reply, sizeof(reply)) != 0 || !reply[0]) {
+            ESP_LOGW(TAG, "LLMFAIL deliberation");
+            ki_settle2(KI_SETTLE_SILENT);
+            s_last_silent = true;
+            goto out;
+        }
+        ESP_LOGI(TAG, "raw: %.100s", reply);
+        act_normalize(reply);
+
+        pe = ki_intent_parse(reply, strlen(reply), &intent);
+        if (pe != KI_PARSE_OK && pe != KI_PARSE_CONTENT_LONG) {
+            ESP_LOGW(TAG, "REJECT parse=%d", (int)pe);   /* 拒非降级 */
+            ki_settle2(KI_SETTLE_SILENT);
+            s_last_silent = true;
+            goto out;
+        }
+        if (intent.act == KI_STAY_SILENT ||
+            intent.confidence < KI_CONF_FLOOR) {
+            ESP_LOGI(TAG, "SILENT conf=%.2f reason=%.32s",
+                     intent.confidence, intent.reason);
+            ki_settle2(KI_SETTLE_SILENT);
+            s_last_silent = true;
+            s_last_silent_score = s_trig_score;
+            goto out;
+        }
+        /* 去重窗 */
+        if (strncmp(intent.content, s_last_content,
+                    sizeof(intent.content)) == 0 &&
+            now - s_last_content_min < THINK_DEDUP_MIN) {
+            ESP_LOGW(TAG, "REJECT duplicate");
+            ki_settle2(KI_SETTLE_SILENT);
+            s_last_silent = true;
+            goto out;
+        }
+
+        /* 出口硬门(只门动作不门思维; forced 落痕越否决) */
+        {
+            soul_state_t st;
+            soul_state_get(&st);
+            struct ki_fire_ctx fc = {
+                .user_speaking = !st.ai_idle,
+                .ethics_latched = st.ethics_latched,
+                .tts_ready = s_speak != NULL,
+                .now_min = now,
+                .last_fire_min = s_last_fire_min,
+                .fired_today = s_fired_today,
+            };
+            ki_intent_fire(&intent, &fc, ki_config_default(), &dec);
+        }
+        if (dec.gates.gate_mask && !s_forced) {
+            ESP_LOGW(TAG, "GATE fire_mask=%u", dec.gates.gate_mask);
+            ki_settle2(KI_SETTLE_GATE_BLOCKED);
+            goto out;
+        }
+
+        /* 执行 */
+        ESP_LOGI(TAG, "EXEC act=%d %s (%.2f) %s",
+                 (int)intent.act, intent.content, intent.confidence,
+                 intent.reason);
+        act_execute(&intent);
+        if (intent.act != KI_SPEAK) {
+            /* 非说话行动无"被回应"语义, 直接结算 */
+            ki_settle2(KI_SETTLE_RESPONDED);
+            strlcpy(s_last_content, intent.content, sizeof(s_last_content));
+            s_last_content_min = now;
+            goto settled;
+        }
+        /* speak: 播后观察窗 */
+        s_voice_seen = false;
+        for (int i = 0; i < THINK_SETTLE_S * 5; i++) {
+            if (s_voice_seen) break;
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        if (s_voice_seen) {
+            ki_settle2(KI_SETTLE_RESPONDED);
+            ESP_LOGI(TAG, "SETTLE responded");
+        } else {
+            ki_settle2(KI_SETTLE_IGNORED);
+            ESP_LOGW(TAG, "SETTLE ignored, cooldown=%umin",
+                     ki_cooldown_current());
+        }
+        strlcpy(s_last_content, intent.content, sizeof(s_last_content));
+        s_last_content_min = now;
+
+settled:
+        s_fired_today++;
+        s_last_fire_min = now;
+        s_last_silent = false;
+
+out:
+        s_thought_today++;
+        s_last_think_min = now;
+        s_voice_seen = false;
+        s_busy = false;
+    }   /* 回 notify 门控待命 */
 }
 
 esp_err_t soul_think_start(void)
 {
-    static bool inited;
-    if (inited) return ESP_OK;
-    inited = true;
-    if (xTaskCreate(soul_think_task, "soulthink", 6144, NULL, 3, NULL)
-        != pdPASS) {
-        return ESP_ERR_NO_MEM;
-    }
-    ESP_LOGI(TAG, "proactive think up (poll %ds)", THINK_POLL_SEC);
+    if (s_handle != NULL) return ESP_OK;
+    s_handle = xTaskCreateStatic(think_task, "think",
+                                 THINK_STACK / sizeof(StackType_t),
+                                 NULL, THINK_PRIO, s_thk_stack, &s_thk_tcb);
+    if (s_handle == NULL) return ESP_ERR_NO_MEM;
+    ESP_LOGI(TAG, "think task up (deliberation loop)");
     return ESP_OK;
 }
 
-#else /* !PROACTIVE */
+/* soul tick 触发入口(gate 过后调; 忙则丢弃 —— 思维不排队) */
+bool soul_think_fire(uint8_t reason_mask, bool forced, float score)
+{
+    if (s_busy || s_handle == NULL) return false;
+    s_reason = reason_mask;
+    s_forced = forced;
+    s_trig_score = score;
+    s_busy = true;
+    xTaskNotifyGive(s_handle);
+    return true;
+}
 
+#else /* 未启用 proactive: 空实现(链接面不变) */
+
+void soul_think_set_brain(int (*fn)(const char *, char *, size_t)) { (void)fn; }
+void soul_think_set_speak(esp_err_t (*fn)(const char *)) { (void)fn; }
+void soul_think_note_voice(void) {}
+bool soul_think_busy(void) { return false; }
+void soul_think_gate_ctx(struct ki_think_ctx *tc) { (void)tc; }
 esp_err_t soul_think_start(void) { return ESP_OK; }
-void soul_think_set_speak(esp_err_t (*fn)(const char *text)) { (void)fn; }
+bool soul_think_fire(uint8_t r, bool f, float s)
+{ (void)r; (void)f; (void)s; return false; }
 
 #endif

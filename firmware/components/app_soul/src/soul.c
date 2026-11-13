@@ -79,6 +79,99 @@ static uint64_t s_last_active_tick;        /* 最近非 IDLE 拍(idle 计时) */
 extern void soul_mem_record(const char *user, const char *reply,
                             float valence, float arousal);
 extern void soul_mem_boot(void);
+/* soul_think 弱耦合(同上) */
+extern bool soul_think_fire(uint8_t reason, bool forced, float score);
+extern void soul_think_gate_ctx(struct ki_think_ctx *tc);
+
+/* ---- 灵魂 2.0: 表情三层决策(Phase1 实装) ----
+ * L0 快反射: 会话事件拍 → 瞬态段(播完回底色, ui 侧 8s 回拉);
+ * L1 底色: ke valence/arousal 连续坐标 → 素材坐标最近邻 + 迟滞
+ *   (最小驻留 180s 且距离优势 >30% 才切 —— 防频繁跳段);
+ * L2 深思: ki_think_gate 触发 → soul_think_fire(深思轮另文件)。 */
+static const struct {
+    const char *clip;      /* face/ 段名 */
+    float v, a;            /* valence -1..1, arousal 0..1 坐标 */
+} s_face_map[] = {
+    { "smile",       0.6f, 0.50f },
+    { "smile_static",0.5f, 0.30f },
+    { "laugh",       0.8f, 0.80f },
+    { "snigger",     0.6f, 0.60f },
+    { "yummy",       0.7f, 0.60f },
+    { "confident",   0.5f, 0.55f },
+    { "leisure",     0.3f, 0.30f },
+    { "music",       0.5f, 0.60f },
+    { "shy",         0.2f, 0.45f },
+    { "mock",       -0.1f, 0.55f },
+    { "sad",        -0.6f, 0.25f },
+    { "cry",        -0.7f, 0.45f },
+    { "sigh",       -0.4f, 0.20f },
+    { "angry",      -0.7f, 0.80f },
+    { "panic",      -0.5f, 0.90f },
+    { "shocked",     0.0f, 0.90f },
+    { "question",    0.0f, 0.60f },
+    { "ponder",      0.0f, 0.45f },
+    { "investigate", 0.1f, 0.55f },
+    { "yawn",        0.0f, 0.10f },
+    { "asleep",      0.1f, 0.05f },
+    { "mute",        0.0f, 0.30f },
+    { "badminton",   0.6f, 0.70f },
+};
+#define FACE_MAP_N  (sizeof(s_face_map) / sizeof(s_face_map[0]))
+
+static void face_act_publish(uint8_t kind, const char *clip)
+{
+    cube_soul_act_t a = { .kind = kind };
+    strlcpy(a.content, clip, sizeof(a.content));
+    cube_event_publish(CUBE_EVT_SOUL_ACT, &a, sizeof(a));
+}
+
+/* L1 底色选择(最近邻 + 迟滞; 挂在 mood_publish 拍) */
+static void face_bg_select(const struct soul_snap *sn)
+{
+    static char cur[24] = "leisure";     /* 开机底色 */
+    static uint32_t since_tick;
+    int best = -1;
+    float bd = 1e9f;
+    for (unsigned i = 0; i < FACE_MAP_N; i++) {
+        float dv = sn->emo.state.valence - s_face_map[i].v;
+        float da = sn->emo.state.arousal - s_face_map[i].a;
+        float d = dv * dv + da * da * 0.5f;
+        if (d < bd) { bd = d; best = (int)i; }
+    }
+    if (best < 0) return;
+    if (strcmp(cur, s_face_map[best].clip) == 0) {
+        since_tick = (uint32_t)sn->tick;
+        return;
+    }
+    /* 迟滞: 驻留 <180s 不切; 距离优势不足(新点距 > 0.7×当前段距)不切 */
+    if (sn->tick - since_tick < 180) return;
+    for (unsigned i = 0; i < FACE_MAP_N; i++) {
+        if (strcmp(cur, s_face_map[i].clip) == 0) {
+            float cv = sn->emo.state.valence - s_face_map[i].v;
+            float ca = sn->emo.state.arousal - s_face_map[i].a;
+            if (bd > 0.7f * 0.7f * (cv * cv + ca * ca * 0.5f)) return;
+            break;
+        }
+    }
+    strlcpy(cur, s_face_map[best].clip, sizeof(cur));
+    since_tick = (uint32_t)sn->tick;
+    ESP_LOGI(TAG, "face bg -> %s (v=%.2f a=%.2f)", cur,
+             sn->emo.state.valence, sn->emo.state.arousal);
+    face_act_publish(0, cur);
+}
+
+/* L0 事件瞬态(单拍, 消费事件时调) */
+static void face_evt_transient(enum kd_event evt)
+{
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+    switch (evt) {
+    case KD_EVT_BARGE:     face_act_publish(1, "shocked"); break;
+    case KD_EVT_ROUND_OK:  face_act_publish(1, "smile");   break;
+    case KD_EVT_ROUND_FAIL:face_act_publish(1, "sigh");    break;
+    default: break;                   /* VOICE/NONE 无瞬态 */
+    }
+#endif
+}
 
 /* ---- 总线缓存 ---- */
 static void soul_evt_cb(cube_evt_id_t id, const void *data, size_t len,
@@ -270,15 +363,18 @@ static void soul_task(void *arg)
         if (p & PEND_BARGE) {
             s_pend &= ~PEND_BARGE;
             evt = KD_EVT_BARGE;
+            face_evt_transient(KD_EVT_BARGE);       /* L0 快反射 */
         } else if (p & PEND_ROUND_OK) {
             s_pend &= ~PEND_ROUND_OK;
             evt = KD_EVT_ROUND_OK;
+            face_evt_transient(KD_EVT_ROUND_OK);
             round_now = round_ok = true;
             strlcpy(ru, s_round_user, sizeof(ru));
             strlcpy(rr, s_round_reply, sizeof(rr));
         } else if (p & PEND_ROUND_FAIL) {
             s_pend &= ~PEND_ROUND_FAIL;
             evt = KD_EVT_ROUND_FAIL;
+            face_evt_transient(KD_EVT_ROUND_FAIL);
             round_now = true;
             round_ok = false;
             strlcpy(ru, s_round_user, sizeof(ru));
@@ -331,6 +427,32 @@ static void soul_task(void *arg)
             xSemaphoreGive(s_lock);
         }
         mood_publish(&s_snap, false);
+        face_bg_select(&s_snap);        /* L1 底色(连续坐标+迟滞) */
+
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+        /* L2 思维闸: J(ki_think_gate 判据)+E(ke)+V(kd 误差) → 触发深思 */
+        {
+            static bool s_think_new_event;
+            if (evt != KD_EVT_NONE) s_think_new_event = true;
+            struct ki_think_ctx tc = {
+                .arousal = ke_out.state.arousal,
+                .urgency_max = kd_out.error_max,
+                .pending_command = (s_ai_state != AI_IDLE),
+                .quiet_hours = ({ time_t _t = time(NULL);
+                                  struct tm _m; localtime_r(&_t, &_m);
+                                  _m.tm_hour >= 23 || _m.tm_hour < 8; }),
+                .new_event = s_think_new_event,
+                .mem_hook = 0,             /* W4 记忆钩子后续接 */
+            };
+            soul_think_gate_ctx(&tc);
+            struct ki_think_gate g;
+            ki_think_gate(&tc, &g);
+            if (g.trigger && !g.blocked_mask) {
+                s_think_new_event = false;
+                soul_think_fire(g.reason_mask, false, 0.6f);
+            }
+        }
+#endif
 
         /* 记忆(轮结束拍; 与快照同拍, 拿的是当拍前情绪——可接受) */
         if (round_now && ru[0]) {

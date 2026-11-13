@@ -25,12 +25,20 @@
 extern "C" {
 #endif
 
+#include "soul_ignition.h"    /* ki_think_ctx/ki_intent(W3 思维协议) */
+
 /* 启动 1Hz 灵魂任务(幂等); 依赖 NVS 已初始化(记忆层) */
 esp_err_t soul_start(void);
 
-/* 主动交互(点火): 出声通道注入(避免组件循环依赖) + 启动 */
+/* 灵魂 2.0 深思轮(W3): brain=深思 LLM 通道注入(整句收集), speak=出声
+ * 通道注入(announce); 行动 face/music 经 CUBE_EVT_SOUL_ACT 广播 */
+void soul_think_set_brain(int (*fn)(const char *sys, char *reply, size_t cap));
 void soul_think_set_speak(esp_err_t (*fn)(const char *text));
 esp_err_t soul_think_start(void);
+void soul_think_gate_ctx(struct ki_think_ctx *tc);   /* tick 供上下文 */
+bool soul_think_fire(uint8_t reason_mask, bool forced, float score);
+void soul_think_note_voice(void);   /* 用户输入侧记(结算窗证据) */
+bool soul_think_busy(void);
 
 /* ---- 事件钩子(任意任务; 内部 pend, tick 消费) ---- */
 void soul_on_round(bool ok, const char *user_text, const char *reply_first);
