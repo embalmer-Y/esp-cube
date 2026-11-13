@@ -17,6 +17,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_random.h"
 
 #include "cubecore.h"
 #include "board_config.h"
@@ -75,6 +76,27 @@ static void player_start_task(void *arg)
     (void)arg;
     app_player_start(NULL);         /* 无参 = 播放列表轮播 */
     vTaskDelete(NULL);
+}
+
+/* 灵魂 2.0 行动执行器(音乐): 深思意图 CUBE_EVT_SOUL_ACT(kind=music)
+ * → 切台。face 执行器在 ui_port_esp(订阅同事件), speak 走回调注入 */
+static void soul_act_cb(cube_evt_id_t id, const void *data, size_t len,
+                        void *ctx)
+{
+    (void)ctx;
+    if (id != CUBE_EVT_SOUL_ACT || data == NULL || len < sizeof(cube_soul_act_t)) return;
+    const cube_soul_act_t *a = data;
+    if (a->kind != 3) return;                 /* 3=music */
+    extern void ui_ctl_switch_station(int dir);
+    if (strcmp(a->content, "next") == 0) {
+        ui_ctl_switch_station(1);
+        ESP_LOGI(TAG, "soul act: music next");
+    } else if (strcmp(a->content, "random") == 0) {
+        extern void ui_ctl_select_station(int idx);
+        int n = app_player_station_num();
+        if (n > 0) ui_ctl_select_station(esp_random() % n);
+        ESP_LOGI(TAG, "soul act: music random");
+    }
 }
 
 /* ---- 演示事件观察者(仅策略与日志; 跨模块功能由各模块自订阅,
@@ -169,7 +191,10 @@ void app_main(void)
         ESP_LOGE(TAG, "soul degraded: %s", esp_err_to_name(serr));
     }
 #if CONFIG_ESP_CUBE_SOUL_PROACTIVE
-    soul_think_set_speak(ai_session_announce);   /* 点火出声 → 带外播报 */
+    /* 灵魂 2.0 深思轮: brain=深思 LLM 通道, speak=带外播报;
+     * face/music 行动经 CUBE_EVT_SOUL_ACT 广播(music 桥在此订阅) */
+    soul_think_set_brain(ai_session_deliberate);
+    soul_think_set_speak(ai_session_announce);
     soul_think_start();
 #endif
 #endif
@@ -260,6 +285,9 @@ void app_main(void)
 
     /* ---- 6. 演示观察者 + 串口 CLI ---- */
     cube_event_subscribe(demo_evt_cb, NULL);
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+    cube_event_subscribe(soul_act_cb, NULL);   /* 深思 music 执行器 */
+#endif
     ESP_ERROR_CHECK(cli_start());   /* ncm 点歌/电台切台调试入口(无触摸期最小输入通道) */
 
     ESP_LOGI(TAG, "startup complete, free heap=%u / psram=%u",

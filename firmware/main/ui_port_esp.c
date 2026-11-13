@@ -93,8 +93,31 @@ static void assist_refresh(void)
 }
 
 /* ---- 1s 时钟拍(int 字段天然原子; esp_timer 任务上下文) ---- */
+/* ---- 灵魂 2.0 face 执行器状态(底色记忆 + 请求记账 + 瞬态回拉) ---- */
+static char s_face_bg[24] = "giphy";          /* 当前底色段名(giphy=内嵌) */
+static volatile char s_face_req[24];          /* 待加载段(tick 消费) */
+static volatile bool s_face_req_pending;
+static volatile int64_t s_face_revert_ms;     /* >0 = 瞬态回拉时刻 */
+
+/* tick 提交(异步纪律: timer/总线回调都不做阻塞 SD 读;
+ * ui_port_face_req = strdup+faceload 任务, 16KB 栈) */
+static void face_req_consume(void)
+{
+    extern esp_err_t ui_port_face_req(const char *rel);
+    if (s_face_req_pending) {
+        s_face_req_pending = false;
+        ui_port_face_req((const char *)s_face_req);
+    }
+    if (s_face_revert_ms > 0 &&
+        esp_timer_get_time() / 1000 >= s_face_revert_ms) {
+        s_face_revert_ms = 0;
+        ui_port_face_req(s_face_bg);           /* 回底色 */
+    }
+}
+
 static void port_tick_cb(void *arg)
 {
+    face_req_consume();                       /* 灵魂 face 请求(异步提交) */
     time_t t = time(NULL);
     if (t > 1000000000LL) {
         struct tm tmv;
@@ -112,6 +135,7 @@ static void port_tick_cb(void *arg)
 }
 
 /* ---- 事件回调(发布者任务上下文) ---- */
+static void face_req_consume(void);    /* 灵魂 face 状态(后部定义) */
 static void port_evt_cb(cube_evt_id_t id, const void *data, size_t len,
                         void *ctx)
 {
@@ -172,6 +196,21 @@ static void port_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     case CUBE_EVT_REMINDER_FIRED:
         assist_refresh();                   /* 计数/下条提醒快照重拉 */
         break;
+    case CUBE_EVT_SOUL_ACT: {                  /* 灵魂 2.0 face 执行器 */
+        /* 总线回调不得阻塞(SD 读+EFC init 重): 只记账, tick 异步执行 */
+        const cube_soul_act_t *act = (const cube_soul_act_t *)data;
+        if (act == NULL || len < sizeof(*act)) break;
+        if (act->kind == 0) {                   /* 底色: 切换并记忆 */
+            strlcpy(s_face_bg, act->content, sizeof(s_face_bg));
+            strlcpy((char *)s_face_req, act->content, sizeof(s_face_req));
+            s_face_req_pending = true;
+        } else if (act->kind == 1) {            /* 瞬态: 播完回底色 */
+            strlcpy((char *)s_face_req, act->content, sizeof(s_face_req));
+            s_face_req_pending = true;
+            s_face_revert_ms = esp_timer_get_time() / 1000 + 8000;
+        }
+        break;
+    }
     case CUBE_EVT_SOUL_MOOD: {
         const cube_soul_mood_t *mood =
             (const cube_soul_mood_t *)data;
@@ -412,3 +451,12 @@ int ui_audio_take_pcm(int16_t *stereo, int frames)
 {
     return audio_mixer_take_spectrum(stereo, frames) ? frames : 0;
 }
+
+#if !CONFIG_ESP_CUBE_ENABLE_EFC
+/* S31(无 EFC): 表情热载桩 —— 灵魂 face 行动链编译面完整 */
+esp_err_t ui_port_face_req(const char *rel)
+{
+    (void)rel;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+#endif

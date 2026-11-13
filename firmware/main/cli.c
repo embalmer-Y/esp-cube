@@ -317,6 +317,15 @@ static void handle_line(char *line)
         /* 素材/配置传输通道: wget <url> [相对路径](缺省 face/下载名.efc);
          * PC 侧 python3 -m http.server 配合, http 明文(局域网) */
         cmd_wget(arg);
+    } else if (strcmp(line, "think") == 0) {
+        /* 灵魂 2.0 台调: 强制触发深思轮(绕过思维闸, 出口门照常) */
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+        extern bool soul_think_fire(uint8_t r, bool f, float s);
+        printf("  think: %s\n", soul_think_fire(0xFF, true, 1.0f)
+               ? "已触发(结果见 soulthink 日志)" : "忙(上次深思未收口)");
+#else
+        printf("  think: SOUL_PROACTIVE 未开\n");
+#endif
     } else if (strcmp(line, "sdretry") == 0) {
         /* SD 台调: sdretry [0|1] 0=SDMMC slot0 / 1=SDSPI(SPI2);
          * 失败可反复重试(插拔卡后无需重启) */
