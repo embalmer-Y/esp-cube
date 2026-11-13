@@ -182,6 +182,17 @@ menu "EspCube Configuration"
             日配额 + 冷静期, 触发后 LLM 深思单句 → 带外播报。
             默认关(验收后再开, 避免意外说话)。
 
+    config ESP_CUBE_SOUL_BOOT_RADIO
+        bool "开机电台反射(联网即自娱放歌)"
+        default y
+        depends on ESP_CUBE_ENABLE_SOUL
+        help
+            AI-first 架构(docs/14): 原装配层"WIFI 就绪自动播电台"演示
+            行为移交灵魂 L0 反射 —— 联网边沿且未在播且未退避(用户手动
+            停台 2h 内)则放歌。关闭 = 开机完全安静, 音乐只由评分器
+            (无聊自娱)或深思或用户指令触发。SOUL 未启用目标(S31)
+            仍走 main.c 旧自启路径。
+
     # ============ 网络 ============
     config ESP_CUBE_WIFI_SSID
         string "WiFi SSID(原型期经 menuconfig 填写; 凭据不入库, M3 改为配网)"

@@ -38,6 +38,10 @@
 #if CONFIG_ESP_CUBE_ENABLE_AI
 #include "ai_session.h"
 #endif
+#if CONFIG_ESP_CUBE_ENABLE_SOUL
+#include "soul_bb.h"
+#include "soul_behavior.h"
+#endif
 
 static const char *TAG = "cli";
 
@@ -212,6 +216,9 @@ static void handle_line(char *line)
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
 #endif
+#if CONFIG_ESP_CUBE_ENABLE_SOUL
+               "  bb 黑板快照 | bh 行为分数 | bbset <键> <值> [ttl] 台调\n"
+#endif
         );
     } else if (strcmp(line, "ncm") == 0) {
         cmd_ncm(arg);
@@ -325,6 +332,45 @@ static void handle_line(char *line)
                ? "已触发(结果见 soulthink 日志)" : "忙(上次深思未收口)");
 #else
         printf("  think: SOUL_PROACTIVE 未开\n");
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_SOUL
+    } else if (strcmp(line, "bb") == 0) {
+        /* L1 因子黑板快照(可观测性; 评分器/深思/prompt 同源) */
+        static char bbuf[720];
+        soul_bb_dump(bbuf, sizeof(bbuf));
+        printf("  bb: %s\n", bbuf);
+    } else if (strcmp(line, "bh") == 0) {
+        /* L2 行为注册表(最近一轮分数/阈值) */
+        static char hbuf[512];
+        soul_behavior_dump(hbuf, sizeof(hbuf));
+        printf("  bh:\n%s\n", hbuf);
+    } else if (strcmp(line, "bbset") == 0) {
+        /* 黑板台调覆写: bbset <键名|序号> <值> [ttl秒](缺省 300;
+         * 如 bbset quiet 1 600 → 验证 radio_stop 勿扰自停) */
+        char key[24];
+        float val;
+        int ttl = 300;
+        int n = arg != NULL
+            ? sscanf(arg, "%23s %f %d", key, &val, &ttl) : 0;
+        if (n >= 2) {
+            int id = -1;
+            if (key[0] >= '0' && key[0] <= '9') {
+                id = atoi(key);
+            } else {
+                for (int i = 0; i < SOUL_BB_CNT; i++) {
+                    if (strcmp(key, soul_bb_name(i)) == 0) { id = i; break; }
+                }
+            }
+            if (id >= 0 && id < SOUL_BB_CNT) {
+                soul_bb_override(id, val, ttl > 0 ? (uint32_t)ttl : 0);
+                printf("  bbset %s=%+.2f ttl=%ds\n",
+                       soul_bb_name(id), val, ttl);
+            } else {
+                printf("  bbset: 未知键 %s(bb 看键名)\n", key);
+            }
+        } else {
+            printf("  用法: bbset <键名> <值> [ttl秒](如 bbset quiet 1 600)\n");
+        }
 #endif
     } else if (strcmp(line, "sdretry") == 0) {
         /* SD 台调: sdretry [0|1] 0=SDMMC slot0 / 1=SDSPI(SPI2);

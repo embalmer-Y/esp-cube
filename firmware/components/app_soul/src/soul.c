@@ -1,15 +1,35 @@
 /*
- * soul.c —— 灵魂编排: 1Hz tick(kd→ke) + 事件漏斗 + prompt/消费出口
+ * soul.c —— 灵魂编排: L0 感知/反射 + 1Hz tick(kd→ke→黑板) + 行为评分
+ *           + prompt/消费出口(docs/14 架构蓝图)
  *
- * 移植自 Kaleido tools/hil/convo-stage/main/soul.c(W0-3), 适配 EspCube:
- *   - 会话状态经 CUBE_EVT_AI_STATE 总线缓存(不直接依赖 ai_session);
- *   - 播放器状态经 CUBE_EVT_PLAYER_STATE 缓存(quiet = idle 且无播放);
- *   - 消费出口: prompt suffix / tts hint / CUBE_EVT_SOUL_MOOD(节流)。
- * kd/ke 为纯函数组件(零平台依赖), 本层持有唯一调用权(单写者纪律)。
+ * 移植自 Kaleido tools/hil/convo-stage/main/soul.c(W0-3), 适配 EspCube;
+ * Phase A 骨架重排(2026-11-13, docs/14):
+ *   - L0 感知: 总线环境事件(网络/播放/存储/校时)→边沿/跃迁检测→
+ *     黑板 NET/PLAYING + 显著性充值; 反射(事件直通不过评分):
+ *     瞬态表情(已有)/开机放歌(WiFi↑→music:play, AI-first: 电台是
+ *     AI 的能力, 决策权从装配层移交灵魂);
+ *   - L1 黑板: kd/ke/情境每拍供给(soul_bb), 单写者=soul tick;
+ *   - L2 评分: soul_behavior_tick(无聊放歌/勿扰自停/独处微表情),
+ *     行动出口=SOUL_ACT 广播(与深思/会话技能同一词汇表);
+ *   - 直控学习: 灵魂动作窗口外的停播=用户手动 → radio_start 退避
+ *     2h(礼貌红线: 不跟用户抢方向盘)。
+ * kd/ke 为纯函数组件(零平台依赖), 本层持有唯一调用权(单写者纪律);
+ * 事件钩子任意任务可调(内部只置 pending 位, tick 内按优先级消费:
+ * BARGE > ROUND_* > VOICE)。
+ *
+ * 消费通道:
+ *   - soul_prompt_suffix(): 每轮 LLM system prompt 追加内在状态 +
+ *     mood 标签协议(LLM 回复尾部 <mood d="+0.1"/>, soul_strip_mood_tag
+ *     剥离并回写 —— LLM 禁直写情感数值, 重评价唯一合法通道);
+ *   - soul_tts_hint(): 语速/音高调制(cosyvoice speech_rate/pitch);
+ *   - CUBE_EVT_SOUL_MOOD: anim_tag/关键维快照(节流: tag 变化或 60s);
+ *   - soul_on_round(): 顺带喂记忆(soul_mem, 另文件)。
  */
 #include "soul.h"
 #include "soul_drive.h"
 #include "soul_emotion.h"
+#include "soul_bb.h"
+#include "soul_behavior.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -44,6 +64,14 @@ static const char *TAG = "soul";
 
 #define SOUL_TICK_MS       1000
 #define SOUL_VOICE_MIN_MS  5000     /* VOICE 事件限频(Kaleido 同款) */
+#define SOUL_IDLE_SAT_SEC  7200u    /* IDLE 因子饱和时长(2h) */
+#define SOUL_USERSTOP_DEFER 7200u   /* 用户停台 → radio_start 退避 */
+#define SOUL_MUSIC_GEN_WIN  15u     /* 灵魂音乐动作窗口(异执行完成前) */
+
+/* app_player_state_t 数值口径(soul 不依赖能力层头, 分层纪律):
+ * 0=IDLE 1=CONNECTING 2=PLAYING 3=ERROR; 在播位=连接或播放中 */
+#define PLAYER_ST_CONNECTING 1
+#define PLAYER_ST_PLAYING    2
 
 /* ---- 事件漏斗(置位任意任务, 消费唯 tick) ---- */
 #define PEND_ROUND_OK   0x01
@@ -54,6 +82,13 @@ static volatile uint8_t s_pend;
 /* round 附带文本(单槽, 新覆盖旧 —— 轮结束才写, 会话任务上下文) */
 static char s_round_user[192];
 static char s_round_reply[96];
+
+/* ---- L0 环境感知漏斗(总线回调置位, tick 消费) ---- */
+static volatile bool s_evt_net_up, s_evt_net_down;
+static volatile bool s_evt_sd, s_evt_timesync, s_evt_player_chg;
+static bool s_time_synced;             /* SNTP 后才有"勿扰时段"裁决权 */
+static int  s_prev_playing;            /* 上一拍播放位(跃迁检测) */
+static uint32_t s_music_gen_until;     /* 灵魂音乐动作窗(区分用户停台) */
 
 /* mood 重评价单槽(值+序号; tick 内消费施加) */
 static volatile float s_mood_req;
@@ -125,6 +160,13 @@ static void face_act_publish(uint8_t kind, const char *clip)
     cube_event_publish(CUBE_EVT_SOUL_ACT, &a, sizeof(a));
 }
 
+/* 音乐行动出口(kind=3; 记"灵魂发起"窗口 → 感知区分用户直控) */
+static void soul_music_act(const char *cmd)
+{
+    s_music_gen_until = (uint32_t)s_ticks + SOUL_MUSIC_GEN_WIN;
+    face_act_publish(3, cmd);
+}
+
 /* L1 底色选择(最近邻 + 迟滞; 挂在 mood_publish 拍) */
 static void face_bg_select(const struct soul_snap *sn)
 {
@@ -179,13 +221,25 @@ static void soul_evt_cb(cube_evt_id_t id, const void *data, size_t len,
 {
     (void)len; (void)ctx;
     if (id == CUBE_EVT_AI_STATE && data) {
+        ai_state_t prev = s_ai_state;
         s_ai_state = *(const ai_state_t *)data;
         if (s_ai_state == AI_LISTENING) {
             /* 唤醒进入聆听 = 强社交在场信号(等价 Kaleido VOICE 拍) */
             soul_on_voice();
         }
+        if (prev != s_ai_state) soul_bb_salience(0.3f);
     } else if (id == CUBE_EVT_PLAYER_STATE && data) {
+        int prev = s_player_state;
         s_player_state = *(const int *)data;
+        if (prev != s_player_state) s_evt_player_chg = true;
+    } else if (id == CUBE_EVT_WIFI_CONNECTED) {
+        s_evt_net_up = true;             /* 边沿去重在 tick 消费侧 */
+    } else if (id == CUBE_EVT_WIFI_DISCONNECTED) {
+        s_evt_net_down = true;
+    } else if (id == CUBE_EVT_SD_READY) {
+        s_evt_sd = true;
+    } else if (id == CUBE_EVT_TIME_SYNCED) {
+        s_evt_timesync = true;
     }
 }
 
@@ -334,7 +388,144 @@ static void mood_publish(const struct soul_snap *sn, bool force)
     cube_event_publish(CUBE_EVT_SOUL_MOOD, &m, sizeof(m));
 }
 
-/* ---- 1Hz 灵魂任务(单写者: kd/ke 唯一调用权) ---- */
+/* ---- L0 感知消费(tick 内; 边沿/跃迁 → 黑板/显著性/反射/直控学习) ---- */
+static void perception_consume(void)
+{
+    if (s_evt_net_up) {
+        s_evt_net_up = false;
+        bool was_up = soul_bb_get(SOUL_BB_NET) > 0.5f;
+        soul_bb_set(SOUL_BB_NET, 1.0f);
+        soul_bb_salience(0.6f);
+#if CONFIG_ESP_CUBE_SOUL_BOOT_RADIO
+        /* 开机反射(AI-first): 联网即自娱放歌 —— 原装配层演示行为
+         * 移交灵魂; 用户手动停台退避期内不复播(尊重直控) */
+        if (!was_up && soul_bb_get(SOUL_BB_PLAYING) < 0.5f &&
+            !soul_behavior_deferred("radio_start")) {
+            ESP_LOGI(TAG, "L0 reflex: boot radio play");
+            soul_music_act("play");
+        }
+#endif
+    }
+    if (s_evt_net_down) {
+        s_evt_net_down = false;
+        soul_bb_set(SOUL_BB_NET, 0.0f);
+        soul_bb_salience(0.6f);
+    }
+    if (s_evt_sd) {
+        s_evt_sd = false;
+        soul_bb_salience(0.4f);
+    }
+    if (s_evt_timesync) {
+        s_evt_timesync = false;
+        s_time_synced = true;          /* 此后勿扰时段才有裁决权 */
+        soul_bb_salience(0.5f);
+    }
+
+    /* 播放跃迁: 灵魂动作窗口外的停播 = 用户直控 → 退避(礼貌红线) */
+    int playing = (s_player_state == PLAYER_ST_CONNECTING ||
+                   s_player_state == PLAYER_ST_PLAYING) ? 1 : 0;
+    if (s_evt_player_chg) {
+        s_evt_player_chg = false;
+        soul_bb_salience(0.3f);
+        if (s_prev_playing && !playing &&
+            (uint32_t)s_ticks > s_music_gen_until) {
+            soul_behavior_defer("radio_start", SOUL_USERSTOP_DEFER);
+            ESP_LOGI(TAG, "user stopped playback -> radio deferred %us",
+                     SOUL_USERSTOP_DEFER);
+        }
+    }
+    s_prev_playing = playing;
+    soul_bb_set(SOUL_BB_PLAYING, (float)playing);
+}
+
+/* ---- 黑板供给(kd/ke + 情境; 单写者=tick) ---- */
+static void bb_feed(const struct kd_output *kd, const struct ke_output *ke)
+{
+    soul_bb_set(SOUL_BB_VALENCE, ke->state.valence);
+    soul_bb_set(SOUL_BB_AROUSAL, ke->state.arousal);
+    soul_bb_set(SOUL_BB_URGENCY, ke->state.urgency);
+    soul_bb_set(SOUL_BB_BOND,    ke->state.social_bond);
+    soul_bb_set(SOUL_BB_ETHICS,  ke->state.ethics_latched ? 1 : 0);
+    /* 动机缺口 = kd 误差(水库缺口口径, docs/14 §4) */
+    soul_bb_set(SOUL_BB_M_SOCIAL, kd->error[KD_SOCIAL]);
+    soul_bb_set(SOUL_BB_M_STIM,   kd->error[KD_STIM]);
+
+    soul_bb_set(SOUL_BB_AI_ACTIVE, s_ai_state != AI_IDLE ? 1 : 0);
+    uint32_t idle_sec = (uint32_t)(s_ticks - s_last_active_tick);
+    float idle = (float)idle_sec / SOUL_IDLE_SAT_SEC;
+    soul_bb_set(SOUL_BB_IDLE, idle > 1 ? 1 : idle);
+
+    /* 勿扰: SNTP 前无裁决权(1970 假夜里会误停播, 板上口径) */
+    bool quiet = false;
+    if (s_time_synced) {
+        time_t t = time(NULL);
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        quiet = tmv.tm_hour >= 23 || tmv.tm_hour < 8;
+    }
+    soul_bb_set(SOUL_BB_QUIET, quiet ? 1 : 0);
+
+    soul_bb_tick((uint32_t)s_ticks);
+}
+
+/* ---- L2/L3 行为(注册表+执行器; 行动出口=SOUL_ACT 词汇表) ---- */
+static void exec_radio_start(void)
+{
+    ESP_LOGI(TAG, "bh radio_start (boredom)");
+    soul_music_act("play");
+}
+
+static void exec_radio_stop(void)
+{
+    ESP_LOGI(TAG, "bh radio_stop (quiet hours)");
+    soul_behavior_defer("radio_start", 600);  /* 防同夜反复起播 */
+    soul_music_act("stop");
+}
+
+static void exec_self_face(void)
+{
+    /* 独处自娱微表情(存在感): 轮换挑段, 不引入 RNG(单测可复现) */
+    static const char *picks[] = { "yawn", "ponder", "music" };
+    static unsigned pi;
+    ESP_LOGI(TAG, "bh self_face (%s)", picks[pi % 3]);
+    face_act_publish(1, picks[pi++ % 3]);
+}
+
+static void behaviors_register(void)
+{
+    static const soul_cons_t c_radio_start[] = {
+        { SOUL_BB_M_STIM,     SOUL_C_RISE, 1.0f },
+        { SOUL_BB_PLAYING,    SOUL_C_FALL, 1.0f },
+        { SOUL_BB_QUIET,      SOUL_C_FALL, 1.0f },
+        { SOUL_BB_AI_ACTIVE,  SOUL_C_FALL, 1.0f },
+    };
+    static const soul_cons_t c_radio_stop[] = {
+        { SOUL_BB_QUIET,      SOUL_C_RISE, 1.0f },
+        { SOUL_BB_PLAYING,    SOUL_C_RISE, 1.0f },
+    };
+    static const soul_cons_t c_self_face[] = {
+        { SOUL_BB_IDLE,       SOUL_C_RISE, 1.2f },
+        { SOUL_BB_M_SOCIAL,   SOUL_C_RISE, 1.0f },
+        { SOUL_BB_AI_ACTIVE,  SOUL_C_FALL, 1.0f },
+    };
+    soul_behavior_register(&(soul_bhv_t){
+        .name = "radio_start", .cons = c_radio_start,
+        .cons_n = 4, .threshold = 0.35f, .w = 1.0f,
+        .cooldown_s = 1800, .exec = exec_radio_start,
+    });
+    soul_behavior_register(&(soul_bhv_t){
+        .name = "radio_stop", .cons = c_radio_stop,
+        .cons_n = 2, .threshold = 0.80f, .w = 1.0f,
+        .cooldown_s = 3600, .exec = exec_radio_stop,
+    });
+    soul_behavior_register(&(soul_bhv_t){
+        .name = "self_face", .cons = c_self_face,
+        .cons_n = 3, .threshold = 0.50f, .w = 1.0f,
+        .cooldown_s = 480, .exec = exec_self_face,
+    });
+}
+
+/* ---- 1Hz 灵魂任务(单写者: kd/ke/黑板唯一调用权) ---- */
 static void soul_task(void *arg)
 {
     (void)arg;
@@ -353,7 +544,10 @@ static void soul_task(void *arg)
         if (s_ticks == 60) booted = true;
         (void)booted;
 
-        /* 事件消费(每拍至多一个, 优先级 BARGE > ROUND > VOICE) */
+        /* 1) 感知: 环境事件(网络/播放/存储/校时) → 黑板/反射 */
+        perception_consume();
+
+        /* 2) 事件消费(每拍至多一个, 优先级 BARGE > ROUND > VOICE) */
         uint8_t p = s_pend;
         enum kd_event evt = KD_EVT_NONE;
         char ru[192], rr[96];
@@ -384,7 +578,7 @@ static void soul_task(void *arg)
             evt = KD_EVT_VOICE;
         }
 
-        /* 驱力: quiet = AI idle 且播放器停/电台待机(rest 恢复口径) */
+        /* 3) 驱力: quiet = AI idle 且播放器停/电台待机(rest 恢复口径) */
         bool quiet = (s_ai_state == AI_IDLE) && (s_player_state == 0);
         if (s_ai_state != AI_IDLE) s_last_active_tick = s_ticks;
         struct kd_inputs din = {
@@ -395,7 +589,7 @@ static void soul_task(void *arg)
         };
         kd_step(s_ticks, &din, &kd_out);
 
-        /* mood 重评价(先于 ke_step: 本拍情绪即受影响) */
+        /* 4) mood 重评价(先于 ke_step: 本拍情绪即受影响) */
         if ((s_mood_seq & 1) && s_mood_req != 0) {
             struct ke_reappraisal r = {
                 .delta = s_mood_req,
@@ -407,7 +601,7 @@ static void soul_task(void *arg)
             s_mood_seq++;             /* 消费完清奇偶(待施槽复位) */
         }
 
-        /* 感受态 */
+        /* 5) 感受态 */
         struct ke_inputs kin = {
             .have_drive = true,
             .drive_error_sum = kd_out.error_sum,
@@ -419,42 +613,41 @@ static void soul_task(void *arg)
         };
         ke_step(s_ticks, &kin, &ke_out);
 
-        /* 快照(短临界区写) */
+        /* 6) 快照(短临界区写) + 黑板供给 + 消费出口 */
         if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(20))) {
             s_snap.drive = kd_out;
             s_snap.emo = ke_out;
             s_snap.tick = s_ticks;
             xSemaphoreGive(s_lock);
         }
+        bb_feed(&kd_out, &ke_out);
         mood_publish(&s_snap, false);
         face_bg_select(&s_snap);        /* L1 底色(连续坐标+迟滞) */
 
+        /* 7) L2 行为评分器(本地自主; 与深思共享词汇表不共享决策) */
+        soul_behavior_tick((uint32_t)s_ticks);
+
 #if CONFIG_ESP_CUBE_SOUL_PROACTIVE
-        /* L2 思维闸: J(ki_think_gate 判据)+E(ke)+V(kd 误差) → 触发深思 */
+        /* 8) L4 思维闸: J(黑板显著性/判据)+E(ke)+V(kd 误差) → 深思 */
         {
-            static bool s_think_new_event;
-            if (evt != KD_EVT_NONE) s_think_new_event = true;
             struct ki_think_ctx tc = {
                 .arousal = ke_out.state.arousal,
                 .urgency_max = kd_out.error_max,
                 .pending_command = (s_ai_state != AI_IDLE),
-                .quiet_hours = ({ time_t _t = time(NULL);
-                                  struct tm _m; localtime_r(&_t, &_m);
-                                  _m.tm_hour >= 23 || _m.tm_hour < 8; }),
-                .new_event = s_think_new_event,
+                .quiet_hours = soul_bb_get(SOUL_BB_QUIET) > 0.5f,
+                .new_event = soul_bb_get(SOUL_BB_SALIENCE) > 0.15f,
                 .mem_hook = 0,             /* W4 记忆钩子后续接 */
             };
             soul_think_gate_ctx(&tc);
             struct ki_think_gate g;
             ki_think_gate(&tc, &g);
             if (g.trigger && !g.blocked_mask) {
-                s_think_new_event = false;
                 soul_think_fire(g.reason_mask, false, 0.6f);
             }
         }
 #endif
 
-        /* 记忆(轮结束拍; 与快照同拍, 拿的是当拍前情绪——可接受) */
+        /* 9) 记忆(轮结束拍; 与快照同拍, 拿的是当拍前情绪——可接受) */
         if (round_now && ru[0]) {
             soul_mem_record(ru, rr, ke_out.state.valence,
                             ke_out.state.arousal);
@@ -469,6 +662,7 @@ esp_err_t soul_start(void)
     inited = true;
 
     soul_mem_boot();
+    behaviors_register();
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
     ESP_RETURN_ON_ERROR(cube_event_subscribe(soul_evt_cb, NULL),
@@ -476,7 +670,7 @@ esp_err_t soul_start(void)
     if (xTaskCreate(soul_task, "soul", 3072, NULL, 4, NULL) != pdPASS) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "soul up (1Hz, kd→ke)");
+    ESP_LOGI(TAG, "soul up (1Hz, percep→kd→ke→bb→behavior)");
     return ESP_OK;
 }
 

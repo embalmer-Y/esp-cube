@@ -34,6 +34,7 @@
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include <esp_random.h>
 #include <esp_timer.h>
 #include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
@@ -81,6 +82,9 @@ static struct {
     volatile bool held_pause;                   /* 本次会话经历过让路驻留:
                                                  * 恢复后被服务器踢线属预期,
                                                  * 重开不计失败(与 BT 对称) */
+    volatile bool switching;                    /* start 内部先停后起: 抑制
+                                                 * 中间 IDLE 边沿(否则灵魂把
+                                                 * 切台误判成用户停台) */
     audio_source_handle_t src;
     /* HTTP 响应头捕获(HTTP_EVENT_ON_HEADER 上下文写入) */
     char content_type[64];
@@ -107,6 +111,63 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
  * 订阅回调可能在 BT 栈任务上下文执行 → 只做 volatile 写, 所有实际
  * 动作(停读/关源/恢复)都由播放任务在 bt_pause_gate() 内完成。
  */
+static bool s_bt_audio;      /* BT 音频流入中(与电台态无关地跟踪) */
+
+/* ---- 灵魂音乐行动执行器(CUBE_EVT_SOUL_ACT kind=3, docs/14 §7) ----
+ * 词汇: play(列表轮播)/stop/next/random。订阅回调在发布者(事件分发)
+ * 上下文同步执行, 而 start/stop 含任务退出等待(≤2s) → one-shot 任务
+ * 异步执行; 忙时新指令丢弃(音乐指令低频, 不排队)。 */
+static volatile int8_t s_soul_cmd = -1;   /* -1=闲 0=play 1=stop 2=next 3=random */
+
+static void soul_cmd_task(void *arg)
+{
+    (void)arg;
+    int8_t c = s_soul_cmd;
+    s_soul_cmd = -1;
+    if (c == 0 && s_bt_audio) {
+        ESP_LOGI(TAG, "soul music play ignored (bt takeover)");
+    } else {
+        switch (c) {
+        case 0:
+            app_player_start(NULL);
+            break;
+        case 1:
+            app_player_stop();
+            break;
+        case 2: {
+            int idx = app_player_station_idx();
+            app_player_play_index(idx < 0 ? 0 : idx + 1);
+            break;
+        }
+        case 3: {
+            int n = app_player_station_num();
+            if (n > 0) {
+                app_player_play_index((int)(esp_random() % (unsigned)n));
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        ESP_LOGI(TAG, "soul music cmd %d done", (int)c);
+    }
+    vTaskDelete(NULL);
+}
+
+static void soul_music_cmd(const char *content)
+{
+    if (content == NULL) return;
+    int8_t c = strcmp(content, "play") == 0 ? 0 :
+               strcmp(content, "stop") == 0 ? 1 :
+               strcmp(content, "next") == 0 ? 2 :
+               strcmp(content, "random") == 0 ? 3 : -1;
+    if (c < 0 || s_soul_cmd != -1) return;      /* 未知词/忙: 弃 */
+    s_soul_cmd = c;
+    if (xTaskCreate(soul_cmd_task, "psoul", 4096, NULL, 8, NULL) != pdPASS) {
+        s_soul_cmd = -1;
+    }
+}
+
 static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ctx)
 {
     (void)ctx;
@@ -128,18 +189,26 @@ static void player_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *
         }
         return;
     }
+    if (id == CUBE_EVT_SOUL_ACT && data != NULL &&
+        len >= sizeof(cube_soul_act_t)) {
+        const cube_soul_act_t *a = data;
+        if (a->kind == 3) {
+            soul_music_cmd(a->content);    /* play/stop/next/random */
+        }
+        return;
+    }
 #if CONFIG_ESP_CUBE_ENABLE_BT
     if (id != CUBE_EVT_BT_AUDIO_ACTIVE || data == NULL || len != sizeof(bool)) {
         return;                             /* 事件总线全量派发: 必须按 ID 过滤 */
     }
+    s_bt_audio = *(const bool *)data;       /* 无论电台是否在播都跟踪 */
     if (s_player.state == PLAYER_IDLE) {
         return;                             /* 电台未运行: 无可让路, 也不登记暂停 */
     }
-    bool active = *(const bool *)data;
-    if (active && !s_player.bt_pause) {
+    if (s_bt_audio && !s_player.bt_pause) {
         ESP_LOGI(TAG, "BT audio active -> radio suspend");
     }
-    s_player.bt_pause = active;
+    s_player.bt_pause = s_bt_audio;
 #endif
 }
 
@@ -1001,6 +1070,15 @@ static void player_task(void *arg)
         s_player.state = PLAYER_ERROR;
         cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
     }
+    /* 显式停止: 统一发布 IDLE —— 灵魂感知(用户停台→radio_start 退避,
+     * docs/14 §6)与 UI 状态同步都依赖总线边沿, 不发布则外部永远停在
+     * PLAYING(2026-11-13 板上验收发现)。切台(switching)不发布。 */
+    else {
+        s_player.state = PLAYER_IDLE;
+        if (!s_player.switching) {
+            cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
+        }
+    }
     s_player.task = NULL;
     vTaskDelete(NULL);
 }
@@ -1035,8 +1113,11 @@ esp_err_t app_player_start(const char *url)
         s_player.ai_pause = false;
         ESP_LOGI(TAG, "ai handoff: new stream released");
     }
-    /* 请求切换: 先停旧任务(含等待退出, 避免两任务抢同一解码器) */
+    /* 请求切换: 先停旧任务(含等待退出, 避免两任务抢同一解码器);
+     * switching 抑制中间 IDLE 边沿(见 s_player.switching 注释) */
+    s_player.switching = true;
     app_player_stop();
+    s_player.switching = false;
     strncpy(s_player.url, url, sizeof(s_player.url) - 1);
     s_player.stop_req = false;
     /* 解码任务放 core1: core0 被 mixer(20)/WiFi(23)/BT(23+) 高优任务占据,
@@ -1077,6 +1158,11 @@ esp_err_t app_player_stop(void)
         }
     }
     s_player.state = PLAYER_IDLE;
+    /* 任务已不在(异常退出/未启动)时补发 IDLE 边沿; 任务在则其退出
+     * 路径已发布, 同值重复发布对边沿检测无害; 切台期不发布 */
+    if (!s_player.switching) {
+        cube_event_publish(CUBE_EVT_PLAYER_STATE, &s_player.state, sizeof(int));
+    }
     return ESP_OK;
 }
 
