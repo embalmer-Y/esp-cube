@@ -31,6 +31,7 @@ typedef enum {
     SIM_ACT_SWIPE_DOWN,        /* 合成下滑(开状态栏; M4 面板演示) */
     SIM_ACT_SWIPE_UP,          /* 合成上滑(开 AI 状态) */
     SIM_ACT_TAP,               /* 合成单击(收起面板) */
+    SIM_ACT_WIFI_TOGGLE,       /* T18: WiFi 断/连切换(断网遮罩演示) */
 } sim_action_t;
 
 /* mock_app.c 实现 */

@@ -231,7 +231,10 @@ static bool s_ai_active;
 void mock_app_action(sim_action_t a)
 {
     switch (a) {
-    case SIM_ACT_TOGGLE_PLAY:   ui_ctl_toggle_play(); break;
+        case SIM_ACT_WIFI_TOGGLE:        /* T18: 断/连(遮罩沿触发由 UI 渲染) */
+        s_model.wifi_up = !s_model.wifi_up;
+        break;
+case SIM_ACT_TOGGLE_PLAY:   ui_ctl_toggle_play(); break;
     case SIM_ACT_NEXT_STATION:  ui_ctl_switch_station(1); break;
     case SIM_ACT_PREV_STATION:  ui_ctl_switch_station(-1); break;
     case SIM_ACT_BT_TOGGLE:
@@ -361,6 +364,10 @@ static const demo_step_t s_demo_steps[] = {
     /* 下滑状态栏(350ms 滑动 + 落定) */
     { 12000, SIM_ACT_SWIPE_DOWN,     NULL },
     { 12800, DEMO_NONE,              "20_status_panel" },
+    /* T18: 断网遮罩演示(断→截→复连→截; 面板开状态下可见) */
+    { 13100, SIM_ACT_WIFI_TOGGLE,    NULL },
+    { 13600, DEMO_NONE,              "23_offline" },
+    { 13900, SIM_ACT_WIFI_TOGGLE,    NULL },
     /* 单击收起 + 上滑 AI 状态(动作间隔>600ms: 手势冷却闸 350ms,
      * 贴太近的连续动作会被当丢帧重入吃掉 —— 与真机节奏一致) */
     { 14000, SIM_ACT_TAP,            NULL },
@@ -411,6 +418,7 @@ void mock_app_init(bool demo)
     snprintf(s_model.wifi_ssid, sizeof(s_model.wifi_ssid), "MyWiFi");
     snprintf(s_model.wifi_ip, sizeof(s_model.wifi_ip), "192.168.2.42");
     s_model.wifi_up = true;
+    s_model.sd_ok = true;      /* T18: sim 默认 SD 在位 */
     snprintf(s_model.fw_info, sizeof(s_model.fw_info), "v0.3.0-sim");
     s_demo = demo;
     srand(20261111);
