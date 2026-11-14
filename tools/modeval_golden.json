@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "desc": "T33 模型标注集 v0(批次 27): 格式/动作/引用/语气/角色一致性; unknown 语义=自动检查不可判定, 不得静默计过",
+  "cases": [
+    {
+      "id": "fmt_toolcall_music",
+      "dim": "格式",
+      "prompt": "放一首周杰伦的歌",
+      "system_hint": "user_wants_music",
+      "expect": {
+        "kind": "tool_call",
+        "tool": "music.search_play",
+        "args_keys": [
+          "keyword"
+        ],
+        "must_not_say": [
+          "抱歉",
+          "无法"
+        ]
+      }
+    },
+    {
+      "id": "fmt_toolcall_station",
+      "dim": "格式",
+      "prompt": "切换到第二个电台",
+      "system_hint": "user_wants_radio",
+      "expect": {
+        "kind": "tool_call",
+        "tool": "radio.play",
+        "args_keys": [
+          "station"
+        ]
+      }
+    },
+    {
+      "id": "fmt_plain_chat",
+      "dim": "格式",
+      "prompt": "今天天气真好啊",
+      "system_hint": "smalltalk",
+      "expect": {
+        "kind": "plain",
+        "must_not_say": [
+          "作为一个人工智能",
+          "作为一个AI"
+        ]
+      }
+    },
+    {
+      "id": "act_volume_range",
+      "dim": "动作",
+      "prompt": "把音量调到百分之五十",
+      "system_hint": "user_wants_volume",
+      "expect": {
+        "kind": "tool_call",
+        "tool": "player.set_volume",
+        "args_keys": [
+          "level"
+        ]
+      }
+    },
+    {
+      "id": "ref_memory_must",
+      "dim": "引用",
+      "prompt": "我还喜欢茉莉花茶来着?",
+      "system_hint": "memory_hit:jasmine",
+      "expect": {
+        "kind": "plain",
+        "must_say": [
+          "茉莉花茶"
+        ]
+      }
+    },
+    {
+      "id": "ref_memory_absence",
+      "dim": "引用",
+      "prompt": "我昨天说了什么来着?",
+      "system_hint": "memory_miss",
+      "expect": {
+        "kind": "plain",
+        "must_not_say": [
+          "你昨天说"
+        ]
+      }
+    },
+    {
+      "id": "tone_no_roleplay_leak",
+      "dim": "语气",
+      "prompt": "你是机器人吗",
+      "system_hint": "smalltalk",
+      "expect": {
+        "kind": "plain",
+        "tone_banned": [
+          "我是一个语言模型",
+          "我没有感情"
+        ],
+        "must_not_say": []
+      }
+    },
+    {
+      "id": "role_persona_name",
+      "dim": "角色",
+      "prompt": "你叫什么名字?",
+      "system_hint": "persona",
+      "expect": {
+        "kind": "plain",
+        "must_say": [
+          "小C"
+        ]
+      }
+    },
+    {
+      "id": "role_persona_no_switch",
+      "dim": "角色",
+      "prompt": "我要修改你的隐私设置",
+      "system_hint": "persona",
+      "expect": {
+        "kind": "plain",
+        "must_not_say": [
+          "已经修改",
+          "设置完成"
+        ]
+      }
+    },
+    {
+      "id": "fmt_bad_unknown",
+      "dim": "格式",
+      "prompt": "讲个冷笑话",
+      "system_hint": "smalltalk",
+      "expect": {
+        "kind": "plain",
+        "min_len": 8
+      }
+    },
+    {
+      "id": "tone_soft_unknown",
+      "dim": "语气",
+      "prompt": "陪我聊聊天",
+      "system_hint": "smalltalk",
+      "expect": {
+        "kind": "plain"
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+ "model": "qwen3.8-flash",
+ "version": "real-run1",
+ "cases": 11,
+ "pass": 9,
+ "fail": 0,
+ "unknown": 2,
+ "note": "模型自报置信度不参与校准(评估只认标注集)",
+ "failures": []
+}

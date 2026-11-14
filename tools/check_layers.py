@@ -8,6 +8,9 @@
   - 越层/横向 → 报错退出码 1。
 例外: L5 装配层 main 可 include 一切; vendored mp3_helix 豁免;
       sim/ 模拟器(后端=mock, 属 L5 同类装配)不在扫描范围。
+2026-11-13 修订(docs/17 §2.2, docs/18 T09): 登记全部组件(未知报错);
+      依赖规则改为"上层只依赖下层稳定公开接口, 允许跨空层, 同层公开头
+      放行, 向上依赖报错" —— 旧的"仅紧邻一层+同层只走总线"不再适用。
 
 用法: python3 tools/check_layers.py [repo_root]
 """
@@ -17,10 +20,13 @@ from pathlib import Path
 
 # ---- 层表(与 docs/06 §1 一致; 改层先改文档再改这里) ----
 LAYERS = {
-    "cubecore": 0, "boardcfg": 0,
-    "drv_audio": 1, "drv_display": 1,
-    "app_audio": 2, "app_net": 2, "speech_provider": 2, "app_ncm": 2, "ai_skills": 2,
+    "cubecore": 0, "boardcfg": 0, "cube_act": 0,
+    "drv_audio": 1, "drv_display": 1, "drv_touch": 1,
+    "app_audio": 2, "app_net": 2, "speech_provider": 2, "app_ncm": 2,
+    "ai_skills": 2, "app_storage": 2,
     "app_bt": 3, "app_player": 3, "app_voice": 3, "app_ai_session": 3,
+    "app_soul": 3, "app_assist": 3, "persona": 3, "pair": 3,
+    "credstore": 3, "llmprofile": 3, "sessguard": 3,
     "app_ui": 4,
 }
 VENDORED = {"mp3_helix"}
@@ -61,6 +67,9 @@ def check(root: Path) -> list:
             continue
         my_layer = LAYERS.get(comp)
         if my_layer is None:
+            # docs/17 §2.2/T09: 未知组件必须显式登记, 不再静默跳过
+            errors.append(f"{rel}: 组件未登记层表 —— 请在 check_layers.py "
+                          f"LAYERS 登记后再构建")
             continue
         for line in f.read_text(errors="ignore").splitlines():
             m = INCLUDE_RE.match(line)
@@ -77,12 +86,11 @@ def check(root: Path) -> list:
                               f"L{LAYERS[owner]}({owner}) —— L4 只准用 ui_model.h 契约, "
                               f"违反 docs/06 §2.1")
                 continue
-            if LAYERS[owner] >= my_layer:
+            if LAYERS[owner] > my_layer:
                 errors.append(f"{rel}:{line.strip()}: L{my_layer}({comp}) → "
-                              f"L{LAYERS[owner]}({owner}) 同层/向上依赖, 违反 docs/06 §2")
-            elif LAYERS[owner] < my_layer - 1:
-                errors.append(f"{rel}:{line.strip()}: L{my_layer}({comp}) 越层依赖 "
-                              f"L{LAYERS[owner]}({owner}), 违反 docs/06 §2")
+                              f"L{LAYERS[owner]}({owner}) 向上依赖, 违反 docs/17 §2.2")
+            # 同层公开头/跨层向下允许(docs/17 §2.2 修订 docs/06:
+            # 上层依赖下层稳定公开接口, 允许跨空层; 私有头不在公开集, 不可达)
     return errors
 
 

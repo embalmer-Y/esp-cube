@@ -10,6 +10,15 @@ firmware/sdkconfig.s31
 firmware/sdkconfig.old
 # 测试音频素材(大体积二进制, 脚本可再生)
 testaudio/
+# 证书与私钥: 配对调试 CA 由 tools/gen_pair_certs.sh 本地生成, 私钥绝不入库
+tools/certs/
+# Python 缓存
+__pycache__/
+*.pyc
+# ZCode 会话产物(工具生成, 不入库)
+.zcode/
+# 编辑器
+.vscode/
 # 系统杂物
 *.swp
 .DS_Store
