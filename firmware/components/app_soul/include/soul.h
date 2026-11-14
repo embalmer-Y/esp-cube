@@ -42,6 +42,9 @@ bool soul_think_busy(void);
 
 /* ---- 事件钩子(任意任务; 内部 pend, tick 消费) ---- */
 void soul_on_round(bool ok, const char *user_text, const char *reply_first);
+/* 用户显式停止归因(T13: 入口调用, 替代旧时间窗猜测——docs/15 P0-3):
+ * radio_start 退避 + 日志; 锁存由调用方 cact_user_stop 负责 */
+void soul_note_user_stop(void);
 void soul_on_barge(void);
 void soul_on_voice(void);            /* 内置 ≥5s 限频(总线回调可直调) */
 
@@ -73,6 +76,28 @@ const char *soul_prompt_suffix(void);
 
 /* 记忆块 prompt 段(soul_mem; 空库返回空态文案防幻觉) */
 const char *soul_mem_prompt_block(void);
+
+/* 记录一条记忆(轮末由 soul/ai_session 调; 批次 44 收进头文件——
+ * 此前 cli.c/soul.c 各自手写 extern, 签名漂移隐患) */
+void soul_mem_record(const char *user, const char *reply,
+                     float valence, float arousal);
+/* 启动装载(SD→内存, 迟挂载由 app_storage 事件补触发) */
+void soul_mem_boot(void);
+
+/* persona 作用域绑定(T21; docs/17 §7.2): key=persona_id hex;
+ * consent_mem=false 时长期记忆不写(已有可读)。切换角色/授权变更时
+ * 由装配层调用。 */
+void soul_mem_scope_bind(const char *persona_key, bool consent_mem);
+void soul_mem_query_rebuild(const char *query);   /* 按当前 query 检索精排(T21 续) */
+
+/* 删除(T23; docs/17 §7.2/§8.2): 台账先行防复活 */
+typedef enum {
+    SOUL_MEM_DEL_OK = 0,       /* 持久接受(内存+台账+重写完成) */
+    SOUL_MEM_DEL_PENDING,      /* RAM 已隐藏, 台账未落盘(未持久接受) */
+    SOUL_MEM_DEL_NOT_FOUND,
+    SOUL_MEM_DEL_REJECTED,     /* 未绑定/停用/锁超时 */
+} soul_mem_del_res_t;
+soul_mem_del_res_t soul_mem_delete(uint32_t seq);
 
 #ifdef __cplusplus
 }

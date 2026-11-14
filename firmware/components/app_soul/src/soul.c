@@ -26,6 +26,7 @@
  *   - soul_on_round(): 顺带喂记忆(soul_mem, 另文件)。
  */
 #include "soul.h"
+#include "cube_act.h"
 #include "soul_drive.h"
 #include "soul_emotion.h"
 #include "soul_bb.h"
@@ -66,7 +67,6 @@ static const char *TAG = "soul";
 #define SOUL_VOICE_MIN_MS  5000     /* VOICE 事件限频(Kaleido 同款) */
 #define SOUL_IDLE_SAT_SEC  7200u    /* IDLE 因子饱和时长(2h) */
 #define SOUL_USERSTOP_DEFER 7200u   /* 用户停台 → radio_start 退避 */
-#define SOUL_MUSIC_GEN_WIN  15u     /* 灵魂音乐动作窗口(异执行完成前) */
 
 /* app_player_state_t 数值口径(soul 不依赖能力层头, 分层纪律):
  * 0=IDLE 1=CONNECTING 2=PLAYING 3=ERROR; 在播位=连接或播放中 */
@@ -88,7 +88,6 @@ static volatile bool s_evt_net_up, s_evt_net_down;
 static volatile bool s_evt_sd, s_evt_timesync, s_evt_player_chg;
 static bool s_time_synced;             /* SNTP 后才有"勿扰时段"裁决权 */
 static int  s_prev_playing;            /* 上一拍播放位(跃迁检测) */
-static uint32_t s_music_gen_until;     /* 灵魂音乐动作窗(区分用户停台) */
 
 /* mood 重评价单槽(值+序号; tick 内消费施加) */
 static volatile float s_mood_req;
@@ -110,10 +109,7 @@ static int64_t s_last_voice_us;
 static uint64_t s_ticks;
 static uint64_t s_last_active_tick;        /* 最近非 IDLE 拍(idle 计时) */
 
-/* soul_mem 弱耦合: 同组件内另一文件(编译期一体, 免头依赖环) */
-extern void soul_mem_record(const char *user, const char *reply,
-                            float valence, float arousal);
-extern void soul_mem_boot(void);
+/* soul_mem record/boot 声明已收进 soul.h(批次 44, 免手写 extern 漂移) */
 /* soul_think 弱耦合(同上) */
 extern bool soul_think_fire(uint8_t reason, bool forced, float score);
 extern void soul_think_gate_ctx(struct ki_think_ctx *tc);
@@ -160,11 +156,32 @@ static void face_act_publish(uint8_t kind, const char *clip)
     cube_event_publish(CUBE_EVT_SOUL_ACT, &a, sizeof(a));
 }
 
-/* 音乐行动出口(kind=3; 记"灵魂发起"窗口 → 感知区分用户直控) */
-static void soul_music_act(const char *cmd)
+/* ---- 统一动作门提交(docs/18 T13 首段): 行为胜出不再直发 SOUL_ACT,
+ * 改经 cube_act(策略/资源/停止锁存/回执) → 装配执行器走原下游链。
+ * 拒绝/失败回执记 WARN; 回执 started=已交付执行器(受理级, T35 收口)。 */
+static void act_submit_log(const char *cap, const char *param, size_t plen)
 {
-    s_music_gen_until = (uint32_t)s_ticks + SOUL_MUSIC_GEN_WIN;
-    face_act_publish(3, cmd);
+    cact_req_t r;
+    memset(&r, 0, sizeof(r));
+    r.origin = CACT_ORIGIN_AUTONOMOUS_LOCAL;
+    strlcpy(r.capability, cap, sizeof(r.capability));
+    if (param != NULL && plen > 0 && plen <= CACT_PARAMS_MAX) {
+        memcpy(r.params, param, plen);
+        r.params_len = plen;
+    }
+    uint32_t id = 0;
+    cact_res_t res = cact_submit(cact_default(), &r, &id);
+    if (res != CACT_RES_OK) {
+        ESP_LOGW(TAG, "act %s rejected: %d", cap, res);
+        return;
+    }
+    cact_pump(cact_default());
+    cact_receipt_t rc;
+    if (cact_receipt_last(cact_default(), id, &rc) == CACT_RES_OK) {
+        ESP_LOGI(TAG, "act %s -> #%u %s%s%s", cap, id,
+                 cact_status_name(rc.status),
+                 rc.reason[0] ? "(" : "", rc.reason[0] ? rc.reason : "");
+    }
 }
 
 /* L1 底色选择(最近邻 + 迟滞; 挂在 mood_publish 拍) */
@@ -402,7 +419,7 @@ static void perception_consume(void)
         if (!was_up && soul_bb_get(SOUL_BB_PLAYING) < 0.5f &&
             !soul_behavior_deferred("radio_start")) {
             ESP_LOGI(TAG, "L0 reflex: boot radio play");
-            soul_music_act("play");
+            act_submit_log("radio.play", NULL, 0);
         }
 #endif
     }
@@ -421,21 +438,27 @@ static void perception_consume(void)
         soul_bb_salience(0.5f);
     }
 
-    /* 播放跃迁: 灵魂动作窗口外的停播 = 用户直控 → 退避(礼貌红线) */
+    /* 播放跃迁: 停止归因已改为入口显式调用(soul_note_user_stop, T13 续)
+     * —— docs/15 P0-3 批评的"时间窗猜测误归因"随之移除; 自然结束/
+     * 电台断流只做显著性充值, 不再误判为用户拒绝 */
     int playing = (s_player_state == PLAYER_ST_CONNECTING ||
                    s_player_state == PLAYER_ST_PLAYING) ? 1 : 0;
     if (s_evt_player_chg) {
         s_evt_player_chg = false;
         soul_bb_salience(0.3f);
-        if (s_prev_playing && !playing &&
-            (uint32_t)s_ticks > s_music_gen_until) {
-            soul_behavior_defer("radio_start", SOUL_USERSTOP_DEFER);
-            ESP_LOGI(TAG, "user stopped playback -> radio deferred %us",
-                     SOUL_USERSTOP_DEFER);
-        }
     }
     s_prev_playing = playing;
     soul_bb_set(SOUL_BB_PLAYING, (float)playing);
+}
+
+/* 用户显式停止归因(T13 续): 停止入口(CLI/触摸/语音)调用 —— 替代旧
+ * "灵魂动作窗口 + 时间猜测"归因(docs/15 P0-3/4 批评的误归因根因):
+ * 自然结束/电台断流不再被误判为用户拒绝; 锁存由入口 cact_user_stop 负责 */
+void soul_note_user_stop(void)
+{
+    soul_behavior_defer("radio_start", SOUL_USERSTOP_DEFER);
+    ESP_LOGI(TAG, "user stop noted -> radio_start deferred %us",
+             SOUL_USERSTOP_DEFER);
 }
 
 /* ---- 黑板供给(kd/ke + 情境; 单写者=tick) ---- */
@@ -472,14 +495,14 @@ static void bb_feed(const struct kd_output *kd, const struct ke_output *ke)
 static void exec_radio_start(void)
 {
     ESP_LOGI(TAG, "bh radio_start (boredom)");
-    soul_music_act("play");
+    act_submit_log("radio.play", NULL, 0);
 }
 
 static void exec_radio_stop(void)
 {
     ESP_LOGI(TAG, "bh radio_stop (quiet hours)");
     soul_behavior_defer("radio_start", 600);  /* 防同夜反复起播 */
-    soul_music_act("stop");
+    act_submit_log("music.stop", NULL, 0);
 }
 
 static void exec_self_face(void)
@@ -487,8 +510,11 @@ static void exec_self_face(void)
     /* 独处自娱微表情(存在感): 轮换挑段, 不引入 RNG(单测可复现) */
     static const char *picks[] = { "yawn", "ponder", "music" };
     static unsigned pi;
-    ESP_LOGI(TAG, "bh self_face (%s)", picks[pi % 3]);
-    face_act_publish(1, picks[pi++ % 3]);
+    const char *clip = picks[pi++ % 3];
+    ESP_LOGI(TAG, "bh self_face (%s)", clip);
+    char blob[24];
+    size_t n = strlcpy(blob, clip, sizeof(blob)) + 1;  /* 含 NUL */
+    act_submit_log("face.show", blob, n);
 }
 
 static void behaviors_register(void)

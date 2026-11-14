@@ -98,6 +98,7 @@ static esp_err_t http_event_cb(esp_http_client_event_t *evt)
         if (strcasecmp(evt->header_key, "Content-Type") == 0) {
             strncpy(s_player.content_type, evt->header_value,
                     sizeof(s_player.content_type) - 1);
+            s_player.content_type[sizeof(s_player.content_type) - 1] = '\0';
         } else if (strcasecmp(evt->header_key, "icy-metaint") == 0) {
             s_player.icy_metaint = atoi(evt->header_value);
         }

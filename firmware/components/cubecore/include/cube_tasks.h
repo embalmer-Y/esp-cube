@@ -62,7 +62,7 @@
 /* ---- LVGL 渲染(app_ui; esp_lvgl_port 任务) ----
  * EFC 解码跑在 LVGL 任务上下文(esp_efc_codec 官方 emote_player 口径
  * 20KB+), 启用 EFC 时加大; 未启用保持 16KB(S31 内部 RAM 紧张) */
-#if CONFIG_ESP_CUBE_ENABLE_EFC
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
 #define CUBE_TASK_LVGL_STACK   24576
 #else
 #define CUBE_TASK_LVGL_STACK   16384

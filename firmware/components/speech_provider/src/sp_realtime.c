@@ -298,9 +298,25 @@ int ks_rt_say(const char *text)
 		vTaskDelay(pdMS_TO_TICKS(60));
 	}
 	char frame[640];
+	/* 批次 44: text 来自技能回执/提醒原文, 含 " 或 \ 时手拼帧非法
+	 * JSON(服务端拒)——最小转义后再拼(走 cJSON 的路径已有转义) */
+	char esc[448];
+	size_t el = 0;
+	for (const char *p = text; *p && el + 7 < sizeof(esc); p++) {
+		unsigned char c = (unsigned char)*p;
+		if (c == '"' || c == '\\') {
+			esc[el++] = '\\';
+			esc[el++] = (char)c;
+		} else if (c == '\n' || c == '\r') {
+			esc[el++] = ' ';
+		} else {
+			esc[el++] = (char)c;
+		}
+	}
+	esc[el] = '\0';
 	int fl = snprintf(frame, sizeof(frame),
 		"{\"type\":\"response.create\",\"response\":"
-		"{\"instructions\":\"用一句口语化中文播报: %s\"}}", text);
+		"{\"instructions\":\"用一句口语化中文播报: %s\"}}", esc);
 	if (fl <= 0 || (size_t)fl >= sizeof(frame))
 		return -3;
 	if (esp_websocket_client_send_text(s_rt->ws, frame, fl,

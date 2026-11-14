@@ -6,6 +6,7 @@
  * 不阻塞启动: 各消费方(m soul_mem/face/wake/voice)按 ok() 回退。
  */
 #include "app_storage.h"
+#include "store_crypt.h"
 
 #include <stdio.h>
 #include <errno.h>
@@ -48,6 +49,7 @@ static const char *s_dirs[] = {
     SD_MOUNT_POINT "/face", SD_MOUNT_POINT "/wake",
     SD_MOUNT_POINT "/voice", SD_MOUNT_POINT "/etc",
     SD_MOUNT_POINT "/logs",
+    SD_MOUNT_POINT "/v1", SD_MOUNT_POINT "/v1/personas",  /* T20 角色隔离域 */
 };
 
 static void sd_mount_task(void *arg)
@@ -221,7 +223,42 @@ int app_storage_path(char *buf, size_t cap, const char *rel)
     return snprintf(buf, cap, "%s/%s", SD_MOUNT_POINT, rel);
 }
 
+/* RAW 层(T14): crypt 容器的底层 io; 公开 read/write 在其上加解密 */
+static char *raw_read(const char *rel, size_t *len);
+static esp_err_t raw_write(const char *rel, const void *data, size_t len);
+static store_crypt_t *s_crypt;   /* T14: EPSCV2 容器(enable 后非空) */
+
+void app_storage_crypt_bind(store_crypt_t *c) { s_crypt = c; }
+
+bool app_storage_crypt_active(void) { return s_crypt != NULL; }
+
 char *app_storage_read(const char *rel, size_t *len)
+{
+    if (s_crypt != NULL) {
+        size_t n = 0;
+        /* buf=NULL + 返回值 0 → 数据在 crypt scratch; -2 → AUTH 拒读;
+         * 1 → 不存在(继续按 NULL) */
+        int crc = store_crypt_read(s_crypt, rel, NULL, 0, &n);
+        if (crc == -2) {
+            ESP_LOGW(TAG, "crypt read auth fail(%s) - 保护性拒读", rel);
+            return NULL;
+        }
+        if (crc == 0) {
+            const void *payload = store_crypt_payload(s_crypt);
+            char *out = malloc(n + 1);
+            if (out == NULL) return NULL;
+            memcpy(out, payload, n);
+            out[n] = 0;
+            if (len != NULL) *len = n;
+            return out;
+        }
+        /* crc == 1(文件不存在) 或其他 → 落回 raw */
+        if (crc != 1) return NULL;
+    }
+    return raw_read(rel, len);
+}
+
+static char *raw_read(const char *rel, size_t *len)
 {
     if (!s_ok) return NULL;
     char path[96];
@@ -255,17 +292,39 @@ char *app_storage_read(const char *rel, size_t *len)
 
 esp_err_t app_storage_write(const char *rel, const void *data, size_t len)
 {
+    if (s_crypt != NULL) return store_crypt_write(s_crypt, rel, data, len);
+    return raw_write(rel, data, len);
+}
+
+static esp_err_t raw_write(const char *rel, const void *data, size_t len)
+{
     if (!s_ok) return ESP_ERR_INVALID_STATE;
     char path[96], tmp[104];
     app_storage_path(path, sizeof(path), rel);
     snprintf(tmp, sizeof(tmp), "%s.tmp", path);
     FILE *f = fopen(tmp, "wb");
     if (f == NULL) {
-        ESP_LOGW(TAG, "write fopen(%s) fail errno=%d", tmp, errno);
-        return ESP_FAIL;
+        /* 自动建父目录(逐级; SD 记忆作用域等新子目录) 后重试一次 */
+        for (char *q = path + 1; *q; q++) {
+            if (*q == '/') { *q = 0; mkdir(path, 0775); *q = '/'; }
+        }
+        f = fopen(tmp, "wb");
+        if (f == NULL) {
+            ESP_LOGW(TAG, "write fopen(%s) fail errno=%d", tmp, errno);
+            return ESP_FAIL;
+        }
     }
     size_t wr = fwrite(data, 1, len, f);
     int wr_errno = errno;
+    /* fflush+fsync 后再 rename: FATFS 写缓存不落盘时, 硬重启会丢
+     * "已返回成功"的文件(T20 板上实证: panic 重启丢注册表) ——
+     * docs/15 M8 边界的落地修复; 记忆全量回写同路径受益 */
+    if (fflush(f) != 0) {
+        ESP_LOGW(TAG, "write fflush errno=%d", errno);
+    }
+    if (fsync(fileno(f)) != 0) {
+        ESP_LOGW(TAG, "write fsync errno=%d", errno);
+    }
     fclose(f);
     if (wr != len) {
         ESP_LOGW(TAG, "write fwrite %zu/%zu errno=%d", wr, len, wr_errno);
@@ -284,15 +343,42 @@ esp_err_t app_storage_write(const char *rel, const void *data, size_t len)
     return ESP_OK;
 }
 
+/* ---- 公开 RAW 层包装(T14: app_storage_crypt_enable 绑 RAW 用;
+ * 批次 44 补——头文件已声明但实现缺失, 曾致启用路径链接不过) ---- */
+char *app_storage_raw_read(const char *rel, size_t *len)
+{
+    return raw_read(rel, len);
+}
+
+esp_err_t app_storage_raw_write(const char *rel, const void *data, size_t len)
+{
+    return raw_write(rel, data, len);
+}
+
 esp_err_t app_storage_append(const char *rel, const char *line)
 {
     if (!s_ok) return ESP_ERR_INVALID_STATE;
+    /* T14: crypt 启用时走 读→追加→加密写(台账小文件, 追加频度低) */
+    if (s_crypt != NULL) {
+        uint8_t buf[4096];
+        size_t n = 0;
+        int crc = store_crypt_read(s_crypt, rel, buf, sizeof(buf), &n);
+        if (crc != 0 && crc != 1) return ESP_FAIL;   /* AUTH/IO: 不破坏 */
+        size_t add = strlen(line);
+        if (n + add + 1 > sizeof(buf)) return ESP_ERR_NO_MEM;
+        memcpy(buf + n, line, add);
+        buf[n + add] = '\n';
+        return store_crypt_write(s_crypt, rel, buf, n + add + 1);
+    }
     char path[96];
     app_storage_path(path, sizeof(path), rel);
     FILE *f = fopen(path, "ab");
     if (f == NULL) return ESP_FAIL;
     size_t wr = fwrite(line, 1, strlen(line), f);
     fputc('\n', f);
+    /* 删除台账等追加记录必须落盘(T23): 防硬重启丢"已接受"的删除意图 */
+    if (fflush(f) != 0) ESP_LOGW(TAG, "append fflush errno=%d", errno);
+    if (fsync(fileno(f)) != 0) ESP_LOGW(TAG, "append fsync errno=%d", errno);
     fclose(f);
     return wr == strlen(line) ? ESP_OK : ESP_FAIL;
 }

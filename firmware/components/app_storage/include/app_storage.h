@@ -14,8 +14,10 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <esp_err.h>
+#include "store_crypt.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,6 +46,19 @@ esp_err_t app_storage_write(const char *rel, const void *data, size_t len);
 
 /* 追加一行(记忆 jsonl; 失败静默记日志) */
 esp_err_t app_storage_append(const char *rel, const char *line);
+
+/* ---- T14 透明加密(EPSCV2; docs/20 §5) ----
+ * enable 后 write 全加密、read 自动识别(密文解密/旧明文透传)。
+ * crypt_bind 须绑 RAW 层(由 enable 内部完成, 消费方勿直接调)。 */
+struct store_crypt_t;
+void app_storage_crypt_enable(void);
+void app_storage_crypt_bind(store_crypt_t *c);
+bool app_storage_crypt_active(void);
+/* PSA 密码学端口(T17: credstore 等消费方复用, 勿自行实现第二份) */
+const sc_port_t *app_storage_crypt_port(void);
+char *app_storage_raw_read(const char *rel, size_t *len);
+esp_err_t app_storage_raw_write(const char *rel, const void *data,
+                                size_t len);
 
 #ifdef __cplusplus
 }

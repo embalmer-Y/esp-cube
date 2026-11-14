@@ -24,6 +24,11 @@
  * 其余时间由 app_voice 常开(WakeNet barge-in)。
  */
 #include "ai_session.h"
+#include "llm_profile.h"
+#include "sessguard.h"
+#include "sessstate.h"
+#include "cube_act.h"
+#include "esp_timer.h"
 
 #include <string.h>
 #include <math.h>
@@ -42,6 +47,7 @@
 #include "speech_provider.h"
 #include "ai_skills.h"
 #include "soul.h"
+#include "persona.h"
 #include "sdkconfig.h"
 
 #if !CONFIG_ESP_CUBE_ENABLE_AI
@@ -122,6 +128,54 @@ static int16_t *s_st_buf;                      /* PSRAM, 首用分配 */
 static volatile bool s_st_capture;
 static size_t s_st_w, s_st_cap;
 static volatile bool s_st_pending;             /* 注入待武装(见 EVT_WAKE) */
+/* 密钥解析(T17): L5 注入 provider(credstore, 已配对管理通道写入);
+ * 未注入/无凭据 → Kconfig 编译期值(byok 现状) */
+static const char *(*s_key_fn)(void);
+void ai_session_set_api_key_provider(const char *(*fn)(void)) { s_key_fn = fn; }
+static const char *key_resolve(void)
+{
+    const char *k = s_key_fn != NULL ? s_key_fn() : NULL;
+    return (k != NULL && k[0] != '\0') ? k : CONFIG_ESP_CUBE_AI_API_KEY;
+}
+
+/* T30: 服务商 profile(L5 注入 settings 来源; 解析/选择/回退=llmprofile) */
+static const char *(*s_profile_fn)(void);
+void ai_session_set_profile_provider(const char *(*fn)(void)) { s_profile_fn = fn; }
+static llm_profile_t s_prof;
+static bool s_prof_valid;
+/* T31: 会话守卫(有界上下文+旧请求失效门); 缓冲堆分配(PSRAM 路径) */
+static sessguard_t *s_sg;
+static uint32_t s_cur_req;
+static sessstate_t *s_ss;               /* T28: 生命周期行为机影子 */
+#define SS_IDLE_TIMEOUT_MS 30000ull     /* 会话级静默超时(T28) */
+#define SS_TURN_MAX        6u           /* 连续多轮上限(验收 ≥5) */
+static uint64_t now_ms_v(void)
+{
+    return (uint64_t)(esp_timer_get_time() / 1000);
+}
+static sg_epochs_t cur_epochs(void)
+{
+    sg_epochs_t e = { cact_persona_epoch(cact_default()), 0 };
+    return e;
+}
+static bool profile_resolve(void)
+{
+    s_prof_valid = false;
+    const char *json = s_profile_fn != NULL ? s_profile_fn() : NULL;
+    if (json == NULL) return false;
+    llm_profile_t ps[LP_PROFILE_MAX];
+    char active[LP_ID_MAX];
+    int n = llm_profiles_parse(json, ps, LP_PROFILE_MAX, active);
+    if (n <= 0) return false;
+    int i = llm_profiles_pick(ps, n, active);
+    if (i < 0) return false;
+    s_prof = ps[i];
+    s_prof_valid = true;
+    ESP_LOGI(TAG, "llm profile: %s (tools=%d model=%s)",
+             s_prof.id, (int)s_prof.tools, s_prof.llm_model);
+    return true;
+}
+
 #if CONFIG_ESP_CUBE_AI_RT_ENABLE
 /* ---- 快线(qwen-omni realtime): 嘴和耳, 工具可靠性在慢线 ----
  * 双路上行: 同一麦克流同时喂 paraformer(慢线精确转写)与 omni(快线
@@ -138,7 +192,7 @@ static cube_resampler_t s_rt_rs;         /* 24k mono → 48k stereo */
 static bool s_rt_rs_init;
 static struct ks_rt_cfg s_rt_cfg = {
     .url = CONFIG_ESP_CUBE_AI_RT_URL "?model=" CONFIG_ESP_CUBE_AI_RT_MODEL,
-    .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+    .api_key = CONFIG_ESP_CUBE_AI_API_KEY,   /* 静态兜底; open 前 key_resolve 覆盖 */
     .voice = CONFIG_ESP_CUBE_AI_RT_VOICE,
     .instructions = "你是音箱的语音伙伴, 回应热情简短自然。用户想听歌/"
                     "点歌时就说马上去挑之类的热情话, 但不许编造具体歌名,"
@@ -163,7 +217,7 @@ extern const uint8_t filler_16k_pcm_end[]   asm("_binary_filler_16k_pcm_end");
 static char s_tts_voice_buf[48] = CONFIG_ESP_CUBE_AI_TTS_VOICE;
 static struct ks_tts_cfg s_tts_cfg = {        /* TTS 配置单例(懒开复用) */
     .url = AI_DASHSCOPE_URL,
-    .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+    .api_key = CONFIG_ESP_CUBE_AI_API_KEY,   /* 静态兜底; open 前 key_resolve 覆盖 */
     .model = CONFIG_ESP_CUBE_AI_TTS_MODEL,
     .voice = s_tts_voice_buf,
     .sample_rate = AI_TTS_RATE,
@@ -196,6 +250,34 @@ static void set_state(ai_state_t st)
      * NET/BT 源压 -14dB, 否则点歌后音乐全音量盖住人声 */
     audio_mixer_set_ducking(st == AI_SPEAKING);
     s_state = st;
+    /* T28: 行为机影子(生命周期校验+清理掩码; 展示态驱动) */
+    if (s_ss != NULL) {
+        switch (st) {
+        case AI_WAKE:
+            if (!ss_on_wake(s_ss)) {
+                ESP_LOGW(TAG, "ss: wake illegal in %d", (int)ss_state(s_ss));
+            }
+            ss_touch(s_ss, now_ms_v());
+            break;
+        case AI_LISTENING:
+            if (!ss_on_speech_start(s_ss)) ss_touch(s_ss, now_ms_v());
+            break;
+        case AI_THINKING:
+            if (!ss_on_speech_end(s_ss)) ss_touch(s_ss, now_ms_v());
+            break;
+        case AI_SPEAKING:
+            ss_touch(s_ss, now_ms_v());
+            break;
+        case AI_IDLE:
+        default: {
+            uint32_t mask = ss_cancel(s_ss);
+            if (mask & SS_CLEAN_TTS) {
+                ESP_LOGW(TAG, "ss: idle cleanup drops TTS (无旧声)");
+            }
+            break;
+        }
+        }
+    }
     cube_event_publish(CUBE_EVT_AI_STATE, &st, sizeof(st));
 }
 
@@ -223,7 +305,7 @@ int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap)
     struct deliberate_ctx c = { .buf = reply, .off = 0, .cap = cap };
     struct ks_llm_cfg cfg = {
         .url = CONFIG_ESP_CUBE_AI_LLM_URL,
-        .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+        .api_key = key_resolve(),
         .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
         .system = system_prompt,
         .user_msg = "(内心思考)",
@@ -328,6 +410,15 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
     /* TTS 懒开: 唤醒路径下 ASR 已收线, 此刻开 TTS 免双 TLS 并发
      * (esp-aes DMA 描述符争抢, 2026-11-11 板上实测互撞超时) */
     if (!s_tts_opened) {
+        s_tts_cfg.api_key = key_resolve();   /* T17: 凭据优先 */
+        if (profile_resolve()) {             /* T30: profile 覆盖 TTS */
+            if (s_prof.tts_model[0]) s_tts_cfg.model = s_prof.tts_model;
+            if (s_prof.tts_voice[0]) {
+                snprintf(s_tts_voice_buf, sizeof(s_tts_voice_buf),
+                         "%s", s_prof.tts_voice);
+                s_tts_cfg.voice = s_tts_voice_buf;
+            }
+        }
         if (tts_open_retry(&s_tts_cfg, &s_tts_ev) != 0) {
             ESP_LOGE(TAG, "tts lazy open failed");
             s_tts_dead = true;                  /* 本轮放弃语音回应 */
@@ -336,6 +427,13 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
         s_tts_opened = true;
     }
     if (sentence[0] != '\0') {
+        /* T31: 旧请求失效门 —— 超时/切人格/barge 后不发声 */
+        if (!sg_emit_ok(s_sg, s_cur_req, &(sg_epochs_t){
+                            cact_persona_epoch(cact_default()), 0},
+                        now_ms_v())) {
+            ESP_LOGW(TAG, "llm sentence dropped (stale request)");
+            return true;
+        }
         char clean[512];
         strlcpy(clean, sentence, sizeof(clean));
         soul_strip_mood_tag(clean);           /* mood 标签: 回写灵魂, 不上屏不出声 */
@@ -344,7 +442,8 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
         if (s_round_reply1st[0] == '\0') {
             strlcpy(s_round_reply1st, clean, sizeof(s_round_reply1st));
         }
-        ESP_LOGI(TAG, "llm sentence(final=%d): %s", final, clean);  /* DIAG */
+        ESP_LOGI(TAG, "llm sentence(final=%d): len=%zu", final,
+                 strlen(clean));  /* NFR-03: 原文不入常规日志 */
         /* 永远只发 continue-task(last=false): v2 的 final=true 表示
          * "本次 chat 调用结束", 带工具的轮后面还有第二轮 LLM ——
          * 若在此发 finish-task, 第二轮文本将喂给已结束的任务,
@@ -395,7 +494,7 @@ static void on_llm_args(void *user, const char *name, const char *args)
     strlcpy(h.name, name, sizeof(h.name));
     strlcpy(h.args, args, sizeof(h.args));
     cube_event_publish(CUBE_EVT_AI_TOOL_HINT, &h, sizeof(h));
-    ESP_LOGI(TAG, "tool hint: %s %s", name, args);
+    ESP_LOGI(TAG, "tool hint: %s args_len=%zu", name, strlen(args));  /* NFR-03 */
 }
 
 /* ---- TTS PCM 回调(网络任务) → 环形缓冲。
@@ -466,7 +565,7 @@ static void on_rt_transcript(void *user, const char *text)
 {
     (void)user;
     /* 快线转写可靠性弱(PC 探针实测), 仅作 UI/日志参考 */
-    ESP_LOGI(TAG, "rt transcript: %s", text);
+    ESP_LOGI(TAG, "rt transcript: len=%zu", strlen(text));  /* NFR-03 */
 }
 
 /* 快线保障: 失联即整体重建(半死会话不如重开); 失败回落纯级联 */
@@ -475,6 +574,7 @@ static void rt_ensure(void)
     if (ks_rt_ok()) return;
     ks_rt_close();
     if (s_rt_ring == NULL) return;
+    s_rt_cfg.api_key = key_resolve();        /* T17: 凭据优先(L5 注入) */
     if (ks_rt_open(&s_rt_cfg, &s_rt_ev) == 0) {
         ESP_LOGI(TAG, "rt fast-line up (%s)", CONFIG_ESP_CUBE_AI_RT_VOICE);
     } else {
@@ -680,6 +780,17 @@ static void mic_task(void *arg)
  * 生成最终答复(仍流式进 TTS)。 */
 static void run_round(const char *user_text)
 {
+    /* T21 续: 两条入口(ASR 定稿/文本注入)统一按当前 query 检索精排 */
+    soul_mem_query_rebuild(user_text);
+    /* T31: 会话守卫 begin(代次快照=persona epoch; 串行, 忙则本轮跳过) */
+    s_cur_req = sg_begin(s_sg, &(sg_epochs_t){
+                             cact_persona_epoch(cact_default()), 0},
+                         now_ms_v(), 45000);
+    if (s_cur_req == 0) {
+        ESP_LOGW(TAG, "round skipped (sessguard in-flight)");
+        return;
+    }
+    sg_append(s_sg, "user", user_text);
     set_state(AI_THINKING);
     s_round_spoken = false;
     s_round_reply1st[0] = '\0';
@@ -705,7 +816,7 @@ static void run_round(const char *user_text)
     /* 静态而非栈: 1.4KB 栈缓冲把 aisess 顶穿(Stack protection fault,
      * TTS 期崩溃重启→电台自启+爆音, 2026-11-12 用户实测); session_task
      * 单写者, 无重入 */
-    static char system_full[1408];   /* 人格+时间+硬约束+soul 内在状态+记忆块 */
+    static char system_full[2048];   /* 人格+时间+硬约束+soul 内在状态+记忆块+角色块 */
     /* 当前时间注入: reminder.add 的口语时间换算(明天早上八点)必须有
      * "现在"作参照, 否则 LLM 只能瞎猜(M2); 未同步时提示模型说明 */
     char now_str[40] = "时间未同步";
@@ -721,12 +832,13 @@ static void run_round(const char *user_text)
         }
     }
     snprintf(system_full, sizeof(system_full),
-             "%s 现在是%s。%s %s 凡用户表达任何播放意图(想听/放/播/切歌/"
+             "%s 现在是%s。%s %s %s 凡用户表达任何播放意图(想听/放/播/切歌/"
              "换台/调音量/停止), 你必须先调用相应工具, 工具执行成功后才能"
              "回应; 用户要记事或定提醒时也必须调用 memo/reminder 工具; "
              "严禁不调用工具就口头答应。回应一句话口语化简短, 不要出现任何"
              "网址或链接。",
              CONFIG_ESP_CUBE_AI_LLM_SYSTEM, now_str,
+             persona_prompt_suffix(),
              soul_prompt_suffix(), soul_mem_prompt_block());
 
     cJSON *messages = cJSON_CreateArray();
@@ -741,14 +853,24 @@ static void run_round(const char *user_text)
     }
 
     tool_call_t tc;
+    bool prof_tools = true;
+    const char *prof_url = AI_LLM_URL;
+    const char *prof_model = CONFIG_ESP_CUBE_AI_LLM_MODEL;
+    if (profile_resolve()) {                    /* T30: profile 优先 */
+        prof_tools = s_prof.tools;
+        if (s_prof.llm_url[0]) prof_url = s_prof.llm_url;
+        if (s_prof.llm_model[0]) prof_model = s_prof.llm_model;
+    }
     for (int round = 0; round < 3; round++) {   /* 首轮 + ≤2 工具轮回 */
         struct ks_llm_cfg_v2 lcfg = {
-            .url = AI_LLM_URL,
-            .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
-            .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
+            .url = prof_url,
+            .api_key = key_resolve(),
+            .model = prof_model,
             .system = system_full,
             .messages = messages,
-            .tools = tools,
+            /* T30 安全降级: profile 无工具能力 → NULL(纯文本,
+             * 不静默误调用) */
+            .tools = prof_tools ? tools : NULL,
             .args_cb = on_llm_args,             /* 流式参数: filler+预取 */
             .cut_clauses = true,
             #if CONFIG_ESP_CUBE_AI_LLM_DISABLE_THINKING
@@ -760,14 +882,26 @@ static void run_round(const char *user_text)
         int rc = ks_llm_chat_v2(&lcfg, on_llm_sent, on_llm_tool, &tc);
         if (s_abort_req) break;
         if (rc == 1 && tc.name[0] != 0 && round < 2) {
+            /* T31: 工具执行门 —— 失效/重复 id 不执行不发声 */
+            if (!sg_emit_ok(s_sg, s_cur_req, &(sg_epochs_t){
+                                cact_persona_epoch(cact_default()), 0},
+                            now_ms_v()) ||
+                !sg_tool_first(s_sg, s_cur_req, &(sg_epochs_t){
+                                   cact_persona_epoch(cact_default()), 0},
+                               now_ms_v(), tc.id)) {
+                ESP_LOGW(TAG, "tool %s skipped (stale/dup)", tc.name);
+                break;
+            }
             /* 执行技能 → 结果回传(role:"tool") → 下一轮 LLM */
             char reply[256];   /* 技能回执(与 ai_skills.h AI_SKILL_REPLY_MAX 对齐, 免头间耦合) */
             cJSON *args_obj = cJSON_Parse(tc.args);   /* 失败→NULL(无参) */
             esp_err_t err = ai_skill_exec(tc.name, args_obj, reply,
                                           sizeof(reply));
             cJSON_Delete(args_obj);
-            ESP_LOGI(TAG, "skill %s(%s) %s: %s", tc.name, tc.args,
-                     err == ESP_OK ? "ok" : esp_err_to_name(err), reply);
+            ESP_LOGI(TAG, "skill %s(args_len=%zu) %s: reply_len=%zu",  /* NFR-03 */
+                     tc.name, strlen(tc.args),
+                     err == ESP_OK ? "ok" : esp_err_to_name(err),
+                     strlen(reply));
 #if CONFIG_ESP_CUBE_AI_TOOL_FAST_ACK
             /* 快速应答: 成功回执直喂 TTS 跳过第二轮 LLM(首响 -1s);
              * 失败仍走 LLM 轮生成自然道歉 */
@@ -777,7 +911,7 @@ static void run_round(const char *user_text)
                 if (src == 0) {
                     cube_event_publish(CUBE_EVT_AI_TEXT, reply,
                                        strlen(reply) + 1);
-                    ESP_LOGI(TAG, "llm sentence(rt-say): %s", reply);
+                    ESP_LOGI(TAG, "llm sentence(rt-say): len=%zu", strlen(reply));  /* NFR-03 */
                     s_round_spoken = true;    /* 等快线音频排空 */
                 } else if (src != -100) {
                     /* 快线半死(say 失败): 回落 cosyvoice 直喂 */
@@ -831,6 +965,8 @@ static void run_round(const char *user_text)
 
     cJSON_Delete(messages);
     cJSON_Delete(tools);
+    sg_finish(s_sg, s_cur_req);              /* T31: 请求收口 */
+    s_cur_req = 0;
     /* 灵魂回执: 有声且健康 = 圆满轮(驱力大恢复); 记忆层顺带记录 */
     soul_on_round((s_round_spoken
 #if CONFIG_ESP_CUBE_AI_RT_ENABLE
@@ -917,7 +1053,7 @@ static void announce_start(const char *text)
     set_state(AI_SPEAKING);               /* ducking 让位(音乐压低) */
     audio_mixer_set_source_active(s_tts_src, true);
     cube_event_publish(CUBE_EVT_AI_TEXT, clean, strlen(clean) + 1);
-    ESP_LOGI(TAG, "announce: %s", clean);
+    ESP_LOGI(TAG, "announce: len=%zu", strlen(clean));  /* NFR-03 */
 
 #if CONFIG_ESP_CUBE_AI_RT_ENABLE
     if (ks_rt_ok()) {
@@ -1012,7 +1148,7 @@ static void session_task(void *arg)
             set_state(AI_LISTENING);
             struct ks_asr_cfg acfg = {
                 .url = AI_DASHSCOPE_URL,
-                .api_key = CONFIG_ESP_CUBE_AI_API_KEY,
+                .api_key = key_resolve(),
                 .model = CONFIG_ESP_CUBE_AI_ASR_MODEL,
                 .sample_rate = AI_MIC_RATE,
             };
@@ -1170,6 +1306,7 @@ static void ai_evt_cb(cube_evt_id_t id, const void *data, size_t len,
         if (s_state == AI_SPEAKING) {
             s_abort_req = true;
             s_ring_r = s_ring_w;         /* 快进读指针=tts_task 见空即哑 */
+            sg_cancel_all(s_sg);         /* T31: 打断=未收口请求全失效 */
             soul_on_barge();             /* 打断: 强社交在场信号 */
         }
         ai_session_on_wake();
@@ -1180,6 +1317,15 @@ static void ai_evt_cb(cube_evt_id_t id, const void *data, size_t len,
 esp_err_t ai_session_start(void)
 {
     if (s_task != NULL) return ESP_OK;
+    if (s_sg == NULL && sg_init(&s_sg, 8, 256, 8) != 0) {
+        ESP_LOGE(TAG, "sessguard init failed (无守卫运行)");
+        s_sg = NULL;
+    }
+    if (s_ss == NULL && ss_init(&s_ss, SS_TURN_MAX,
+                                SS_IDLE_TIMEOUT_MS) != 0) {
+        ESP_LOGE(TAG, "sessstate init failed");
+        s_ss = NULL;
+    }
     s_evtq = xQueueCreate(8, sizeof(session_evt_t));
     ESP_RETURN_ON_FALSE(s_evtq != NULL, ESP_ERR_NO_MEM, TAG, "evtq");
     s_ring = heap_caps_malloc(TTS_RING_FRAMES * 2, MALLOC_CAP_SPIRAM);
@@ -1258,8 +1404,10 @@ static bool st_synth(const char *text)
     s_st_w = 0;
     s_st_capture = true;
     /* 头部垫 300ms 静音: mic_task 噪声底标定窗(前 15 块)不应吃到
-     * 语音, 否则阈值被抬到语音电平(板上实测 floor=4.5M) */
-    memset(s_st_buf, 0, 4800);
+     * 语音, 否则阈值被抬到语音电平(板上实测 floor=4.5M);
+     * 批次 44: 4800 是帧数(int16), memset 字节数须 ×2——旧值只清了
+     * 一半, 后半段 PSRAM 垃圾被注入麦克走唤醒/ASR */
+    memset(s_st_buf, 0, 4800 * sizeof(int16_t));
     s_st_w = 4800;
     bool ok = tts_open_retry(&s_tts_cfg, &s_tts_ev) == 0;
     if (ok) {

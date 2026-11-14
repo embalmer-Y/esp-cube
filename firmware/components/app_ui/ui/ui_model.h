@@ -75,6 +75,7 @@ typedef struct {
 
     /* 连接状态 */
     bool wifi_up;
+    bool sd_ok;                    /* T18: SD 卡挂载(记忆/素材后端可用) */
     char wifi_ssid[33];
     char wifi_ip[16];
     bool bt_connected;

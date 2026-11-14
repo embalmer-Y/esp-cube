@@ -42,6 +42,12 @@
 #define PANEL_HIDE_MS  180           /* 面板滑入/滑出时长(跟手性调优) */
 #define PANEL_AUTO_MS  8000          /* 面板无操作自动收回 */
 
+/* 表情帧速(ms/帧; 批次 21 引入; 素材自带 fps 语义, 状态调制保留) */
+#define FACE_DELAY_BASE_MS    100     /* 默认(待机) */
+#define FACE_DELAY_LISTEN_MS  100     /* 聆听 */
+#define FACE_DELAY_THINK_MS   200     /* 思考(慢速=琢磨) */
+#define FACE_DELAY_SPEAK_MS   70      /* 说话(快速=活泛) */
+
 /* 手势阈值: 轴向判定 14px / 面板触发 46px / 切曲 60px */
 #define GEST_AXIS_PX   14
 #define GEST_PANEL_PX  30
@@ -60,12 +66,14 @@ extern ui_page_t ui_pg;
 typedef struct {
     /* 表情层 */
     lv_obj_t *face_bg;                    /* 情绪底色圆(EFC 背后) */
-    lv_obj_t *face_efc;                   /* EFC 控件(EFC=n 时不存在) */
+    lv_obj_t *face_anim;                  /* 表情动画控件(EAF; 关闭时不存在) */
     int face_state;                       /* 最近 ai_state(驱动帧速/呼吸) */
     char mood_tag_last[16];
     /* 状态栏(下滑) */
     lv_obj_t *p_status;                   /* 容器(y 动画进出) */
     lv_obj_t *clock, *dateline, *net, *power;
+    lv_obj_t *priv;                 /* T18: 语音隐私三态 */
+    lv_obj_t *offline;              /* T18: 断网遮罩 */
     lv_obj_t *vol_track, *vol_fill;       /* 自绘音量条(track+fill) */
     lv_obj_t *vol_label;
     int vol_w;                            /* 音量条可拖宽度缓存 */
@@ -83,6 +91,9 @@ typedef struct {
     char last_sub[UI_SUB_LEN];
     char last_badge[UI_STR_LEN];
     char last_net[UI_STR_LEN];
+    char last_priv[32];            /* T18: 语音隐私三态缓存 */
+    bool last_wifi_up;             /* T18: 断网屏显隐沿检测 */
+    bool nosync_shown;             /* T18: "未校时"已展示过 */
     int last_volume;
     int last_ai_state;
     /* 手势(轴向锁定) */

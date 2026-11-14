@@ -208,8 +208,9 @@ static void assist_task(void *arg)
             r.id = fired[i].id;
             r.due = fired[i].due;
             strlcpy(r.text, fired[i].text, sizeof(r.text));
-            ESP_LOGI(TAG, "reminder fired #%u: %s",
-                     (unsigned)r.id, r.text);
+            ESP_LOGI(TAG, "reminder fired #%u: len=%zu",
+                     (unsigned)r.id, strnlen(r.text, sizeof(r.text)));
+            /* NFR-03: 提醒原文不入常规日志 */
             cube_event_publish(CUBE_EVT_REMINDER_FIRED, &r, sizeof(r));
             cube_event_publish(CUBE_EVT_ASSIST_CHANGED, NULL, 0);
             if (s_announcer) {

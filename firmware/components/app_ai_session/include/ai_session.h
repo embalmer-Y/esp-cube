@@ -48,6 +48,12 @@ int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap);
 void ai_session_set_tts_voice(const char *voice);
 const char *ai_session_tts_voice(void);
 
+/* T17: L5 注入凭据解析器(credstore "llm.api_key" 优先, 回退 Kconfig);
+ * 返回的字符串须在会话存续期有效(provider 自管缓存) */
+void ai_session_set_api_key_provider(const char *(*fn)(void));
+/* T30: profile 来源注入(settings JSON 文本; NULL=内置兜底) */
+void ai_session_set_profile_provider(const char *(*fn)(void));
+
 #ifdef __cplusplus
 }
 #endif

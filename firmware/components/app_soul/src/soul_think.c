@@ -21,6 +21,7 @@
  * notify 门控(soul tick 触发, 不在现场起任务); 单飞(忙则丢弃不排队)。
  */
 #include "soul.h"
+#include "cube_act.h"
 #include "soul_ignition.h"
 
 #include <stdio.h>
@@ -105,12 +106,35 @@ void soul_think_gate_ctx(struct ki_think_ctx *tc)
     tc->last_silent_score = s_last_silent_score;
 }
 
-/* ---- 行动执行 ---- */
+/* ---- 行动执行 ----
+ * T13: 深思行动改经 cube_act 统一门(origin=AUTONOMOUS_LLM)。
+ * 旧直发链路因 KI_ACT.content 未填充实为空动作(docs/15); 迁移后
+ * 空/非法内容被能力 validate 拒绝并留回执, 断链显性化(T31 收口)。 */
 static void act_broadcast(uint8_t kind, const char *content)
 {
-    cube_soul_act_t a = { .kind = kind };
-    strlcpy(a.content, content, sizeof(a.content));
-    cube_event_publish(CUBE_EVT_SOUL_ACT, &a, sizeof(a));
+    cact_req_t r;
+    memset(&r, 0, sizeof(r));
+    r.origin = CACT_ORIGIN_AUTONOMOUS_LLM;
+    if (kind == 3) {
+        strlcpy(r.capability, "radio.play", sizeof(r.capability));
+    } else {
+        strlcpy(r.capability, "face.show", sizeof(r.capability));
+        size_t n = strlcpy((char *)r.params, content ? content : "",
+                           sizeof(r.params)) + 1;
+        r.params_len = n;
+    }
+    uint32_t id = 0;
+    cact_res_t res = cact_submit(cact_default(), &r, &id);
+    if (res == CACT_RES_OK) {
+        cact_pump(cact_default());
+        cact_receipt_t rc;
+        if (cact_receipt_last(cact_default(), id, &rc) == CACT_RES_OK) {
+            ESP_LOGI(TAG, "think act %s -> #%u %s", r.capability, id,
+                     cact_status_name(rc.status));
+        }
+    } else {
+        ESP_LOGW(TAG, "think act %s rejected: %d", r.capability, res);
+    }
 }
 
 static void act_execute(const struct ki_intent *it)

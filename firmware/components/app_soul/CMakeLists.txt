@@ -7,5 +7,5 @@ idf_component_register(
          "src/soul_drive.c" "src/soul_emotion.c" "src/soul_ignition.c"
          "src/soul_bb.c" "src/soul_behavior.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES cubecore nvs_flash speech_provider app_storage
+    PRIV_REQUIRES cubecore cube_act nvs_flash speech_provider app_storage
 )

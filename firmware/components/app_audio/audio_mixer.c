@@ -68,7 +68,12 @@ static struct {
  * 对【链表头快照】加临界区即可安全; 节点内部字段由各自使用方串行访问。 */
 static portMUX_TYPE s_list_mux = portMUX_INITIALIZER_UNLOCKED;
 
-/* 10ms 工作缓冲(内部 SRAM, 每 tick 复用) */
+/* 10ms 工作缓冲(内部 SRAM, 每 tick 复用); 尺寸按 48kHz 上限定死
+ * (批次 44: Kconfig MIXER_RATE range 到 96k, 但 3:1 抽取/缓冲布局
+ * 均按 48k 设计——>48k 会写越界, 编译期拒绝) */
+#if defined(CONFIG_ESP_CUBE_MIXER_RATE) && CONFIG_ESP_CUBE_MIXER_RATE > 48000
+#error "ESP_CUBE_MIXER_RATE > 48000 不支持: 缓冲/抽取链按 48k 设计(docs/06 §7)"
+#endif
 static int16_t s_tmp[MIX_FRAME_MS * 48 * 2];    /* 帧读入 */
 static int16_t s_sum[MIX_FRAME_MS * 48 * 2];    /* 求和输出 */
 static int16_t s_master[MIX_FRAME_MS * 48 * 2]; /* master gain 后 */

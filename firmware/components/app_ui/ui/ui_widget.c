@@ -23,18 +23,26 @@
 #include "sdkconfig.h"
 #include "esp_log.h"
 #endif
-#if CONFIG_ESP_CUBE_ENABLE_EFC
-#include "lv_efc.h"
-extern const uint8_t giphy_z_efc_start[] asm("_binary_giphy_z_efc_start");
-extern const uint8_t giphy_z_efc_end[]   asm("_binary_giphy_z_efc_end");
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+#include "lv_eaf.h"
+/* 乐鑫官方情绪素材(.eaf; espressif2022/esp_emote_assets 360_360)
+ * 首批嵌入 3 片段(CMakeLists EMBED_FILES): neutral/happy/wink;
+ * sad/angry/confused/shocked/sleep 待素材扩容(§44)——勿提前声明
+ * extern(曾致死声明误导), listening/其他情绪一律回落 neutral */
+extern const uint8_t face_neutral_eaf_start[] asm("_binary_face_neutral_eaf_start");
+extern const uint8_t face_neutral_eaf_end[]   asm("_binary_face_neutral_eaf_end");
+extern const uint8_t face_happy_eaf_start[]   asm("_binary_face_happy_eaf_start");
+extern const uint8_t face_happy_eaf_end[]     asm("_binary_face_happy_eaf_end");
+extern const uint8_t face_wink_eaf_start[]    asm("_binary_face_wink_eaf_start");
+extern const uint8_t face_wink_eaf_end[]      asm("_binary_face_wink_eaf_end");
 #endif
 
 ui_widget_t ui_w;
 
 /* 设备后端(ui_port_esp)取表情控件句柄(类型不外泄) */
-lv_obj_t *ui_face_efc_obj(void)
+lv_obj_t *ui_face_anim_obj(void)
 {
-    return ui_w.face_efc;
+    return ui_w.face_anim;
 }
 
 enum { AXIS_NONE = 0, AXIS_V, AXIS_SWITCH };
@@ -80,14 +88,14 @@ static void panel_slide(lv_obj_t *obj, int32_t y_to, uint32_t dur)
     lv_anim_start(&a);
 }
 
-/* 呼吸透明度(聆听态底色; 单实例重启动画) */
+/* 呼吸透明度(聆听态底色; 单实例重启动画; 仅 EFC 面使用, 关闭时整段编译出) */
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
 static void breath_opa_cb(void *var, int32_t v)
 {
     lv_obj_set_style_bg_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
 }
 static void breath_start(lv_obj_t *obj)
 {
-#if CONFIG_ESP_CUBE_ENABLE_EFC
     lv_anim_del(obj, breath_opa_cb);
     lv_anim_t a;
     lv_anim_init(&a);
@@ -98,15 +106,13 @@ static void breath_start(lv_obj_t *obj)
     lv_anim_set_playback_duration(&a, 1200);
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_start(&a);
-#endif
 }
 static void breath_stop(lv_obj_t *obj, int opa)
 {
-#if CONFIG_ESP_CUBE_ENABLE_EFC
     lv_anim_del(obj, breath_opa_cb);
     lv_obj_set_style_bg_opa(obj, (lv_opa_t)opa, 0);
-#endif
 }
+#endif
 
 /* ============================================================ */
 /*                     面板控制                                   */
@@ -133,9 +139,9 @@ void ui_panel_show(int which)
                 which == 2 ? -6 : PANEL_H_SOUL + 16, PANEL_HIDE_MS);
     /* 面板打开时暂停表情解码(全屏 EFC 与面板滑动同帧抢渲染是卡顿主源;
      * 收起即恢复, 视觉上面板近乎不透明无感) */
-#if CONFIG_ESP_CUBE_ENABLE_EFC
-    if (which != 0) lv_efc_pause(ui_w.face_efc);
-    else lv_efc_resume(ui_w.face_efc);
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+    if (which != 0) lv_eaf_pause(ui_w.face_anim);
+    else lv_eaf_resume(ui_w.face_anim);
 #endif
     if (which != 0) {
         if (ui_w.panel_timer == NULL) {
@@ -149,19 +155,6 @@ void ui_panel_show(int which)
 /* ============================================================ */
 /*                     每帧同步                                   */
 /* ============================================================ */
-static uint32_t mood_color(const char *tag)
-{
-    static const struct { const char *tag; uint32_t c; } m[] = {
-        { "happy",     0xFFD166 }, { "relaxed",   0x6BE3A2 },
-        { "angry",     0xFF6B6B }, { "sad",       0x7FA8D9 },
-        { "surprised", 0xFFA6F9 }, { "confused",  0xBFA4F9 },
-        { "sleepy",    0x8B98AC },
-    };
-    for (unsigned i = 0; i < sizeof(m) / sizeof(m[0]); i++) {
-        if (strcmp(tag, m[i].tag) == 0) return m[i].c;
-    }
-    return 0x2A3550;                     /* 无灵魂数据: 暗蓝底 */
-}
 
 static const char *mood_cn(const char *tag)
 {
@@ -191,33 +184,48 @@ static void panel_req_consume(const ui_model_t *m)
     }
 }
 
+/* T36 反馈: 素材帧仅 125×160(照片实证小矩形) → 460 素材重编码解决;
+ * 注: LVGL scale 对 EAF RAW/调色板图像不可用(批次 41 黑屏实证, 见
+ * docs/19 §43/§44), 动态缩放路线已回退, 勿再走 lv_image_set_scale。 */
+
 void ui_face_apply(const ui_model_t *m)
 {
-#if CONFIG_ESP_CUBE_ENABLE_EFC
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
     if (strcmp(m->mood_tag, ui_w.mood_tag_last) != 0) {
         snprintf(ui_w.mood_tag_last, sizeof(ui_w.mood_tag_last), "%s",
                  m->mood_tag);
-        lv_obj_set_style_bg_color(ui_w.face_bg,
-                                  lv_color_hex(mood_color(ui_w.mood_tag_last)), 0);
+        /* T36/用户裁决: mood → 乐鑫情绪片段。460 重编码首批嵌入
+         * neutral/listen/happy/wink; 其余情绪回落 neutral(§44 素材
+         * 重编码扩容后补全) */
+        const uint8_t *src_start = face_neutral_eaf_start;
+        const uint8_t *src_end = face_neutral_eaf_end;
+        if (strcmp(ui_w.mood_tag_last, "happy") == 0 ||
+            strcmp(ui_w.mood_tag_last, "relaxed") == 0) {
+            src_start = face_happy_eaf_start;
+            src_end = face_happy_eaf_end;
+        }
+        lv_eaf_set_src_data(ui_w.face_anim, src_start,
+                            (size_t)(src_end - src_start));
+        lv_eaf_restart(ui_w.face_anim);
     }
     if ((int)m->ai_state != ui_w.last_ai_state) {
         int prev = ui_w.last_ai_state;
         ui_w.last_ai_state = (int)m->ai_state;
         switch (m->ai_state) {
         case UI_AI_LISTENING:
-            lv_efc_set_frame_delay(ui_w.face_efc, 55);
+            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_LISTEN_MS);
             breath_start(ui_w.face_bg);
             break;
         case UI_AI_THINKING:
-            lv_efc_set_frame_delay(ui_w.face_efc, 130);   /* 慢速=琢磨 */
+            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_THINK_MS);  /* 慢速=琢磨 */
             breath_stop(ui_w.face_bg, 30);
             break;
         case UI_AI_SPEAKING:
-            lv_efc_set_frame_delay(ui_w.face_efc, 38);    /* 快速=活泛 */
+            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_SPEAK_MS);  /* 快速=活泛 */
             breath_stop(ui_w.face_bg, 56);
             break;
         default:
-            lv_efc_set_frame_delay(ui_w.face_efc, 55);
+            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_BASE_MS);
             breath_stop(ui_w.face_bg, 40);
             if (prev == UI_AI_IDLE || prev < 0) break;
             break;
@@ -240,14 +248,52 @@ void ui_status_apply(const ui_model_t *m)
         lv_label_set_text_fmt(ui_w.dateline, "%d月%d日 周%s",
                               m->mon, m->day, wd[m->wday % 7]);
     }
-    /* 网络/供电行(不渲染原始 SSID: CJK 子集字体对任意 ASCII 串无字形
+    /* 网络/SD/供电行(不渲染原始 SSID: CJK 子集字体对任意 ASCII 串无字形
      * 保障, ssid 又不受控 —— sim 截图实测 'y' 渲染成乱码, 2026-11-12) */
     char net[UI_STR_LEN];
-    snprintf(net, sizeof(net), "%s",
-             m->wifi_up ? "无线网络已连接" : "网络已断开");
+    if (m->wifi_up) {
+        snprintf(net, sizeof(net), "无线网络已连接%s",
+                 m->sd_ok ? "" : " (SD卡未装)");
+    } else {
+        snprintf(net, sizeof(net), "网络已断开%s",
+                 m->sd_ok ? "" : " (SD卡未装)");
+    }
     if (strcmp(net, ui_w.last_net) != 0) {
         snprintf(ui_w.last_net, sizeof(ui_w.last_net), "%s", net);
         lv_label_set_text(ui_w.net, net);
+    }
+    /* T18: 未校时提示(时钟区在同步前为空, 此处一次性补提示) */
+    if (!m->time_synced && !ui_w.nosync_shown) {
+        ui_w.nosync_shown = true;
+        lv_label_set_text(ui_w.dateline, "时间未校准");
+    }
+    /* T18: 语音隐私三态(FR-12; 由 ai_state 派生, 后端无新字段) */
+    const char *priv;
+    switch (m->ai_state) {
+    case UI_AI_WAKE:
+    case UI_AI_LISTENING:
+        priv = "语音采集中 麦克风";
+        break;
+    case UI_AI_THINKING:
+    case UI_AI_SPEAKING:
+        priv = "语音发送中 云端";
+        break;
+    default:
+        priv = "语音待机 唤醒监听";
+        break;
+    }
+    if (strcmp(priv, ui_w.last_priv) != 0) {
+        snprintf(ui_w.last_priv, sizeof(ui_w.last_priv), "%s", priv);
+        lv_label_set_text(ui_w.priv, priv);
+    }
+    /* T18: 断网遮罩显隐(沿触发) */
+    if (m->wifi_up != ui_w.last_wifi_up) {
+        ui_w.last_wifi_up = m->wifi_up;
+        if (m->wifi_up) {
+            lv_obj_add_flag(ui_w.offline, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(ui_w.offline, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     /* 音量条(外部变化才重绘; 拖动路径见手势) */
     if (m->volume != ui_w.last_volume) {
@@ -458,7 +504,7 @@ void ui_widget_create(lv_obj_t *scr)
     /* ---- 表情层(全屏): 情绪底色圆 + EFC 常驻 ----
      * 显示层不吃输入(清 CLICKABLE): 430px 圆几乎全屏, 若可点会抢走
      * 中心区 press 致手势失灵; press 穿透落到 scr_main 手势层 */
-#if CONFIG_ESP_CUBE_ENABLE_EFC
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
     ui_w.face_bg = lv_obj_create(scr);
     lv_obj_remove_style_all(ui_w.face_bg);
     lv_obj_set_size(ui_w.face_bg, 430, 430);
@@ -468,27 +514,59 @@ void ui_widget_create(lv_obj_t *scr)
     lv_obj_align(ui_w.face_bg, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(ui_w.face_bg,
                       LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    ui_w.face_efc = lv_efc_create(scr);
-    lv_obj_clear_flag(ui_w.face_efc,
+    ui_w.face_anim = lv_eaf_create(scr);
+    lv_obj_clear_flag(ui_w.face_anim,
                       LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_size(ui_w.face_efc, 460, 460);
-    lv_obj_align(ui_w.face_efc, LV_ALIGN_CENTER, 0, 0);
-    lv_image_set_inner_align(ui_w.face_efc,
+    lv_obj_set_size(ui_w.face_anim, 460, 460);
+    lv_obj_align(ui_w.face_anim, LV_ALIGN_CENTER, 0, 0);
+    lv_image_set_inner_align(ui_w.face_anim,
                              LV_IMAGE_ALIGN_CONTAIN_DOWNSCALE);
-    lv_efc_set_src_data(ui_w.face_efc, giphy_z_efc_start,
-                        (size_t)(giphy_z_efc_end - giphy_z_efc_start));
-    lv_efc_set_loop_enabled(ui_w.face_efc, true);
-    lv_efc_set_frame_delay(ui_w.face_efc, 55);
-    if (lv_efc_is_loaded(ui_w.face_efc)) {
-        lv_efc_play(ui_w.face_efc);
+    lv_eaf_set_src_data(ui_w.face_anim, face_neutral_eaf_start,
+                        (size_t)(face_neutral_eaf_end -
+                                 face_neutral_eaf_start));
+    lv_eaf_set_loop_enabled(ui_w.face_anim, true);
+    lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_BASE_MS);
+    if (lv_eaf_is_loaded(ui_w.face_anim)) {
+        /* scale 对 EAF RAW/调色板图像绘制失败(黑屏实证, 批次 40 回退):
+         * 铺满需素材级重编码(460 分辨率, tools/eaf_codec.py 已产出) */
+        const lv_image_dsc_t *dsc =
+            (const lv_image_dsc_t *)lv_image_get_src(ui_w.face_anim);
+        ESP_LOGI("ui_face", "face src %dx%d (460=新素材, 125=旧素材)",
+                 dsc ? (int)dsc->header.w : -1,
+                 dsc ? (int)dsc->header.h : -1);
+        lv_eaf_restart(ui_w.face_anim);
+        /* EFC(RGB565 不透明 450×450)完整覆盖 430px 底色圆 → 隐藏底色,
+         * 免逐帧圆弧遮罩重绘(批次 21: outside_cb ~48ms 主源之一);
+         * 仅 EFC 加载失败时底色圆作为 fallback 显示 */
+        lv_obj_add_flag(ui_w.face_bg, LV_OBJ_FLAG_HIDDEN);
         ESP_LOGI("ui_face", "efc clip ok: %d frames @%dms",
-                 (int)lv_efc_get_total_frames(ui_w.face_efc), 55);
+                 (int)lv_eaf_get_total_frames(ui_w.face_anim),
+                 FACE_DELAY_BASE_MS);
     } else {
         LV_LOG_WARN("efc: clip load failed, face falls back to bg only");
         ESP_LOGE("ui_face", "efc clip load FAILED (bg-only face)");
-        lv_obj_add_flag(ui_w.face_efc, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(ui_w.face_anim, LV_OBJ_FLAG_HIDDEN);
     }
 #endif
+
+    /* T18: 断网遮罩(顶层; 顶层创建=盖过表情/面板; 不吃触摸,
+     * 用户仍可操作; 显示条件见 ui_status_apply) */
+    ui_w.offline = lv_obj_create(scr);
+    lv_obj_remove_style_all(ui_w.offline);
+    lv_obj_set_size(ui_w.offline, 460, 460);
+    lv_obj_set_style_bg_color(ui_w.offline, lv_color_hex(0x101828), 0);
+    lv_obj_set_style_bg_opa(ui_w.offline, LV_OPA_70, 0);
+    lv_obj_clear_flag(ui_w.offline,
+                      LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(ui_w.offline, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *t = ui_label_make(ui_w.offline, FONT_CJK24, C_TXT);
+        lv_label_set_text(t, "网络已断开");
+        lv_obj_align(t, LV_ALIGN_CENTER, 0, -18);
+        lv_obj_t *s2 = ui_label_make(ui_w.offline, FONT_CJK, C_TXT2);
+        lv_label_set_text(s2, "检查网络后自动恢复");
+        lv_obj_align(s2, LV_ALIGN_CENTER, 0, 22);
+    }
 
     /* ---- 状态栏面板(下滑; 初始藏屏上方外) ---- */
     ui_w.p_status = panel_make(scr, PANEL_H_STATUS);
@@ -504,6 +582,10 @@ void ui_widget_create(lv_obj_t *scr)
     ui_w.power = ui_label_make(ui_w.p_status, FONT_CJK, C_AI);
     lv_label_set_text(ui_w.power, "外接供电");
     lv_obj_align(ui_w.power, LV_ALIGN_TOP_MID, 0, 104);
+    /* T18: 语音隐私三态(FR-12: 唤醒监听/会话采集/向云发送 分别可见) */
+    ui_w.priv = ui_label_make(ui_w.p_status, FONT_CJK, C_TXT2);
+    lv_label_set_text(ui_w.priv, "语音待机 唤醒监听");
+    lv_obj_align(ui_w.priv, LV_ALIGN_TOP_MID, 0, 128);
 
     /* 音量行: label + 自绘条 水平排布(y≈150 圆宽足够) */
     ui_w.vol_label = ui_label_make(ui_w.p_status, FONT_CJK, C_TXT);
