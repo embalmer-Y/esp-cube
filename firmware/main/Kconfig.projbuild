@@ -60,8 +60,8 @@ menu "EspCube Configuration"
           (语音 ASR 入口需另开 VOICE)。含 function calling 技能循环
           (ai_skills 注册表, L5 注入)。
 
-    config ESP_CUBE_ENABLE_EFC
-        bool "启用 EFC 表情动画(esp_efc_codec, IDLE 场景播放)"
+    config ESP_CUBE_ENABLE_FACE_ANIM
+        bool "启用表情动画(esp_lv_eaf_player, 乐鑫官方情绪素材)"
         default n
         depends on ESP_CUBE_ENABLE_UI
         help

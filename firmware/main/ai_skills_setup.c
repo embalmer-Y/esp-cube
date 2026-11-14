@@ -7,6 +7,7 @@
  * player.set_volume / player.stop。
  */
 #include "ai_skills.h"
+#include "cube_act.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -163,24 +164,63 @@ static esp_err_t sk_music_search_play(const cJSON *args, char *reply,
     return ESP_OK;
 }
 
-/* ---- 电台: 切台/回电台轮播 ---- */
+/* ---- 统一门提交(T13): 会话工具=用户显式意图(origin=voice_unverified),
+ * 与 soul 自主行为共用同一注册表/策略/回执。 ---- */
+static esp_err_t sk_act_submit(const char *cap, const uint8_t *params,
+                               size_t plen, uint32_t *out_id)
+{
+    cact_req_t r;
+    memset(&r, 0, sizeof(r));
+    r.origin = CACT_ORIGIN_VOICE_UNVERIFIED;    /* 意图可信, 身份未证 */
+    strlcpy(r.capability, cap, sizeof(r.capability));
+    if (params != NULL && plen > 0) {
+        memcpy(r.params, params, plen);
+        r.params_len = plen;
+    }
+    cact_res_t res = cact_submit(cact_default(), &r, out_id);
+    if (res != CACT_RES_OK) return ESP_FAIL;
+    cact_pump(cact_default());
+    return ESP_OK;
+}
+
+static bool sk_act_started(uint32_t id)
+{
+    cact_receipt_t rc;
+    return cact_receipt_last(cact_default(), id, &rc) == CACT_RES_OK &&
+           rc.status == CACT_ST_STARTED;
+}
+
+/* ---- 电台: 切台/回电台轮播(经统一门; 成功=用户显式播放, 解除停止锁存) ---- */
 static esp_err_t sk_radio_play(const cJSON *args, char *reply, size_t cap)
 {
     const cJSON *st = cJSON_GetObjectItem(args, "station");
-    esp_err_t err;
+    uint8_t param[16];
+    size_t plen = 0;
+    int idx = -1;
     if (cJSON_IsNumber(st)) {
         int n = app_player_station_num();
-        int idx = st->valueint - 1;             /* LLM 用 1 起编号 */
+        idx = st->valueint - 1;                 /* LLM 用 1 起编号 */
         if (idx < 0) idx = 0;
         if (idx >= n) idx = idx % n;
-        err = app_player_play_index(idx);
-        snprintf(reply, cap, "已切换到电台:%s",
-                 err == ESP_OK ? app_player_station_name(idx) : "失败");
+        /* blob: "station\0<idx>\0" = 10 字节(手工构造, 避免 NUL 进格式串) */
+        memcpy(param, "station", 8);
+        param[8] = (uint8_t)('0' + idx);
+        param[9] = 0;
+        plen = 10;
+    }
+    uint32_t id = 0;
+    esp_err_t err = sk_act_submit("radio.play", plen ? param : NULL, plen, &id);
+    if (err != ESP_OK || !sk_act_started(id)) {
+        snprintf(reply, cap, "电台切换未获受理, 请稍后再试");
+        return err == ESP_OK ? ESP_FAIL : err;
+    }
+    cact_user_resume(cact_default(), 1);        /* 用户显式播放 → 解除锁存 */
+    if (idx >= 0) {
+        snprintf(reply, cap, "已切换到电台:%s", app_player_station_name(idx));
     } else {
-        err = app_player_start(NULL);
         snprintf(reply, cap, "已回到电台轮播");
     }
-    return err;
+    return ESP_OK;
 }
 
 /* ---- 音量 ---- */
@@ -194,16 +234,32 @@ static esp_err_t sk_set_volume(const cJSON *args, char *reply, size_t cap)
     int level = lv->valueint;
     if (level < 0) level = 0;
     if (level > 100) level = 100;
-    audio_mixer_set_master_volume(level);       /* 内部发音量事件(UI 同步) */
+    uint8_t param[8];
+    param[0] = 'v';
+    param[1] = 0;
+    int n = snprintf((char *)param + 2, sizeof(param) - 2, "%d", level);
+    size_t plen = 2 + (size_t)n + 1;            /* "v\0<digits>\0" */
+    uint32_t id = 0;
+    esp_err_t err = sk_act_submit("audio.volume", param, plen, &id);
+    if (err != ESP_OK || !sk_act_started(id)) {
+        snprintf(reply, cap, "音量设置未获受理, 请稍后再试");
+        return err == ESP_OK ? ESP_FAIL : err;
+    }
     snprintf(reply, cap, "音量已设为 %d%%", level);
     return ESP_OK;
 }
 
-/* ---- 停止 ---- */
+/* ---- 停止(用户显式停止: 锁存组1 + 经统一门停播) ---- */
 static esp_err_t sk_player_stop(const cJSON *args, char *reply, size_t cap)
 {
     (void)args;
-    app_player_stop();
+    cact_user_stop(cact_default(), 1, "voice_stop");  /* 取消在途+锁存 */
+    uint32_t id = 0;
+    esp_err_t err = sk_act_submit("music.stop", NULL, 0, &id);
+    if (err != ESP_OK || !sk_act_started(id)) {
+        snprintf(reply, cap, "停止未获受理, 请稍后再试");
+        return err == ESP_OK ? ESP_FAIL : err;
+    }
     snprintf(reply, cap, "已停止播放");
     return ESP_OK;
 }
@@ -280,39 +336,47 @@ static esp_err_t sk_assist_list(const cJSON *args, char *reply, size_t cap)
     }
     /* 口播友好: 每类最多报 3 条, 超出报总数(逐条念 24 条会念到天荒地老,
      * 回执同时给 LLM: 多了它会主动问用户要哪条) */
+    /* 批次 44: snprintf 截断时返回"想要"长度, off += 会越过 cap →
+     * 后续 cap-off 无符号下溢 → 越过 reply 栈缓冲写。统一两段式:
+     * 先判容量再写, 截断即停(off 钳位到 cap-1, 始终可安全收尾) */
     size_t off = 0;
     int rem_shown = 0, memo_shown = 0, rem_total = 0, memo_total = 0;
     for (int i = 0; i < n; i++) {
         (items[i].due > 0) ? rem_total++ : memo_total++;
     }
+    #define APPEND_FMT(...) do { \
+        if (off + 1 >= cap) break; \
+        int w = snprintf(reply + off, cap - off, __VA_ARGS__); \
+        if (w < 0) break; \
+        off += ((size_t)w >= cap - off) ? cap - 1 - off : (size_t)w; \
+    } while (0)
     if (rem_total > 0) {
-        off += snprintf(reply + off, cap - off, "提醒%d条: ", rem_total);
+        APPEND_FMT("提醒%d条: ", rem_total);
         for (int i = 0; i < n && rem_shown < 3 && off < cap - 96; i++) {
             if (items[i].due <= 0) continue;
             char when[32];
             app_assist_fmt_compact(items[i].due, when, sizeof(when));
-            off += snprintf(reply + off, cap - off, "%s#%u %s %s",
-                            rem_shown++ ? "; " : "", (unsigned)items[i].id,
-                            when, items[i].text);
+            APPEND_FMT("%s#%u %s %s",
+                       rem_shown++ ? "; " : "", (unsigned)items[i].id,
+                       when, items[i].text);
         }
         if (rem_total > rem_shown) {
-            off += snprintf(reply + off, cap - off, "; 等共%d条", rem_total);
+            APPEND_FMT("; 等共%d条", rem_total);
         }
     }
     if (memo_total > 0) {
-        off += snprintf(reply + off, cap - off, "%s琐事%d条: ",
-                        rem_total ? "。" : "", memo_total);
+        APPEND_FMT("%s琐事%d条: ", rem_total ? "。" : "", memo_total);
         for (int i = 0; i < n && memo_shown < 3 && off < cap - 96; i++) {
             if (items[i].due != 0) continue;
-            off += snprintf(reply + off, cap - off, "%s#%u %s",
-                            memo_shown++ ? "; " : "",
-                            (unsigned)items[i].id, items[i].text);
+            APPEND_FMT("%s#%u %s", memo_shown++ ? "; " : "",
+                       (unsigned)items[i].id, items[i].text);
         }
         if (memo_total > memo_shown) {
-            off += snprintf(reply + off, cap - off, "; 等共%d条", memo_total);
+            APPEND_FMT("; 等共%d条", memo_total);
         }
     }
-    snprintf(reply + off, cap - off, "。");
+    APPEND_FMT("。");
+    #undef APPEND_FMT
     return ESP_OK;
 }
 

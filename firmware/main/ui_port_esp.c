@@ -22,6 +22,8 @@
 #include "cubecore.h"
 #include "audio_mixer.h"
 #include "app_player.h"
+#include "cube_act.h"
+#include "act_gate.h"
 #include "app_bt.h"
 #include "app_assist.h"
 #include "app_storage.h"
@@ -31,7 +33,7 @@
 #include "drv_audio.h"
 #include "drv_touch.h"
 #include "esp_lvgl_port.h"
-#include "lv_efc.h"
+#include "lv_eaf.h"
 
 static const char *TAG = "uiport";
 
@@ -94,7 +96,7 @@ static void assist_refresh(void)
 
 /* ---- 1s 时钟拍(int 字段天然原子; esp_timer 任务上下文) ---- */
 /* ---- 灵魂 2.0 face 执行器状态(底色记忆 + 请求记账 + 瞬态回拉) ---- */
-static char s_face_bg[24] = "giphy";          /* 当前底色段名(giphy=内嵌) */
+static char s_face_bg[24] = "neutral";        /* 当前底色段名(neutral=内嵌) */
 static volatile char s_face_req[24];          /* 待加载段(tick 消费) */
 static volatile bool s_face_req_pending;
 static volatile int64_t s_face_revert_ms;     /* >0 = 瞬态回拉时刻 */
@@ -118,6 +120,7 @@ static void face_req_consume(void)
 static void port_tick_cb(void *arg)
 {
     face_req_consume();                       /* 灵魂 face 请求(异步提交) */
+    s_model.sd_ok = app_storage_ok();         /* T18: SD 状态(1Hz 轮询) */
     time_t t = time(NULL);
     if (t > 1000000000LL) {
         struct tm tmv;
@@ -177,9 +180,11 @@ static void port_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     }
     case CUBE_EVT_WIFI_CONNECTED:
         s_model.wifi_up = true;
+        ESP_LOGI(TAG, "ui: wifi up (T18 overlay off)");
         break;
     case CUBE_EVT_WIFI_DISCONNECTED:
         s_model.wifi_up = false;
+        ESP_LOGW(TAG, "ui: wifi down (T18 overlay on)");
         break;
     case CUBE_EVT_AI_STATE:
         if (data != NULL) s_model.ai_state = *(const int *)data;
@@ -320,14 +325,14 @@ void ui_port_panel_req(int which)
 }
 
 /* ---- 表情素材热载(M4+/docs/09 face/ 目录) ----
- * SD 上的 .efc → PSRAM 缓冲 → lv_efc_set_src_data; 替换烧录换动画。
+ * SD 上的 .eaf → PSRAM 缓冲 → lv_eaf_set_src_data; 替换烧录换动画。
  * 生命周期: 缓冲读完即转交控件(imgdsc 引用), 不再单独释放(常驻)。 */
-#if CONFIG_ESP_CUBE_ENABLE_EFC
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
 esp_err_t ui_port_face_load(const char *rel)
 {
-    extern lv_obj_t *ui_face_efc_obj(void);   /* ui_widget.c getter(类型不外泄) */
+    extern lv_obj_t *ui_face_anim_obj(void);  /* ui_widget.c getter(类型不外泄) */
     char path[80];
-    snprintf(path, sizeof(path), "face/%s.efc", rel);
+    snprintf(path, sizeof(path), "face/%s.eaf", rel);
     size_t len = 0;
     char *buf = app_storage_read(path, &len);   /* PSRAM 侧堆(SPIRAM 优先) */
     if (buf == NULL) {
@@ -338,13 +343,13 @@ esp_err_t ui_port_face_load(const char *rel)
         free(buf);
         return ESP_ERR_TIMEOUT;
     }
-    lv_obj_t *efc = ui_face_efc_obj();
-    lv_efc_set_src_data(efc, buf, len);
-    bool ok = lv_efc_is_loaded(efc);
+    lv_obj_t *anim = ui_face_anim_obj();
+    lv_eaf_set_src_data(anim, buf, len);
+    bool ok = lv_eaf_is_loaded(anim);
     if (ok) {
-        lv_efc_set_loop_enabled(efc, true);
-        lv_efc_set_frame_delay(efc, 55);
-        lv_efc_play(efc);
+        lv_eaf_set_loop_enabled(anim, true);
+        lv_eaf_set_frame_delay(anim, 50);
+        lv_eaf_restart(anim);
         ESP_LOGI(TAG, "face '%s' 播放中(%uKB)", rel, (unsigned)(len / 1024));
     } else {
         ESP_LOGW(TAG, "face '%s' 解析失败(格式/版本?), 保留当前", rel);
@@ -358,7 +363,7 @@ static void face_load_task(void *arg);   /* 前向(定义在其后) */
 /* CLI face 命令入口: 异步化(CLI 任务栈浅, EFC 解析深链同步调会溢出) */
 esp_err_t ui_port_face_req(const char *rel)
 {
-#if CONFIG_ESP_CUBE_ENABLE_EFC
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
     char *r = strdup(rel);
     if (r == NULL) return ESP_ERR_NO_MEM;
     if (xTaskCreate(face_load_task, "faceload", 16384, r, 5, NULL) != pdPASS) {
@@ -386,7 +391,7 @@ static void face_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
                            void *ctx)
 {
     (void)data; (void)len; (void)ctx;
-#if CONFIG_ESP_CUBE_ENABLE_EFC
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
     if (id != CUBE_EVT_SD_READY) return;
     char *rel = strdup("idle");
     if (rel != NULL) {
@@ -404,6 +409,9 @@ const ui_model_t *ui_model(void)
     return &s_model;
 }
 
+/* 豁免声明(T13): 音量/亮度为连续属性调节, 非离散动作请求 —— 不产生
+ * 动作回执语义, 保留 R0 物理直控直调(docs/17 §15.4 UIViewAdapter);
+ * 离散动作(播放/停止/切台)已迁统一门, 见下方 ui_ctl_* */
 void ui_ctl_set_volume(int percent)
 {
     if (percent < 0) percent = 0;
@@ -425,11 +433,17 @@ void ui_ctl_toggle_play(void)
         ESP_LOGI(TAG, "toggle in BT: AVRCP passthrough = M3");
         return;                             /* BT 播放由手机控制(M3 透传) */
     }
+    uint32_t id = 0;
     if (s_model.player == UI_PLAYER_PLAYING ||
         s_model.player == UI_PLAYER_CONNECTING) {
-        app_player_stop();
+        /* 触摸停止 = 用户停止: 锁存 + 经统一门(docs/17 §5.5) */
+        act_gate_user_stop_audio("touch_stop");
+        act_gate_submit("music.stop", NULL, 0, CACT_ORIGIN_PHYSICAL_USER, &id);
+        act_gate_pump();
     } else {
-        app_player_start(NULL);             /* 列表轮播(记住台号) */
+        act_gate_submit("radio.play", NULL, 0, CACT_ORIGIN_PHYSICAL_USER, &id);
+        act_gate_pump();
+        if (act_gate_started(id)) act_gate_resume_audio();
     }
 }
 
@@ -438,13 +452,32 @@ void ui_ctl_switch_station(int dir)
     if (s_model.source == UI_SRC_BT) return; /* BT 接管期不切台 */
     int n = s_model.station_num > 0 ? s_model.station_num : 1;
     int idx = s_model.station_idx;
-    app_player_play_index(((idx + dir) % n + n) % n);
+    idx = ((idx + dir) % n + n) % n;
+    uint8_t param[16];
+    memcpy(param, "station", 8);
+    param[8] = (uint8_t)('0' + idx);
+    param[9] = 0;
+    uint32_t id = 0;
+    if (act_gate_submit("radio.play", param, 10,
+                        CACT_ORIGIN_PHYSICAL_USER, &id) == CACT_RES_OK) {
+        act_gate_pump();
+        if (act_gate_started(id)) act_gate_resume_audio();
+    }
 }
 
 void ui_ctl_select_station(int idx)
 {
     if (idx < 0 || idx >= s_model.station_num) return;
-    app_player_play_index(idx);
+    uint8_t param[16];
+    memcpy(param, "station", 8);
+    param[8] = (uint8_t)('0' + idx);
+    param[9] = 0;
+    uint32_t id = 0;
+    if (act_gate_submit("radio.play", param, 10,
+                        CACT_ORIGIN_PHYSICAL_USER, &id) == CACT_RES_OK) {
+        act_gate_pump();
+        if (act_gate_started(id)) act_gate_resume_audio();
+    }
 }
 
 int ui_audio_take_pcm(int16_t *stereo, int frames)
@@ -452,8 +485,8 @@ int ui_audio_take_pcm(int16_t *stereo, int frames)
     return audio_mixer_take_spectrum(stereo, frames) ? frames : 0;
 }
 
-#if !CONFIG_ESP_CUBE_ENABLE_EFC
-/* S31(无 EFC): 表情热载桩 —— 灵魂 face 行动链编译面完整 */
+#if !CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+/* 无表情动画: 表情热载桩 —— 灵魂 face 行动链编译面完整 */
 esp_err_t ui_port_face_req(const char *rel)
 {
     (void)rel;

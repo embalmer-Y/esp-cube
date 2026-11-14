@@ -11,6 +11,7 @@
  *   5. WiFi 就绪后启动默认网络电台(演示入口)。
  */
 #include <stdio.h>
+#include "act_gate.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -38,6 +39,7 @@
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
 #include "ai_session.h"
+#include "pair_server.h"
 #include "soul.h"
 #endif
 #include "app_assist.h"
@@ -166,7 +168,11 @@ void app_main(void)
     }
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
+    act_gate_init();                        /* 统一动作门(docs/18 T13; 先于技能/灵魂) */
     register_ai_skills();                   /* L5 技能注入(先于会话启动) */
+    /* T17: LLM 密钥经配对管理通道(credstore)优先, Kconfig 兜底 */
+    ai_session_set_api_key_provider(pair_server_llm_key);
+    ai_session_set_profile_provider(pair_server_profile_settings);
     esp_err_t aerr = ai_session_start();
     if (aerr != ESP_OK) {
         ESP_LOGE(TAG, "ai session degraded: %s", esp_err_to_name(aerr));
