@@ -15,7 +15,7 @@
     Other checks (tile, scaling, MANIFEST, sha256 match, lit ratio) are added in task 30.3.
 
 Usage (repo root):
-    python3 tools/efc_verify.py --contract <path> [<path> ...] [--report FILE.json]
+    ~/.venvs/efc/bin/python tools/efc_verify.py --contract <path> [<path> ...] [--report FILE.json]
 Exit codes: 0 all pass; 1 at least one failure; 2 usage error or encoder hash mismatch.
 """
 import argparse

@@ -150,6 +150,23 @@ gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-param
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_sessstate"; FAIL=1;
 else /tmp/test_sessstate || FAIL=1; fi
 
+echo "== [附] freeze_watch selftest(freeze-and-face-blackscreen-fix 任务 11; 分类重放 + PBT + 串口独占) =="
+python3 tools/test_freeze_watch.py || { echo "FAIL: freeze_watch selftest"; FAIL=1; }
+
+# EFC 部分(任务 30.3; Property 8): 往返、键控语义、可复现来源, 以及契约检查。
+# 固定使用 EFC 编码器环境 ~/.venvs/efc(Pillow 13.0.0, numpy 2.5.4), 不用 IDF python3。
+echo "== [18/18] EFC 部分(任务 30.3; Property 8: 往返、键控、可复现来源、契约) =="
+EFC_FAIL=0
+EFC_PY="$HOME/.venvs/efc/bin/python"
+if [ -x "$EFC_PY" ]; then
+    "$EFC_PY" tools/test_efc.py || EFC_FAIL=1
+    "$EFC_PY" tools/efc_verify.py --contract firmware/components/app_ui/ui/assets/face \
+        || { echo "FAIL: efc_verify contract"; EFC_FAIL=1; }
+else
+    echo "FAIL: EFC 编码器环境缺失: $EFC_PY"; EFC_FAIL=1
+fi
+if [ "$EFC_FAIL" -eq 0 ]; then echo "[18/18] EFC 部分: PASS"; else echo "[18/18] EFC 部分: FAIL"; FAIL=1; fi
+
 echo "== [附] 分层依赖检查(docs/17 §2.2) =="
 python3 tools/check_layers.py || FAIL=1
 

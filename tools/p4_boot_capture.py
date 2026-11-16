@@ -8,7 +8,7 @@
 import sys
 import time
 
-import serial  # pyserial
+from serial_excl import open_exclusive  # 独占打开(依赖 pyserial)
 
 BAUD = 115200
 
@@ -17,7 +17,8 @@ def main() -> None:
     port = sys.argv[2] if len(sys.argv) > 2 else "/dev/ttyACM0"
     if "ttyACM" not in port:
         raise SystemExit("refusing: 本脚本专用 P4 ttyACM0, 其他口用 serial_log.py")
-    with serial.Serial(port, BAUD, timeout=0.5) as ser:
+    with open_exclusive(port, BAUD, dtr=True, rts=True) as ser:   # dtr/rts 同改造前默认值
+        ser.timeout = 0.5
         ser.dtr = False
         ser.rts = True          # 拉低复位(同 serial_log.py 双三极管口径)
         time.sleep(0.5)

@@ -11,14 +11,15 @@
 import sys
 import time
 
-import serial  # pyserial
+from serial_excl import open_exclusive  # 独占打开(依赖 pyserial)
 
 def main() -> None:
     secs = float(sys.argv[1]) if len(sys.argv) > 1 else 20.0
     port = sys.argv[2] if len(sys.argv) > 2 else "/dev/ttyUSB0"
     if "ttyACM" in port:
         raise SystemExit("refusing: ttyACM* is the P4 board, must not be touched")
-    with serial.Serial(port, 115200, timeout=0.5) as ser:
+    with open_exclusive(port, 115200, dtr=True, rts=True) as ser:   # dtr/rts 同改造前默认值
+        ser.timeout = 0.5
         ser.dtr = False         # 自动复位电路(双三极管)要求 DTR 非有效
         ser.rts = True          # RTS 拉低进入复位
         time.sleep(0.5)         # CP2102N 需要较长的低电平才可靠触发 EN
