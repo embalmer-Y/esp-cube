@@ -317,7 +317,7 @@ static void handle_line(char *line)
                "  panel <0|1|2>  开关面板(0收起 1状态栏 2AI状态)\n"
                "  sdretry <0|1> SD 重挂载(0=MMC 1=SDSPI) | sdprobe 电平诊断\n"
                "  mem            内存预算审计+分域水位(docs/22)\n"
-               "  memcheck       TLSF 堆完整性校验(§55.9 腐蚀诊断)\n"
+               "  memcheck       TLSF 堆完整性校验(§55.10 腐蚀诊断)\n"
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
 #endif
@@ -692,7 +692,7 @@ static void handle_line(char *line)
          * 长跑 P50/P95 采样仍用 baseline */
         mem_budget_dump();
     } else if (strcmp(line, "memcheck") == 0) {
-        /* §55.9 堆腐蚀专项: TLSF 全域完整性校验(只读诊断,
+        /* §55.10 堆腐蚀专项: TLSF 全域完整性校验(只读诊断,
          * heap_caps_check_integrity 逐块走查空闲链/魔数) */
         bool ok = heap_caps_check_integrity(MALLOC_CAP_INVALID, true);
         printf("  heap integrity: %s\n", ok ? "PASS" : "CORRUPT");
