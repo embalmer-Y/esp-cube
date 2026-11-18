@@ -10,7 +10,7 @@
  * 栈放置策略(docs/22 §3B, v6.1 板上实证口径):
  *   HP DRAM 静态 = mixer/voice/aisess/aremind(实时或大栈)
  *   RTCRAM 定置(.rtc.bss, 非 DMA/非 PIE/非实时) = cli/soul/think(P4 ~27KB)
- *   PSRAM(player 双槽静态/faceload/skpf/pstart/psoul/psnsd/aitts/aimic, WithCaps)
+ *   PSRAM(player 双槽静态/faceload/skpf/pstart/psoul/psnsd/aitts/aimic/prov, WithCaps)
  *   内部动态(库创建/实证约束) = taskLVGL(DMA caps, PIE 不变量)/pairsrv
  *     (esp_task_stack_is_sane_cache_disabled 断言, 批次 20 实证禁 PSRAM)
  *   新增任务必须先入 docs/22 预算表再写创建代码(v6 教训: HP DRAM 每多
@@ -67,6 +67,15 @@
 #define CUBE_TASK_CLI_STACK  8192
 #define CUBE_TASK_CLI_PRIO   5
 #define CUBE_TASK_CLI_CORE   0
+
+/* ---- SoftAP 首配窗口(app_net/app_prov; P3a 瞬态) ----
+ * 仅窗口期存活: SRP salt/verifier 现算(3072-bit 大数) + manager 服务控制
+ * (httpd/协议栈库自建任务)。无 P4 侧 flash 写路径(凭据经 esp_wifi_remote
+ * 远程落 C5 NVS) → PSRAM 栈(docs/22 §2 规则 5)。 */
+#define CUBE_TASK_PROV_NAME   "prov"
+#define CUBE_TASK_PROV_STACK  6144
+#define CUBE_TASK_PROV_PRIO   5
+#define CUBE_TASK_PROV_CORE   0
 
 /* ---- LVGL 渲染(app_ui; esp_lvgl_port 任务) ----
  * EFC 解码跑在 LVGL 任务上下文(esp_efc_codec 官方 emote_player 口径

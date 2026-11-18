@@ -34,6 +34,16 @@ menu "EspCube Configuration"
           P4 无原生射频: WiFi 由 C5 经 SDIO/esp_hosted 提供,
           esp_wifi API 经 esp_wifi_remote 透传, 上层无感。
 
+    config ESP_CUBE_ENABLE_PROV
+        bool "启用 SoftAP 首配通道(P3a; network_provisioning Security2)"
+        depends on ESP_CUBE_ENABLE_NET
+        default y
+        help
+          官方配网协议(protocomm SoftAP + SRP-6a), 与 P3b App 及
+          官方 ESP Provisioning app 互通。CLI "prov start" 开窗,
+          随机 6 位 PIN, 超时自动回落 STA。凭据落 C5 NVS(P4 经
+          esp_wifi_remote 透传), 开机既有配置优先于 Kconfig 注入。
+
     config ESP_CUBE_ENABLE_NET
         bool "启用 WiFi + 网络电台播放"
         default y

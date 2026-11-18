@@ -24,6 +24,13 @@ esp_err_t app_net_resume(void);
 bool app_net_is_up(void);
 esp_err_t app_net_wait_up(int timeout_ms);
 
+/* WiFi 栈是否已就绪(app_net_start 完成; 配网窗口前置) */
+bool app_net_ready(void);
+
+/* P3a 配网窗口配套: 抑制/恢复 STA 自动重连(窗口期 provisioning manager
+ * 接管射频状态机, 我方 handler 不得抢连/排重连)。app_prov 内部使用。 */
+void app_net_prov_guard(bool on);
+
 #ifdef __cplusplus
 }
 #endif

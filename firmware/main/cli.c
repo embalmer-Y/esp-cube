@@ -53,6 +53,9 @@
 #include "ai_skills.h"
 #include "sdkconfig.h"
 #include "face_perf.h"
+#if CONFIG_ESP_CUBE_ENABLE_PROV
+#include "app_prov.h"
+#endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
 #include "ai_session.h"
 #endif
@@ -318,6 +321,9 @@ static void handle_line(char *line)
                "  sdretry <0|1> SD 重挂载(0=MMC 1=SDSPI) | sdprobe 电平诊断\n"
                "  mem            内存预算审计+分域水位(docs/22)\n"
                "  memcheck       TLSF 堆完整性校验(§55.10 腐蚀诊断)\n"
+#if CONFIG_ESP_CUBE_ENABLE_PROV
+               "  prov start [秒] P3a 配网窗口(SoftAP+Security2) | prov stop\n"
+#endif
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
 #endif
@@ -696,6 +702,21 @@ static void handle_line(char *line)
          * heap_caps_check_integrity 逐块走查空闲链/魔数) */
         bool ok = heap_caps_check_integrity(MALLOC_CAP_INVALID, true);
         printf("  heap integrity: %s\n", ok ? "PASS" : "CORRUPT");
+#if CONFIG_ESP_CUBE_ENABLE_PROV
+    } else if (strcmp(line, "prov") == 0) {
+        /* P3a SoftAP 首配窗口: 实际工作在瞬态 prov 任务(T20 教训:
+         * CLI 上下文不做重活); 此处只开窗/收窗/查状态 */
+        if (arg != NULL && strncmp(arg, "start", 5) == 0) {
+            char *sp = strchr(arg, ' ');
+            int t = sp != NULL ? atoi(sp + 1) : 0;
+            printf("  prov start: %s\n", esp_err_to_name(app_prov_start(t)));
+        } else if (arg != NULL && strcmp(arg, "stop") == 0) {
+            printf("  prov stop: %s\n", esp_err_to_name(app_prov_stop()));
+        } else {
+            printf("  prov: 窗口 %s | 用法: prov start [秒=180] | prov stop\n",
+                   app_prov_active() ? "开启中" : "关闭");
+        }
+#endif
     } else if (strcmp(line, "pairserve") == 0) {
         printf("  pair server: %s\n",
                pair_server_start() == 0 ? "started :443" : "start 失败(证书齐?)");

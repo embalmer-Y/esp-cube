@@ -41,3 +41,6 @@ dependencies:
     version: "1.1.0"
     rules:
       - if: "target == esp32p4"
+  # 官方配网协议(SoftAP + Security2/SRP-6a; protocomm IDF 自带)
+  # P3a 首配通道: 双目标(S31 原生 WiFi 同协议), 经 Kconfig ESP_CUBE_ENABLE_PROV 启用
+  espressif/network_provisioning: "^1.0.0"

@@ -36,6 +36,7 @@ static volatile bool s_suspended;  /* BT 模式: WiFi 已停, 重连抑制 */
 #endif
 static volatile bool s_got_ip;     /* STA 已获 IP(供播放器恢复时等待) */
 static volatile bool s_inited;
+static volatile bool s_prov_window;    /* P3a: 配网窗口期, 抑制自动重连 */
 
 /* esp_timer 回调上下文(定时器任务): 只做一次非阻塞 API 调用 */
 static void wifi_reconnect_cb(void *arg)
@@ -51,7 +52,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     if (base == WIFI_EVENT) {
         switch (id) {
         case WIFI_EVENT_STA_START:
-            esp_wifi_connect();             /* 事件驱动首次连接 */
+            if (!s_prov_window) {
+                esp_wifi_connect();         /* 事件驱动首次连接(配网窗口期由 manager 接管) */
+            }
             break;
         case WIFI_EVENT_STA_DISCONNECTED: {
                 int shift = s_retry_count > WIFI_RETRY_MAX_SHIFT ? WIFI_RETRY_MAX_SHIFT
@@ -66,6 +69,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             ESP_LOGW(TAG, "disconnected, retry in %dms(#%d)", delay_ms, s_retry_count);
 #endif
             cube_event_publish(CUBE_EVT_WIFI_DISCONNECTED, NULL, 0);
+            if (s_prov_window) {
+                break;              /* 配网窗口期: manager 掌控射频, 不排重连 */
+            }
 #if CONFIG_ESP_CUBE_ENABLE_BT
             if (s_suspended) {
                 break;              /* BT 模式主动停网: 不安排重连 */
@@ -124,6 +130,21 @@ esp_err_t app_net_resume(void)
 bool app_net_is_up(void)
 {
     return s_got_ip;
+}
+
+bool app_net_ready(void)
+{
+    return s_inited;
+}
+
+void app_net_prov_guard(bool on)
+{
+    s_prov_window = on;
+    if (on) {
+        (void)esp_timer_stop(s_reconnect_timer);   /* 撤销在途重连(未激活时无害) */
+    } else {
+        s_retry_count = 0;
+    }
 }
 
 esp_err_t app_net_wait_up(int timeout_ms)
@@ -185,6 +206,11 @@ esp_err_t app_net_start(void)
 #endif
 
     esp_netif_create_default_wifi_sta();
+#if CONFIG_ESP_CUBE_ENABLE_PROV
+    /* P3a: 配网窗口前预建 AP netif(DHCP server 随默认配置激活;
+     * 官方 wifi_prov 例程同款双 netif 姿势, STA 模式期不生效) */
+    esp_netif_create_default_wifi_ap();
+#endif
 
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
     /* 缓冲策略沿用默认(S31 历史上为 BT 共存选择的组合; P4 透传模式同样适用) */
@@ -195,14 +221,27 @@ esp_err_t app_net_start(void)
     ESP_RETURN_ON_ERROR(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
                                                    wifi_event_handler, NULL), TAG, "reg ip evt");
 
-    wifi_config_t wifi_cfg = {
-        .sta = {
-            .ssid = CONFIG_ESP_CUBE_WIFI_SSID,
-            .password = CONFIG_ESP_CUBE_WIFI_PASSWORD,
-        },
-    };
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "set mode");
-    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg), TAG, "set config");
+    /* 凭据优先级(P3a): C5 NVS 既有配置 > Kconfig 注入。配网成功后凭据由
+     * manager 经 set_config(FLASH) 落 C5 侧; get_config 经 esp_wifi_remote
+     * 远程读取。仅无配置时才注入 Kconfig 凭据(首刷/ prov 擦除后)。 */
+    wifi_config_t cur_cfg = {0};
+    ESP_RETURN_ON_ERROR(esp_wifi_get_config(WIFI_IF_STA, &cur_cfg), TAG, "get config");
+    if (cur_cfg.sta.ssid[0] == '\0' && strlen(CONFIG_ESP_CUBE_WIFI_SSID) > 0) {
+        wifi_config_t wifi_cfg = {
+            .sta = {
+                .ssid = CONFIG_ESP_CUBE_WIFI_SSID,
+                .password = CONFIG_ESP_CUBE_WIFI_PASSWORD,
+            },
+        };
+        ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg), TAG, "set config");
+        ESP_LOGI(TAG, "no stored creds, injecting Kconfig ssid");
+    } else {
+        char ssid[33];
+        memcpy(ssid, cur_cfg.sta.ssid, 32);
+        ssid[32] = 0;
+        ESP_LOGI(TAG, "using stored creds, ssid=\"%s\"", ssid);
+    }
     /* PS_NONE(M1.8.4 实测结论, 双目标沿用): PS_MIN_MODEM 的周期性唤醒/DTIM
      * 突发使流媒体卡顿(S31 实测数据流 5s 窗口从 868KB 掉半直至断流 14s);
      * 常供电音箱场景省电收益无意义, 流稳定性优先。S31 上 BT 空口优先另由
