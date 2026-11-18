@@ -33,6 +33,9 @@
 #include "drv_audio.h"
 #include "drv_touch.h"
 #include "esp_lvgl_port.h"
+#include "lvgl.h"
+#include "freertos/semphr.h"
+/* lv_async 经 lvgl.h(LV_USE_OS=0 时 misc/lv_async 仍编入; 见 lvgl.h 汇总头) */
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
 #include <stdio.h>
 #include <sys/stat.h>
@@ -456,6 +459,103 @@ static face_hot_reason_t face_hot_precheck(const uint8_t *blob, size_t len)
     return why;
 }
 
+/* ---- §52 v5: EFC 解码收拢到 taskLVGL ----
+ * esp_efc 解码(esp_efc_dec_frame / lv_efc_set_src_data 同步首帧)含 PIE
+ * 指令; PIE 上下文保存区 carve 在执行任务自己的栈内, 而 PIE 存储写不了
+ * LP SRAM(RTCRAM) → 解码只允许发生在 taskLVGL(DMA caps 栈)。任何其他
+ * 任务(本文件的 ui_port 任务/CLI)触发的加载/预检都经本 helper 转投
+ * LVGL 任务执行, 调用方阻塞等结果(锁语义不变: cb 运行时 esp_lvgl_port
+ * 已持 LVGL 锁)。超时返回 false(上下文堆分配, 由 cb 兜底释放, 不悬垂)。 */
+typedef struct {
+    void (*fn)(void *);
+    void *arg;
+    SemaphoreHandle_t done;
+} lvexec_t;
+
+static void lvexec_cb(void *p)
+{
+    lvexec_t *e = p;
+    e->fn(e->arg);
+    xSemaphoreGive(e->done);
+}
+
+bool ui_face_exec_in_lvgl(void (*fn)(void *), void *arg, uint32_t timeout_ms)
+{
+    lvexec_t *e = malloc(sizeof(*e));
+    if (e == NULL) return false;
+    e->fn = fn;
+    e->arg = arg;
+    e->done = xSemaphoreCreateBinary();
+    if (e->done == NULL) { free(e); return false; }
+    if (!lvgl_port_lock(FACE_HOT_LOCK_MS)) {
+        ESP_LOGW(TAG, "face reject name=- reason=LOCK_TIMEOUT keep=current");
+        vSemaphoreDelete(e->done);
+        free(e);
+        return false;
+    }
+    lv_async_call(lvexec_cb, e);
+    lvgl_port_unlock();
+    if (xSemaphoreTake(e->done, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        /* LVGL 任务卡死等罕见路径: 堆上下文留给 cb 兜底释放, 记泄漏 */
+        ESP_LOGE(TAG, "exec_in_lvgl timeout (ctx leaked)");
+        return false;
+    }
+    vSemaphoreDelete(e->done);
+    free(e);
+    return true;
+}
+
+/* 热载应用段(在 taskLVGL 上下文, LVGL 锁已被 esp_lvgl_port 持有):
+ * 预检(含解码=PIE)+加载+发布核对+失败回退, 全部留在 LVGL 任务栈 */
+typedef struct {
+    const char *name;
+    uint8_t *blob;
+    size_t len;
+    esp_err_t err;
+} hot_apply_t;
+
+static void hot_apply_cb(void *p)
+{
+    hot_apply_t *c = p;
+    face_hot_reason_t why = face_hot_precheck(c->blob, c->len);
+    if (why != FACE_HOT_OK) {
+        ESP_LOGW(TAG, "face reject name=%s reason=%s keep=current", c->name,
+                 face_hot_reason_str(why));
+        c->err = ESP_FAIL;
+        return;
+    }
+    lv_obj_t *obj = ui_face_anim_obj();
+    if (obj == NULL) {
+        c->err = ESP_ERR_INVALID_STATE;
+        return;
+    }
+    char label[24];
+    snprintf(label, sizeof(label), "sd:%s", c->name);
+    lv_efc_set_src_data(obj, c->blob, c->len);
+    lv_efc_set_frame_delay(obj, FACE_HOT_DELAY_MS);
+    lv_efc_set_loop_enabled(obj, true);
+    ui_face_set_running(obj);
+    /* 加载后核对发布的第 0 帧; 旧片段已被 set_src 释放, 失败只能回退内置片段 */
+    const lv_image_dsc_t *dsc = lv_efc_is_loaded(obj)
+        ? (const lv_image_dsc_t *)lv_image_get_src(obj) : NULL;
+    face_hot_reason_t post = FACE_HOT_OK;
+    if (dsc == NULL) {
+        post = FACE_HOT_BAD_FILE;
+    } else if (dsc->header.cf != LV_COLOR_FORMAT_RGB565A8) {
+        post = FACE_HOT_BAD_FORMAT;
+    } else if (dsc->header.w != FACE_HOT_W || dsc->header.h != FACE_HOT_H) {
+        post = FACE_HOT_NOT_460;
+    }
+    if (post == FACE_HOT_OK) {
+        ui_face_log_loaded(obj, label);      /* face clip=sd:<名> … */
+    } else {
+        ESP_LOGW(TAG, "face reject name=%s reason=%s keep=smile_static", c->name,
+                 face_hot_reason_str(post));
+        ui_face_load_builtin("smile_static");
+        c->err = ESP_FAIL;
+    }
+}
+
 static esp_err_t face_hot_load(const char *name)
 {
     if (!ui_face_name_ok(name)) {
@@ -465,54 +565,18 @@ static esp_err_t face_hot_load(const char *name)
     face_hot_wait_splash();
     uint8_t *blob = NULL;
     size_t len = 0;
-    face_hot_reason_t why = face_hot_read(name, &blob, &len);
-    if (why == FACE_HOT_OK) why = face_hot_precheck(blob, len);
+    face_hot_reason_t why = face_hot_read(name, &blob, &len);   /* 纯文件读, 无 PIE */
     if (why != FACE_HOT_OK) {
         ESP_LOGW(TAG, "face reject name=%s reason=%s keep=current", name,
                  face_hot_reason_str(why));
         free(blob);
         return ESP_FAIL;
     }
-
-    if (!lvgl_port_lock(FACE_HOT_LOCK_MS)) {          /* lvgl_port_lock 的参数单位是 ms */
-        ESP_LOGW(TAG, "face reject name=%s reason=LOCK_TIMEOUT keep=current", name);
-        free(blob);
-        return ESP_ERR_TIMEOUT;
-    }
-    esp_err_t err = ESP_OK;
-    lv_obj_t *obj = ui_face_anim_obj();
-    if (obj == NULL) {
-        err = ESP_ERR_INVALID_STATE;
-    } else {
-        char label[24];
-        snprintf(label, sizeof(label), "sd:%s", name);
-        lv_efc_set_src_data(obj, blob, len);
-        lv_efc_set_frame_delay(obj, FACE_HOT_DELAY_MS);
-        lv_efc_set_loop_enabled(obj, true);
-        ui_face_set_running(obj);
-        /* 加载后核对发布的第 0 帧; 旧片段已被 set_src 释放, 失败只能回退内置片段 */
-        const lv_image_dsc_t *dsc = lv_efc_is_loaded(obj)
-            ? (const lv_image_dsc_t *)lv_image_get_src(obj) : NULL;
-        face_hot_reason_t post = FACE_HOT_OK;
-        if (dsc == NULL) {
-            post = FACE_HOT_BAD_FILE;
-        } else if (dsc->header.cf != LV_COLOR_FORMAT_RGB565A8) {
-            post = FACE_HOT_BAD_FORMAT;
-        } else if (dsc->header.w != FACE_HOT_W || dsc->header.h != FACE_HOT_H) {
-            post = FACE_HOT_NOT_460;
-        }
-        if (post == FACE_HOT_OK) {
-            ui_face_log_loaded(obj, label);      /* face clip=sd:<名> … */
-        } else {
-            ESP_LOGW(TAG, "face reject name=%s reason=%s keep=smile_static", name,
-                     face_hot_reason_str(post));
-            ui_face_load_builtin("smile_static");
-            err = ESP_FAIL;
-        }
-    }
-    lvgl_port_unlock();
-    free(blob);
-    return err;
+    hot_apply_t c = { name, blob, len, ESP_OK };
+    bool ran = ui_face_exec_in_lvgl(hot_apply_cb, &c, FACE_HOT_LOCK_MS + 2000);
+    free(blob);             /* lv_efc_set_src_data 复制 blob, 读缓冲始终由本函数释放 */
+    if (!ran) return ESP_ERR_TIMEOUT;
+    return c.err;
 }
 
 /* CLI/SD 热载入口(任务上下文): name 为 face/ 下不含后缀的名称 */

@@ -72,6 +72,8 @@ extern lv_obj_t *ui_face_anim_obj(void);
 extern bool ui_face_builtin_lookup(const char *name, const uint8_t **start,
                                    const uint8_t **end);
 extern bool ui_face_load_builtin(const char *name);
+extern bool ui_face_exec_in_lvgl(void (*fn)(void *), void *arg,
+                                uint32_t timeout_ms); /* ui_port_esp.c */
 extern void ui_face_reload_mood(void);
 
 static const char TAG[] = "faceperf";
@@ -762,6 +764,13 @@ static void clip_restore_cb(void *arg)
     ui_face_reload_mood();
 }
 
+/* 在 taskLVGL 上下文切片段(§52 v5; 参数=静态上下文, 见调用处) */
+static void faceperf_clip_cb(void *p)
+{
+    struct { const char *name; bool ok; } *c = p;
+    c->ok = ui_face_load_builtin(c->name);
+}
+
 esp_err_t face_perf_start_clip(uint32_t seconds, const char *clip)
 {
     if (clip == NULL || clip[0] == 0) {
@@ -772,9 +781,12 @@ esp_err_t face_perf_start_clip(uint32_t seconds, const char *clip)
         return ESP_ERR_INVALID_ARG;           /* 只接受内置片段名 */
     }
     if (seconds == 0 || seconds > FACE_PERF_WIN_MAX_S) return ESP_ERR_INVALID_ARG;
+    /* §52 v5 三段式: 校验(持锁)→切片(taskLVGL, 不持锁——LVGL 任务执行
+     * cb 需要这把锁)→开窗(face_perf_start 自取锁)。
+     * 原子性弱化说明: 切片与开窗之间不再同锁覆盖, 竞窗内被抢占会由
+     * face_perf_start 的状态复查挡下(返回 INVALID_STATE)。 */
+    esp_err_t err = ESP_OK;
     if (!lvgl_port_lock(FP_LOCK_MS)) return ESP_ERR_TIMEOUT;
-    /* 持锁直到开窗完成(锁可重入): 检查、切换、开窗之间状态不变 */
-    esp_err_t err;
     const fp_ctx_t *old = s_fp;
     lv_obj_t *anim = ui_face_anim_obj();
     lv_timer_t *t = find_efc_timer(anim);
@@ -784,14 +796,26 @@ esp_err_t face_perf_start_clip(uint32_t seconds, const char *clip)
         err = ESP_ERR_INVALID_STATE;
     } else if (anim == NULL || t == NULL || !lv_efc_is_loaded(anim)) {
         err = ESP_ERR_NOT_FOUND;      /* 无控件或已回退为底色圆: 不改 UI 状态 */
-    } else {
-        ui_face_load_builtin(clip);   /* 切换片段、按运行态重挂、输出一行 face clip=… */
-        err = lv_efc_is_loaded(anim)
-            ? face_perf_start(seconds, clip, clip_restore_cb, NULL)
-            : ESP_FAIL;
-        if (err != ESP_OK) clip_restore_cb(NULL);
     }
     lvgl_port_unlock();
+    if (err != ESP_OK) return err;
+
+    /* 切片段: lv_efc 同步解码含 PIE → 只允许 taskLVGL 栈(HP SRAM)执行。
+     * 静态上下文: 测量窗单实例串行, 无重入。 */
+    static struct { const char *name; bool ok; } s_clip = { 0, false };
+    s_clip.name = clip;
+    s_clip.ok = false;
+    if (!ui_face_exec_in_lvgl(faceperf_clip_cb, &s_clip, FP_LOCK_MS + 2000)) {
+        clip_restore_cb(NULL);
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!s_clip.ok) {
+        clip_restore_cb(NULL);
+        return ESP_ERR_NOT_FOUND;
+    }
+    /* 开窗段: face_perf_start 内部自取锁并复查状态 */
+    err = face_perf_start(seconds, clip, clip_restore_cb, NULL);
+    if (err != ESP_OK) clip_restore_cb(NULL);
     return err;
 }
 

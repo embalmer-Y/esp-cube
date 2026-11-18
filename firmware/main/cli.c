@@ -911,6 +911,9 @@ static void cli_task(void *arg)
 
 esp_err_t cli_start(void)
 {
+    /* §52 v5: EFC 解码已全部收拢到 taskLVGL 执行(ui_face_exec_in_lvgl),
+     * CLI 不再触碰 PIE 指令 → 栈位置不再敏感, 恢复普通创建(v4.1 曾用
+     * DMA caps 挤占 taskLVGL 预算致 "cli degraded: no console") */
     BaseType_t ok = xTaskCreate(cli_task, CUBE_TASK_CLI_NAME,
                                 CUBE_TASK_CLI_STACK, NULL,
                                 CUBE_TASK_CLI_PRIO, NULL);

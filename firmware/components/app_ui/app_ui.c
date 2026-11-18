@@ -31,6 +31,10 @@ esp_err_t app_ui_start(const app_ui_boot_cfg_t *cfg)
     lvgl_cfg.task_priority = CUBE_TASK_LVGL_PRIO;
     lvgl_cfg.task_stack = CUBE_TASK_LVGL_STACK;
     lvgl_cfg.task_affinity = CUBE_TASK_LVGL_CORE;  /* 与 core0 音频/蓝牙分核 */
+    /* §52: EFC 解码用 PIE 协处理器, 其上下文保存区 carve 在任务栈内,
+     * 而 esp.vst 不能写 LP SRAM(RTCRAM) → 栈必须落 HP SRAM。DMA caps
+     * 不含 RTCRAM(Kconfig 明示 "without DMA"), 精确排除之 */
+    lvgl_cfg.task_stack_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA;
     lvgl_cfg.timer_period_ms = 5;
     ESP_RETURN_ON_ERROR(lvgl_port_init(&lvgl_cfg), TAG, "lvgl port init");
 

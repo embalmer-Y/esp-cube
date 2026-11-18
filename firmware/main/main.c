@@ -128,6 +128,14 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+    /* ---- 1.1 内部堆观测点(docs/19 §52 修复 B 复盘):
+     * 曾尝试 boot 期预留 28KB 给 taskLVGL 栈, 但预留窗口内 esp_hosted 的
+     * SDIO TX 聚合缓冲(DMA 对齐 15872B)分配失败 → assert 复位循环(板上
+     * 实证)。改为记录关键点最大连续内部块, 依据数据选择收紧点。 */
+    ESP_LOGI(TAG, "mem ckpt app_main: largest internal=%u",
+             (unsigned)heap_caps_get_largest_free_block(
+                 MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+
     /* ---- 1.5 助理服务(M2): SNTP 时间底座 + 琐事/提醒(NVS) ---- */
     ESP_ERROR_CHECK(app_assist_init());
     app_assist_set_announcer(assist_announce_bridge);
@@ -242,7 +250,18 @@ void app_main(void)
             .iface = UI_DISP_IF_QSPI,
 #endif
         };
-        ESP_ERROR_CHECK(app_ui_start(&ucfg));
+        ESP_LOGI(TAG, "mem ckpt pre_ui: largest internal=%u dma=%u",
+                 (unsigned)heap_caps_get_largest_free_block(
+                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(
+                     MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+        /* UI 为独立失败域(docs/06 §6): 失败不 abort 也不重试(lvgl_port
+         * 失败→deinit→re-init 路径会损坏 TLSF 堆, v3 板上实证
+         * block_locate_free/remove_free_block 断言)。降级无屏运行。 */
+        esp_err_t uerr = app_ui_start(&ucfg);
+        if (uerr != ESP_OK) {
+            ESP_LOGE(TAG, "UI degraded (headless): %s", esp_err_to_name(uerr));
+        }
 #if CONFIG_ESP_CUBE_FACE_PERF
         /* 表情计时探针(只观测): splash 摘要/首帧/屏幕自检, 须紧跟 UI 启动 */
         face_perf_boot_attach();
@@ -282,7 +301,11 @@ void app_main(void)
 
     /* ---- 6. 演示观察者 + 串口 CLI ---- */
     cube_event_subscribe(demo_evt_cb, NULL);
-    ESP_ERROR_CHECK(cli_start());   /* ncm 点歌/电台切台调试入口(无触摸期最小输入通道) */
+/* §52 v4: CLI 为调试通道, 创建失败降级不 abort(板上实测: LVGL 抢占
+         * 内部块后 CLI 栈分配失败曾致 abort 循环) */
+        if (cli_start() != ESP_OK) {
+            ESP_LOGE(TAG, "cli degraded: no console");
+        }
 
     ESP_LOGI(TAG, "startup complete, free heap=%u / psram=%u",
              (unsigned)esp_get_free_heap_size(),

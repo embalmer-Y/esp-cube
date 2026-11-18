@@ -63,7 +63,10 @@
  * EFC 解码跑在 LVGL 任务上下文(esp_efc_codec 官方 emote_player 口径
  * 20KB+), 启用 EFC 时加大; 未启用保持 16KB(S31 内部 RAM 紧张) */
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
-#define CUBE_TASK_LVGL_STACK   24576
+/* §52: pre_ui 时内部最大连续块实测 23552B(DRAM+RTCRAM), 24KB 确定性放
+ * 不下; 官方 emote_player 例程口径 20KB, 降到 20480(PIE/FPU 保存区从
+ * 栈底 carve 后有效 ~19.5KB) */
+#define CUBE_TASK_LVGL_STACK   20480
 #else
 #define CUBE_TASK_LVGL_STACK   16384
 #endif
