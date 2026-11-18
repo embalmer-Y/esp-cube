@@ -923,7 +923,11 @@ esp_err_t cli_start(void)
      * 栈预分配(docs/22 §3B): 内部静态 —— 控制台是排障通道, 曾因内部
      * 碎片创建失败(§52 级联教训), 链接期占位后此失败模式不存在 */
     static StaticTask_t s_cli_tcb;
-    static StackType_t s_cli_stack[CUBE_TASK_CLI_STACK / sizeof(StackType_t)];
+    /* RTCRAM 定置(docs/22 §3B v6.1): 非 DMA/非 PIE/非实时栈入 LP SRAM,
+     * 释放 HP DRAM 给 taskLVGL/hosted(v6 全入 DRAM 致 dma largest 崩到
+     * 8704, 板上 boot loop 实证)。P4 无 RTC_DATA_ATTR 宏, 用原生段属性 */
+    static StackType_t s_cli_stack[CUBE_TASK_CLI_STACK / sizeof(StackType_t)]
+        __attribute__((section(".rtc.bss")));
     TaskHandle_t h = xTaskCreateStatic(cli_task, CUBE_TASK_CLI_NAME,
                                        CUBE_TASK_CLI_STACK, NULL,
                                        CUBE_TASK_CLI_PRIO,

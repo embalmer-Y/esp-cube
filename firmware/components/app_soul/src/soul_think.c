@@ -66,7 +66,11 @@ static char     s_last_content[KI_CONTENT_MAX + 1];
 static uint32_t s_last_content_min;
 static TaskHandle_t s_handle;
 
-static StackType_t s_thk_stack[THINK_STACK / sizeof(StackType_t)];
+/* RTCRAM 定置(docs/22 §3B v6.1): 深思任务为纯 LLM 网络类(非实时/非 DMA/
+ * 非 PIE), 栈入 LP SRAM 释放 HP DRAM——v6 全栈入 DRAM 致 dma largest 崩到
+ * 8704、taskLVGL 创建失败, 板上 boot loop 实证 */
+static StackType_t s_thk_stack[THINK_STACK / sizeof(StackType_t)]
+    __attribute__((section(".rtc.bss")));
 static StaticTask_t s_thk_tcb;
 
 static uint32_t uptime_min(void)

@@ -7,12 +7,14 @@
  * 绑核策略: core0 = 音频实时/网络协议栈/BT; core1 = 解码/渲染/云任务。
  * 各组件创建任务一律引用本表宏, 调度关系改动只改这一处。
  *
- * 栈放置策略(docs/22 §3B, 2026-11-18 预算批次):
- *   内部静态(链接期占位) = mixer/voice/aisess/aitts/aimic/cli/soul/aremind
- *   PSRAM(player 双槽静态/faceload/skpf/pstart/psoul/psnsd, WithCaps)
+ * 栈放置策略(docs/22 §3B, v6.1 板上实证口径):
+ *   HP DRAM 静态 = mixer/voice/aisess/aremind(实时或大栈)
+ *   RTCRAM 定置(.rtc.bss, 非 DMA/非 PIE/非实时) = cli/soul/think(P4 ~27KB)
+ *   PSRAM(player 双槽静态/faceload/skpf/pstart/psoul/psnsd/aitts/aimic, WithCaps)
  *   内部动态(库创建/实证约束) = taskLVGL(DMA caps, PIE 不变量)/pairsrv
  *     (esp_task_stack_is_sane_cache_disabled 断言, 批次 20 实证禁 PSRAM)
- *   新增任务必须先入 docs/22 预算表再写创建代码。
+ *   新增任务必须先入 docs/22 预算表再写创建代码(v6 教训: HP DRAM 每多
+ *   1KB 静态 = dma 池少 1KB, 全栈入 DRAM 曾致 taskLVGL 创建失败 boot loop)。
  */
 #pragma once
 

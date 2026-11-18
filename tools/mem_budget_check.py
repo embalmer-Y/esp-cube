@@ -2,9 +2,10 @@
 """mem_budget_check.py —— 内存预算 map 校验(docs/22 §7, 零设备)
 
 解析双目标 GNU map, 校验:
-  1. 预算静态栈符号在位且尺寸正确(docs/22 §3B 内部静态表);
-  2. .dram0.bss 总量不越上限(失控静态增长哨兵);
-  3. 列出 >16KB 的 .bss 单体(白名单外供人工审: 入表或移 PSRAM)。
+  1. HP DRAM 静态栈符号在位且尺寸正确(docs/22 §3B);
+  2. RTCRAM 定置段总量在预算窗口内(docs/22 §3B v6.1: cli+soul+think ≈27KB);
+  3. .dram0.bss 总量不越上限(失控静态增长哨兵);
+  4. 列出 >16KB 的 .bss 单体(白名单外供人工审: 入表或移 PSRAM)。
 
 用法: python3 tools/mem_budget_check.py [firmware_dir]
 退出码 0=通过。依赖: 仅标准库(纯 map 文本解析, 不需要工具链)。
@@ -13,25 +14,23 @@ import re
 import sys
 from pathlib import Path
 
-# (符号前缀, 期望字节数, 说明) —— 与 docs/22 §3B / cube_tasks.h 一致
+# HP DRAM 静态栈(§3B): (符号前缀, 期望字节数, 说明)
+# v6.1: cli/soul/think 已迁 RTCRAM 定置; aitts/aimic 改 PSRAM WithCaps
 STACKS = [
     ("s_mixer_stack",    0x2000, "mixer 8192"),
     ("s_voice_stack",    0x2000, "voice 8192"),
     ("s_sess_stk",       0x3800, "aisess 14336"),
-    ("s_tts_stk",        0x1800, "aitts 6144"),
-    ("s_mic_stk",        0x1800, "aimic 6144"),
-    ("s_cli_stack",      0x2000, "cli 8192"),
-    ("s_soul_stack",     0x0C00, "soul 3072"),
     ("s_aremind_stack",  0x0C00, "aremind 3072"),
-    ("s_thk_stack",      0x4000, "think 16384(既有)"),
 ]
-# bss 总量上限(docs/22 §7; 超限=有失控静态增长, 需审表)
-BSS_LIMITS = {"build-p4c5": 256 * 1024, "build-s31": 192 * 1024}
-# 各目标必查集合: S31 关闭 VOICE/AI/SOUL(对应任务不编译), P4 全开
+# 各目标 DRAM 必查集合: S31 关闭 VOICE/AI/SOUL(对应任务不编译), P4 全开
 REQUIRED = {
-    "build-p4c5": {s[0] for s in STACKS},
-    "build-s31": {"s_mixer_stack", "s_cli_stack", "s_aremind_stack"},
+    "build-p4c5": {"s_mixer_stack", "s_voice_stack", "s_sess_stk", "s_aremind_stack"},
+    "build-s31": {"s_mixer_stack", "s_aremind_stack"},
 }
+# RTCRAM 定置总量窗口(§3B): P4=cli8K+soul3K+think16K=27648; S31 仅 cli=8192
+RTC_WINDOW = {"build-p4c5": (0x6800, 0x7800), "build-s31": (0x1800, 0x2400)}
+# bss 总量上限(§7; 超限=有失控静态增长, 需审表)
+BSS_LIMITS = {"build-p4c5": 256 * 1024, "build-s31": 192 * 1024}
 BIG_BSS = 16 * 1024          # 单体超此值即列出供审
 BIG_WHITELIST = {"s_thk_stack", "s_sess_stk"}   # 已入表的大栈
 
@@ -41,12 +40,15 @@ SEC_RE = re.compile(
 SEC_WRAP_RE = re.compile(r"^\s+\.bss\.([A-Za-z_][\w]*)[0-9.\s]*$")
 NEXT_SZ_RE = re.compile(r"^\s+0x[0-9a-f]+\s+0x([0-9a-f]+)")
 TOT_RE = re.compile(r"^\.dram0\.bss\s+0x[0-9a-f]+\s+0x([0-9a-f]+)")
+RTC_RE = re.compile(r"^\.rtc\.bss\s+0x[0-9a-f]+\s+0x([0-9a-f]+)")
 
 
 def check_map(map_path: Path) -> int:
     fails = 0
+    name = map_path.parent.name
     syms: dict[str, int] = {}
     bss_total = 0
+    rtc_total = 0
     lines = map_path.read_text(errors="replace").splitlines()
     for i, line in enumerate(lines):
         m = SEC_RE.match(line)
@@ -62,27 +64,34 @@ def check_map(map_path: Path) -> int:
         t = TOT_RE.match(line)
         if t:
             bss_total = int(t.group(1), 16)
+        r = RTC_RE.match(line)
+        if r:
+            rtc_total = int(r.group(1), 16)
 
-    required = REQUIRED.get(map_path.parent.name, set())
+    required = REQUIRED.get(name, set())
     for pref, want, desc in STACKS:
         got = syms.pop(pref, 0)
         if got == 0:
             if pref in required:
-                print(f"  FAIL {map_path.parent.name}: 栈符号缺失 .bss.{pref} ({desc})")
+                print(f"  FAIL {name}: 栈符号缺失 .bss.{pref} ({desc})")
                 fails += 1
         elif got != want:
-            print(f"  FAIL {map_path.parent.name}: {pref} 尺寸 {got} != {want} ({desc})")
+            print(f"  FAIL {name}: {pref} 尺寸 {got} != {want} ({desc})")
             fails += 1
 
-    limit = BSS_LIMITS.get(map_path.parent.name)
-    print(f"  {map_path.parent.name}: dram0.bss={bss_total} (上限 {limit})")
-    if limit and bss_total > limit:
-        print(f"  FAIL {map_path.parent.name}: bss 超上限")
+    lo, hi = RTC_WINDOW.get(name, (0, 0))
+    print(f"  {name}: dram0.bss={bss_total} (上限 {BSS_LIMITS.get(name)}) | "
+          f"rtc.bss={rtc_total} (窗口 {lo}~{hi})")
+    if rtc_total < lo or rtc_total > hi:
+        print(f"  FAIL {name}: rtc.bss 越窗口(RTCRAM 31KB 内定置失控?)")
+        fails += 1
+    if bss_total > BSS_LIMITS.get(name, 1 << 62):
+        print(f"  FAIL {name}: bss 超上限")
         fails += 1
 
-    for name, size in sorted(syms.items(), key=lambda kv: -kv[1]):
-        if size > BIG_BSS and name not in BIG_WHITELIST:
-            print(f"  审: {map_path.parent.name} .bss.{name} = {size} (>16KB, 请入 docs/22 或移 PSRAM)")
+    for sname, size in sorted(syms.items(), key=lambda kv: -kv[1]):
+        if size > BIG_BSS and sname not in BIG_WHITELIST:
+            print(f"  审: {name} .bss.{sname} = {size} (>16KB, 请入 docs/22 或移 PSRAM)")
     return fails
 
 
