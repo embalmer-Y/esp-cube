@@ -240,7 +240,11 @@ esp_err_t app_assist_init(void)
     ESP_RETURN_ON_ERROR(cube_event_subscribe(assist_evt_cb, NULL),
                         TAG, "evt subscribe");
 
-    if (xTaskCreate(assist_task, "aremind", 3072, NULL, 4, NULL) != pdPASS) {
+    /* 栈预分配(docs/22 §3B): 内部静态, 3KB 小任务链接期占位 */
+    static StaticTask_t s_aremind_tcb;
+    static StackType_t s_aremind_stack[3072 / sizeof(StackType_t)];
+    if (xTaskCreateStatic(assist_task, "aremind", 3072, NULL, 4,
+                          s_aremind_stack, &s_aremind_tcb) == NULL) {
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;

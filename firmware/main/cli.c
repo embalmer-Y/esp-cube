@@ -40,6 +40,7 @@
 #include "app_storage.h"
 #include "pair.h"
 #include "pair_server.h"
+#include "mem_budget.h"
 #include "nvs.h"
 #include "esp_http_client.h"
 #include "esp_heap_caps.h"
@@ -312,6 +313,7 @@ static void handle_line(char *line)
                "  skill <名> <json> 直接执行技能(零 LLM 成本调试)\n"
                "  panel <0|1|2>  开关面板(0收起 1状态栏 2AI状态)\n"
                "  sdretry <0|1> SD 重挂载(0=MMC 1=SDSPI) | sdprobe 电平诊断\n"
+               "  mem            内存预算审计+分域水位(docs/22)\n"
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
 #endif
@@ -681,6 +683,10 @@ static void handle_line(char *line)
         } else {
             printf("  pairwin: 失败\n");
         }
+    } else if (strcmp(line, "mem") == 0) {
+        /* docs/22 预算对账: 一次性快照(启动完成时已自动审一次);
+         * 长跑 P50/P95 采样仍用 baseline */
+        mem_budget_dump();
     } else if (strcmp(line, "pairserve") == 0) {
         printf("  pair server: %s\n",
                pair_server_start() == 0 ? "started :443" : "start 失败(证书齐?)");
@@ -912,10 +918,15 @@ static void cli_task(void *arg)
 esp_err_t cli_start(void)
 {
     /* §52 v5: EFC 解码已全部收拢到 taskLVGL 执行(ui_face_exec_in_lvgl),
-     * CLI 不再触碰 PIE 指令 → 栈位置不再敏感, 恢复普通创建(v4.1 曾用
-     * DMA caps 挤占 taskLVGL 预算致 "cli degraded: no console") */
-    BaseType_t ok = xTaskCreate(cli_task, CUBE_TASK_CLI_NAME,
-                                CUBE_TASK_CLI_STACK, NULL,
-                                CUBE_TASK_CLI_PRIO, NULL);
-    return ok == pdPASS ? ESP_OK : ESP_FAIL;
+     * CLI 不再触碰 PIE 指令 → 栈位置不再敏感(v4.1 曾用 DMA caps 挤占
+     * taskLVGL 预算致 "cli degraded: no console")。
+     * 栈预分配(docs/22 §3B): 内部静态 —— 控制台是排障通道, 曾因内部
+     * 碎片创建失败(§52 级联教训), 链接期占位后此失败模式不存在 */
+    static StaticTask_t s_cli_tcb;
+    static StackType_t s_cli_stack[CUBE_TASK_CLI_STACK / sizeof(StackType_t)];
+    TaskHandle_t h = xTaskCreateStatic(cli_task, CUBE_TASK_CLI_NAME,
+                                       CUBE_TASK_CLI_STACK, NULL,
+                                       CUBE_TASK_CLI_PRIO,
+                                       s_cli_stack, &s_cli_tcb);
+    return h != NULL ? ESP_OK : ESP_FAIL;
 }

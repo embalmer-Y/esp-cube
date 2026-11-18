@@ -334,11 +334,16 @@ esp_err_t audio_mixer_start(void)
 {
     if (s_mixer.task != NULL) return ESP_OK;
     s_mixer.running = true;
-    BaseType_t r = xTaskCreatePinnedToCore(mixer_task, CUBE_TASK_MIXER_NAME,
-                                           CUBE_TASK_MIXER_STACK, NULL,
-                                           CUBE_TASK_MIXER_PRIO,
-                                           &s_mixer.task, CUBE_TASK_MIXER_CORE);
-    return r == pdPASS ? ESP_OK : ESP_FAIL;
+    /* 栈预分配(docs/22 §3B): 节拍源(全机最高 prio)不允许运行期创建
+     * 失败, 内部静态链接期占位。(stop→start 快速循环复用静态 TCB 受
+     * idle 延迟删除约束 —— 同 player 双槽教训; 本任务实机只启动一次) */
+    static StaticTask_t s_mixer_tcb;
+    static StackType_t s_mixer_stack[CUBE_TASK_MIXER_STACK / sizeof(StackType_t)];
+    s_mixer.task = xTaskCreateStaticPinnedToCore(
+            mixer_task, CUBE_TASK_MIXER_NAME, CUBE_TASK_MIXER_STACK, NULL,
+            CUBE_TASK_MIXER_PRIO, s_mixer_stack, &s_mixer_tcb,
+            CUBE_TASK_MIXER_CORE);
+    return s_mixer.task != NULL ? ESP_OK : ESP_FAIL;
 }
 
 void audio_mixer_stop(void)

@@ -38,6 +38,7 @@
 #include <esp_timer.h>
 #include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"    /* xTaskCreateWithCaps(psoul PSRAM 栈, docs/22 §3B) */
 #include "freertos/task.h"
 #include "esp_audio_dec.h"
 #include "esp_audio_dec_default.h"
@@ -152,7 +153,7 @@ static void soul_cmd_task(void *arg)
         }
         ESP_LOGI(TAG, "soul music cmd %d done", (int)c);
     }
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);     /* 栈在 PSRAM(WithCaps 须配对删除) */
 }
 
 static void soul_music_cmd(const char *content)
@@ -164,7 +165,10 @@ static void soul_music_cmd(const char *content)
                strcmp(content, "random") == 0 ? 3 : -1;
     if (c < 0 || s_soul_cmd != -1) return;      /* 未知词/忙: 弃 */
     s_soul_cmd = c;
-    if (xTaskCreate(soul_cmd_task, "psoul", 4096, NULL, 8, NULL) != pdPASS) {
+    /* 栈走 PSRAM(docs/22 §3B): 与 player 同类纯播放负载(PSRAM 栈板上
+     * 验证 2026-11-10 起), 4KB 瞬态不占内部预算 */
+    if (xTaskCreateWithCaps(soul_cmd_task, "psoul", 4096, NULL, 8, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         s_soul_cmd = -1;
     }
 }

@@ -35,6 +35,7 @@
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 #include "freertos/semphr.h"
+#include "freertos/idf_additions.h"    /* xTaskCreateWithCaps(faceload PSRAM 栈, docs/22 §3B) */
 /* lv_async 经 lvgl.h(LV_USE_OS=0 时 misc/lv_async 仍编入; 见 lvgl.h 汇总头) */
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
 #include <stdio.h>
@@ -603,7 +604,11 @@ esp_err_t ui_port_face_req(const char *rel)
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
     char *r = strdup(rel);
     if (r == NULL) return ESP_ERR_NO_MEM;
-    if (xTaskCreate(face_load_task, "faceload", 16384, r, 5, NULL) != pdPASS) {
+    /* 16KB 瞬态栈走 PSRAM(docs/22 §3B): 本任务纯文件读+async 交接,
+     * 无 PIE/无 flash 写(PSRAM 栈禁 flash-cache 关断窗口, pairsrv 批次
+     * 20 教训), 是内部 SRAM 最大瞬态挤占源之一 */
+    if (xTaskCreateWithCaps(face_load_task, "faceload", 16384, r, 5, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
         free(r);
         return ESP_ERR_NO_MEM;
     }
@@ -619,7 +624,7 @@ static void face_load_task(void *arg)
     char *rel = (char *)arg;
     ui_port_face_load(rel);
     free(rel);
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);    /* 栈在 PSRAM(WithCaps 须配对删除) */
 }
 #endif
 
@@ -632,8 +637,8 @@ static void face_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     if (id != CUBE_EVT_SD_READY) return;
     char *rel = strdup("idle");
     if (rel != NULL) {
-        if (xTaskCreate(face_load_task, "faceload", 16384, rel, 5, NULL)
-            != pdPASS) {
+        if (xTaskCreateWithCaps(face_load_task, "faceload", 16384, rel, 5,
+                                NULL, MALLOC_CAP_SPIRAM) != pdPASS) {
             free(rel);
         }
     }

@@ -185,6 +185,9 @@ if [ "$EFC_FAIL" -eq 0 ]; then echo "[18/18] EFC 部分: PASS"; else echo "[18/1
 echo "== [附] 分层依赖检查(docs/17 §2.2) =="
 python3 tools/check_layers.py || FAIL=1
 
+echo "== [附] 内存预算 map 校验(docs/22 §7; 需先构建双目标) =="
+python3 -I tools/mem_budget_check.py || FAIL=1
+
 if [ "$FAIL" -eq 0 ]; then
     echo "host_tests: ALL PASS"
 else

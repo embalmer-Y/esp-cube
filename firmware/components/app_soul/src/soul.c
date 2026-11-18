@@ -693,7 +693,11 @@ esp_err_t soul_start(void)
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
     ESP_RETURN_ON_ERROR(cube_event_subscribe(soul_evt_cb, NULL),
                         TAG, "evt subscribe");
-    if (xTaskCreate(soul_task, "soul", 3072, NULL, 4, NULL) != pdPASS) {
+    /* 栈预分配(docs/22 §3B): 内部静态, 3KB 小任务链接期占位 */
+    static StaticTask_t s_soul_tcb;
+    static StackType_t s_soul_stack[3072 / sizeof(StackType_t)];
+    if (xTaskCreateStatic(soul_task, "soul", 3072, NULL, 4,
+                          s_soul_stack, &s_soul_tcb) == NULL) {
         return ESP_ERR_NO_MEM;
     }
     ESP_LOGI(TAG, "soul up (1Hz, percep→kd→ke→bb→behavior)");

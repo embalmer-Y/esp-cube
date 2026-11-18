@@ -14,6 +14,7 @@
 #include "act_gate.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"    /* xTaskCreateWithCaps(PSRAM 栈, docs/22 §3B) */
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -52,6 +53,8 @@ extern esp_err_t ui_port_touch_start(void);   /* M4 触摸 indev */
 
 /* 串口命令行(本目录 cli.c) */
 #include "cli.h"
+/* 内存预算审计(docs/22; 启动完成时对账一次, 平时 CLI `mem`) */
+#include "mem_budget.h"
 /* AI 技能注册(本目录 ai_skills_setup.c, L5 依赖注入) */
 extern void register_ai_skills(void);
 
@@ -81,7 +84,7 @@ static void player_start_task(void *arg)
 {
     (void)arg;
     app_player_start(NULL);         /* 无参 = 播放列表轮播 */
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);      /* 栈在 PSRAM(WithCaps 创建须配对删除) */
 }
 #endif
 
@@ -94,7 +97,10 @@ static void demo_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ct
     if (id == CUBE_EVT_WIFI_CONNECTED) {
         ESP_LOGI(TAG, "EVT: WiFi connected");
 #if !CONFIG_ESP_CUBE_ENABLE_SOUL
-        BaseType_t r = xTaskCreate(player_start_task, "pstart", 4096, NULL, 8, NULL);
+        /* 瞬态任务栈走 PSRAM(docs/22 §3B): 一次性启动器, 与 player 同类
+         * 纯网络负载(PSRAM 栈 2026-11-10 起板上验证), 不占内部预算 */
+        BaseType_t r = xTaskCreateWithCaps(player_start_task, "pstart", 4096,
+                                           NULL, 8, NULL, MALLOC_CAP_SPIRAM);
         if (r != pdPASS) {
             ESP_LOGE(TAG, "player start task create failed");
         }
@@ -310,4 +316,5 @@ void app_main(void)
     ESP_LOGI(TAG, "startup complete, free heap=%u / psram=%u",
              (unsigned)esp_get_free_heap_size(),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    mem_budget_audit("boot");   /* docs/22 §3E: 稳态水位对账(FAIL 只告警) */
 }

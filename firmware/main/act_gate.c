@@ -14,6 +14,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"    /* xTaskCreateWithCaps(psnsd PSRAM 栈, docs/22 §3B) */
 #include "esp_log.h"
 
 #include "cube_act.h"
@@ -405,7 +406,7 @@ static void persona_sd_task(void *arg)
 {
     (void)arg;
     persona_sd_try();
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);    /* 栈在 PSRAM(WithCaps 须配对删除) */
 }
 
 static void persona_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
@@ -414,7 +415,10 @@ static void persona_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     (void)data; (void)len; (void)ctx;
     if (id != CUBE_EVT_SD_READY) return;
     if (s_psn_bound || s_psn_scratch == NULL) return;
-    if (xTaskCreate(persona_sd_task, "psnsd", 4096, NULL, 5, NULL) != pdTRUE) {
+    /* 4KB 瞬态栈走 PSRAM(docs/22 §3B): 纯 SD 文件操作(scratch 本就
+     * PSRAM), 不占内部预算 */
+    if (xTaskCreateWithCaps(persona_sd_task, "psnsd", 4096, NULL, 5, NULL,
+                            MALLOC_CAP_SPIRAM) != pdTRUE) {
         ESP_LOGW(TAG, "persona sd task spawn fail");
     }
 }

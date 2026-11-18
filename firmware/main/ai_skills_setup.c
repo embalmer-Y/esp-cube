@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"    /* xTaskCreateWithCaps(skpf PSRAM 栈, docs/22 §3B) */
 #include "cubecore.h"
 #include "app_ncm.h"
 #include "app_player.h"
@@ -54,7 +55,7 @@ static void sk_prefetch_task(void *arg)
         s_pf_state = 3;
         ESP_LOGW(TAG, "prefetch failed (err=%d pick=%d)", err, pick);
     }
-    vTaskDelete(NULL);
+    vTaskDeleteWithCaps(NULL);    /* 栈在 PSRAM(WithCaps 须配对删除) */
 }
 
 /* 从流式累计 args 里贪心提取 "keyword":"..."(引号闭合才算成) */
@@ -90,7 +91,10 @@ static void sk_hint_evt_cb(cube_evt_id_t id, const void *data, size_t len,
     strlcpy(s_pf_kw, kw, sizeof(s_pf_kw));
     s_pf_state = 1;
     ESP_LOGI(TAG, "prefetch start: %s", kw);
-    xTaskCreate(sk_prefetch_task, "skpf", 8192, NULL, 5, NULL);
+    /* 8KB 瞬态栈走 PSRAM(docs/22 §3B): 纯 NCM HTTP 负载(player 同类,
+     * PSRAM 栈板上验证), 不占内部预算 */
+    xTaskCreateWithCaps(sk_prefetch_task, "skpf", 8192, NULL, 5, NULL,
+                        MALLOC_CAP_SPIRAM);
 }
 
 /* 技能执行时等待/命中预取(≤3s); 返回 true=命中(url 已填) */

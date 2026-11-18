@@ -187,11 +187,15 @@ esp_err_t app_voice_start(void)
                         "evt subscribe");
 
     s_running = true;
-    BaseType_t ok = xTaskCreatePinnedToCore(voice_task, CUBE_TASK_VOICE_NAME,
-                                            CUBE_TASK_VOICE_STACK, NULL,
-                                            CUBE_TASK_VOICE_PRIO,
-                                            &s_task, CUBE_TASK_VOICE_CORE) == pdPASS;
-    ESP_RETURN_ON_FALSE(ok, ESP_FAIL, TAG, "voice task");
+    /* 栈预分配(docs/22 §3B): 内部静态 —— 唤醒链路曾因内部碎片创建失败
+     * (§52 级联教训), 链接期占位后此失败模式不存在 */
+    static StaticTask_t s_voice_tcb;
+    static StackType_t s_voice_stack[CUBE_TASK_VOICE_STACK / sizeof(StackType_t)];
+    s_task = xTaskCreateStaticPinnedToCore(
+            voice_task, CUBE_TASK_VOICE_NAME, CUBE_TASK_VOICE_STACK, NULL,
+            CUBE_TASK_VOICE_PRIO, s_voice_stack, &s_voice_tcb,
+            CUBE_TASK_VOICE_CORE);
+    ESP_RETURN_ON_FALSE(s_task != NULL, ESP_FAIL, TAG, "voice task");
     ESP_LOGI(TAG, "voice frontend running — 说「%s」唤醒", VOICE_WAKE_PHRASE);
     return ESP_OK;
 }

@@ -1347,18 +1347,28 @@ esp_err_t ai_session_start(void)
     ESP_RETURN_ON_ERROR(cube_event_subscribe(ai_evt_cb, NULL), TAG,
                         "evt subscribe");
 
-    BaseType_t ok = xTaskCreatePinnedToCore(session_task, CUBE_TASK_AISESS_NAME,
-                                            CUBE_TASK_AISESS_STACK, NULL,
-                                            CUBE_TASK_AISESS_PRIO,
-                                            &s_task, CUBE_TASK_AISESS_CORE) == pdPASS &&
-                    xTaskCreatePinnedToCore(tts_task, CUBE_TASK_AITTS_NAME,
-                                            CUBE_TASK_AITTS_STACK, NULL,
-                                            CUBE_TASK_AITTS_PRIO,
-                                            &s_tts_task, CUBE_TASK_AITTS_CORE) == pdPASS &&
-                    xTaskCreatePinnedToCore(mic_task, CUBE_TASK_AIMIC_NAME,
-                                            CUBE_TASK_AIMIC_STACK, NULL,
-                                            CUBE_TASK_AIMIC_PRIO,
-                                            &s_mic_task, CUBE_TASK_AIMIC_CORE) == pdPASS;
+    /* 栈预分配(docs/22 §3B): 三任务内部静态 —— aisess 14KB 为全机最大
+     * 栈(溢出史见 cube_tasks.h 注), 静态占位杜绝运行期创建失败/碎片 */
+    static StaticTask_t s_sess_tcb, s_tts_tcb, s_mic_tcb;
+    static StackType_t s_sess_stk[CUBE_TASK_AISESS_STACK / sizeof(StackType_t)];
+    static StackType_t s_tts_stk[CUBE_TASK_AITTS_STACK / sizeof(StackType_t)];
+    static StackType_t s_mic_stk[CUBE_TASK_AIMIC_STACK / sizeof(StackType_t)];
+    s_task = xTaskCreateStaticPinnedToCore(
+            session_task, CUBE_TASK_AISESS_NAME, CUBE_TASK_AISESS_STACK, NULL,
+            CUBE_TASK_AISESS_PRIO, s_sess_stk, &s_sess_tcb, CUBE_TASK_AISESS_CORE);
+    BaseType_t ok = s_task != NULL;
+    if (ok) {
+        s_tts_task = xTaskCreateStaticPinnedToCore(
+                tts_task, CUBE_TASK_AITTS_NAME, CUBE_TASK_AITTS_STACK, NULL,
+                CUBE_TASK_AITTS_PRIO, s_tts_stk, &s_tts_tcb, CUBE_TASK_AITTS_CORE);
+        ok = s_tts_task != NULL;
+    }
+    if (ok) {
+        s_mic_task = xTaskCreateStaticPinnedToCore(
+                mic_task, CUBE_TASK_AIMIC_NAME, CUBE_TASK_AIMIC_STACK, NULL,
+                CUBE_TASK_AIMIC_PRIO, s_mic_stk, &s_mic_tcb, CUBE_TASK_AIMIC_CORE);
+        ok = s_mic_task != NULL;
+    }
     ESP_RETURN_ON_FALSE(ok, ESP_FAIL, TAG, "tasks");
     vTaskSuspend(s_mic_task);
     ESP_LOGI(TAG, "ai session ready (dashscope byok, tts=%dk, fastline=%d)",

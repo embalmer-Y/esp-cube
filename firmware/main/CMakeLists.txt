@@ -24,7 +24,7 @@ endif()
 
 idf_component_register(
     SRCS "main.c" "ui_port_esp.c" "cli.c" "ai_skills_setup.c" "act_gate.c" "pair_server.c"
-         ${FACE_PERF_SRCS}
+         "mem_budget.c" ${FACE_PERF_SRCS}
     INCLUDE_DIRS "."
     PRIV_REQUIRES ${main_priv_reqs}
 )
