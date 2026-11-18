@@ -28,3 +28,6 @@ __pycache__/
 tools/efc/*.zip
 tools/efc/gif/
 tools/efc/out/
+
+# App 验证用下载物(APK 等二进制, 不入库)
+dist/
