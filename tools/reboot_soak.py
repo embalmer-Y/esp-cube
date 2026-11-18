@@ -9,7 +9,7 @@ T45 目标 ≥100 次; 本脚本可分批执行(报告文件累加由调用方�
 
 --face(freeze-and-face-blackscreen-fix 任务 4.4): 每次启动额外抓取表情
 观测行(faceperf 的 `splash:`、`face first refresh`、`face screen check`,
-ui_face 的 `face src … cf=` 与 `face clip=` 行), 解析后写入该次记录的
+ui_face 的 `face clip=` 行, uiport 的 `face reject` 行), 解析后写入该次记录的
 "face" 键(结构见 face_parse())。--face 时每次收满窗口秒数(不在 got ip
 后 6s 提前结束), 以覆盖 SD 就绪后的自动热载(约 17s); abort/assert/Guru
 仍提前结束。原有字段(got_ip/abort/assert/guru/hang/err/tail)与判定不变,
@@ -46,8 +46,13 @@ def judge(rec: dict, text: str) -> dict:
 
 
 # ---- 表情观测行解析(--face) ----
-# 格式来源: firmware/main/face_perf.c boot_print()、
-# firmware/components/app_ui/ui/ui_widget.c face src / face_log_clip_fmt()
+# 格式以固件源码的 format 串为准, 逐行来源见 _FIXTURE 的注释:
+#   faceperf  firmware/main/face_perf.c  boot_print() 与开机窗挂接
+#   ui_face   firmware/components/app_ui/ui/ui_widget.c  ui_face_log_loaded()
+#   uiport    firmware/main/ui_port_esp.c  face_hot_load() 的 face reject
+#   storage   firmware/components/app_storage/app_storage.c  sd up
+# 固件已不输出的旧形式(face src 行、clip 行的 mood=、screen check 的 nonbg=、
+# clip 的 load=fail)不再解析; 对应事件的现行输出见 face_parse() 的说明。
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _LOG = re.compile(r"([EWIDV]) \((\d+)\) ([A-Za-z0-9_]+): (.*)$")
 _SPLASH = re.compile(r"^splash: n=(\d+) p95=(\d+\.\d)ms max=(\d+\.\d)ms "
@@ -56,15 +61,14 @@ _SPLASH_TO = re.compile(r"^splash: timeout n=(\d+) d=(-?\d+)\s*$")
 _SPLASH_NOMEM = re.compile(r"^splash: summary alloc failed n=(\d+)\s*$")
 _FIRST = re.compile(r"^face first refresh \+(\d+\.\d)ms\s*$")
 _FIRST_TO = re.compile(r"^face first refresh: timeout\s*$")
-_CHECK = re.compile(r"^face screen check: nonbg=(\d+\.\d)% pts=(\d+) "
+_CHECK = re.compile(r"^face screen check: lit=(\d+\.\d)% pts=(\d+) "
                     r"frame=(-?\d+)\s*$")
 _CHECK_NA = re.compile(r"^face screen check: n/a reason=(\d+) cf=(\d+)\s*$")
 _CHECK_TO = re.compile(r"^face screen check: timeout loaded=(\d+)\s*$")
 _BOOTWIN = re.compile(r"^boot window (on|off)\b")
-_SRC = re.compile(r"^face src (-?\d+)x(-?\d+) .*cf=(\S+) alpha0=(\S+)\s*$")
-_CLIP = re.compile(r"^face clip=(\S+) mood=(\S+) delay=(\d+) cf=(\S+) "
-                   r"alpha0=(\S+)\s*$")
-_CLIP_FAIL = re.compile(r"^face clip=(\S+) mood=(\S+) load=fail\s*$")
+_CLIP = re.compile(r"^face clip=(\S+) frames=(-?\d+) delay=(\d+) cf=(\S+) "
+                   r"alpha0=(\S+) lit=(\S+)\s*$")
+_REJECT = re.compile(r"^face reject name=(\S+) reason=(\S+) keep=(\S+)\s*$")
 
 
 def face_parse(text: str) -> dict:
@@ -76,23 +80,26 @@ def face_parse(text: str) -> dict:
               | {"timeout": True, "n", "d", "ts_ms"}
               | {"alloc_failed": True, "n", "ts_ms"} | None,
       "first_refresh": {"ms","ts_ms"} | {"timeout": True, "ts_ms"} | None,
-      "screen_check": {"nonbg_pct","pts","frame","ts_ms"}
+      "screen_check": {"lit_pct","pts","frame","ts_ms"}
                     | {"na": True, "reason", "cf", "ts_ms"}
                     | {"timeout": True, "loaded", "ts_ms"} | None,
-      "src": {"w","h","cf","alpha0","ts_ms"} | None,     # face src 行(首次加载)
-      "clips": [{"clip","mood","delay","cf","alpha0","ts_ms"}
-                | {"clip","mood","load": "fail","ts_ms"}, ...],  # 按出现顺序
+      "clips": [{"clip","frames","delay","cf","alpha0","lit","ts_ms"}
+                | {"clip": "sd:<名>", "load": "fail", "reason", "keep",
+                   "ts_ms"}, ...],
       "sd_up_ms": int | None,                     # storage: sd up 的时间戳(只取时间)
       "lines": [匹配到的原始行(已去 ANSI 颜色)],   # 不含 sd up 行
     }
-    ts_ms 为 ESP 日志时间戳(启动以来毫秒)。同类行出现多次时 splash/
-    first_refresh/screen_check/src 取第一条, clips 全部保留。
-    `face clip=sd:<名>` 即 SD/CLI 热载完成时刻; 其 ts_ms 大于 `splash:`
+    clips 按出现顺序: "clip" 行是每次加载成功后的 `face clip=`(开机内置片段在前,
+    SD 热载在后); "load": "fail" 项来自 `face reject` 行, 其 clip 为 sd:<名>,
+    名为 invalid 时固件未回显原名。alpha0 与 lit 保留固件输出的字符串
+    ("NN.N%" 或 "n/a")。
+    lit_pct 为 812 个采样点中亮度 ≥128 的占比(%, 一位小数), 口径见 ui_face_fmt.h。
+    ts_ms 为 ESP 日志时间戳(启动以来毫秒)。splash/first_refresh/screen_check
+    取第一条。`face clip=sd:<名>` 即 SD/CLI 热载完成时刻; 其 ts_ms 大于 `splash:`
     行的 ts_ms 即说明热载晚于 splash 结束(splash 行在开机窗结束后才输出)。
     """
     out = {"boot_window": None, "splash": None, "first_refresh": None,
-           "screen_check": None, "src": None, "clips": [], "sd_up_ms": None,
-           "lines": []}
+           "screen_check": None, "clips": [], "sd_up_ms": None, "lines": []}
     # 只解析完整行: 窗口末尾被截断的半行(无换行)丢弃, 免得把 d=23 截成 d=2
     rows = _ANSI.sub("", text).replace("\r", "").split("\n")[:-1]
     for raw in rows:
@@ -122,7 +129,7 @@ def face_parse(text: str) -> dict:
             elif _FIRST_TO.match(msg) and out["first_refresh"] is None:
                 out["first_refresh"] = {"timeout": True, "ts_ms": ts}
             elif (c := _CHECK.match(msg)) and out["screen_check"] is None:
-                out["screen_check"] = {"nonbg_pct": float(c.group(1)),
+                out["screen_check"] = {"lit_pct": float(c.group(1)),
                                        "pts": int(c.group(2)),
                                        "frame": int(c.group(3)), "ts_ms": ts}
             elif (c := _CHECK_NA.match(msg)) and out["screen_check"] is None:
@@ -134,18 +141,19 @@ def face_parse(text: str) -> dict:
             else:
                 hit = False
         elif tag == "ui_face":
-            if (s := _SRC.match(msg)) and out["src"] is None:
-                out["src"] = {"w": int(s.group(1)), "h": int(s.group(2)),
-                              "cf": s.group(3), "alpha0": s.group(4),
-                              "ts_ms": ts}
-            elif c := _CLIP.match(msg):
-                out["clips"].append({"clip": c.group(1), "mood": c.group(2),
+            if c := _CLIP.match(msg):
+                out["clips"].append({"clip": c.group(1),
+                                     "frames": int(c.group(2)),
                                      "delay": int(c.group(3)),
                                      "cf": c.group(4), "alpha0": c.group(5),
+                                     "lit": c.group(6), "ts_ms": ts})
+            else:
+                hit = False
+        elif tag == "uiport":
+            if c := _REJECT.match(msg):
+                out["clips"].append({"clip": f"sd:{c.group(1)}", "load": "fail",
+                                     "reason": c.group(2), "keep": c.group(3),
                                      "ts_ms": ts})
-            elif c := _CLIP_FAIL.match(msg):
-                out["clips"].append({"clip": c.group(1), "mood": c.group(2),
-                                     "load": "fail", "ts_ms": ts})
             else:
                 hit = False
         elif tag == "storage" and msg.startswith("sd up"):
@@ -182,12 +190,19 @@ def face_brief(fc: dict) -> str:
     elif c.get("na"):
         ck = f"check=n/a reason={c['reason']}"
     else:
-        ck = f"nonbg={c['nonbg_pct']}%"
-    src = fc.get("src")
-    cf = "cf=none" if src is None else f"cf={src['cf']} alpha0={src['alpha0']}"
-    sd = [k["clip"] for k in fc.get("clips", []) if k["clip"].startswith("sd:")]
-    return f"{sp} | {fr} | {ck} | {cf} | clips={len(fc.get('clips', []))}" + \
-        (f" sd={','.join(sd)}" if sd else "")
+        ck = f"lit={c['lit_pct']}%"
+    clips = fc.get("clips", [])
+    ok = [k for k in clips if "load" not in k]           # 加载成功的 face clip= 行
+    bad = [k for k in clips if k.get("load") == "fail"]  # face reject 行
+    # 首个成功加载的片段是开机内置片段, 其 cf/alpha0 即开机时的素材格式
+    cf = "cf=none" if not ok else f"cf={ok[0]['cf']} alpha0={ok[0]['alpha0']}"
+    sd = [k["clip"] for k in ok if k["clip"].startswith("sd:")]
+    out = f"{sp} | {fr} | {ck} | {cf} | clips={len(clips)}"
+    if sd:
+        out += f" sd={','.join(sd)}"
+    if bad:
+        out += " reject=" + ",".join(f"{k['clip']}({k['reason']})" for k in bad)
+    return out
 
 
 def one_cycle(win_s: float, face: bool = False) -> dict:
@@ -244,37 +259,50 @@ def parse_args(argv: list) -> tuple:
 
 
 # ---- 离线自检(--selftest; host_tests.sh [18]) ----
+# 每条样例行按固件源码的 format 串手工展开(PRIu32→u、PRId32→d、
+# FP_MSF→"%u.%ums"), 行注释给出源码位置。
 _FIXTURE = (
     "ESP-ROM:esp32p4-eco2-20240710\r\n"
-    "\x1b[0;32mI (1180) ui_face: face src 460x460 (460=新素材, 125=旧素材) "
-    "cf=RGB565A8 alpha0=100.0%\x1b[0m\r\n"
-    "\x1b[0;32mI (1181) ui_face: efc clip ok: 46 frames @100ms\x1b[0m\r\n"
-    "\x1b[0;32mI (1182) ui_face: face clip=neutral mood=none delay=100 "
-    "cf=RGB565A8 alpha0=100.0%\x1b[0m\r\n"
-    "\x1b[0;32mI (1300) faceperf: boot window on (eaf timer hooked)\x1b[0m\r\n"
+    # ui_widget.c:197 ui_face_log_loaded(): 开机内置片段的加载行
+    "\x1b[0;32mI (1182) ui_face: face clip=smile_static frames=46 delay=100 "
+    "cf=RGB565A8 alpha0=100.0% lit=12.3%\x1b[0m\r\n"
+    # face_perf.c 开机窗挂接成功
+    "\x1b[0;32mI (1300) faceperf: boot window on (lv_efc timer hooked)\x1b[0m\r\n"
+    # face_perf.c boot_print(): splash 摘要 (d 为挂钩后的解码次数)
     "\x1b[0;32mI (4012) faceperf: splash: n=72 p95=118.4ms max=231.0ms "
     "gt100=4 d=23\x1b[0m\r\n"
     "\x1b[0;32mI (4013) faceperf: splash cputop (since boot: task abs pct):"
     "\x1b[0m\r\n"
     "\x1b[0;32mI (4013) faceperf:   IDLE1\t123\t\t40%\x1b[0m\r\n"
+    # face_perf.c boot_print(): 首刷 与 屏幕自检(pts 为 UI_FACE_LIT_POINTS)
     "\x1b[0;32mI (4014) faceperf: face first refresh +12.3ms\x1b[0m\r\n"
-    "\x1b[0;32mI (4015) faceperf: face screen check: nonbg=0.0% pts=810 "
+    "\x1b[0;32mI (4015) faceperf: face screen check: lit=12.3% pts=812 "
     "frame=3\x1b[0m\r\n"
     "\x1b[0;32mI (8000) wifi: got ip:192.0.2.10\x1b[0m\r\n"
+    # app_storage.c:202 sd up
     "\x1b[0;32mI (17100) storage: sd up: SD32G 30436MB sd\x1b[0m\r\n"
-    "\x1b[0;32mI (17400) uiport: face 'idle' 播放中(812KB)\x1b[0m\r\n"
-    "\x1b[0;32mI (17401) ui_face: face clip=sd:idle mood=happy delay=50 "
-    "cf=RGB565 alpha0=n/a\x1b[0m\r\n"
-    "\x1b[0;33mW (20000) ui_face: face clip=happy mood=happy load=fail"
+    # ui_widget.c:197 经 ui_port_esp.c face_hot_load() 的 SD 热载成功
+    "\x1b[0;32mI (17401) ui_face: face clip=sd:idle frames=46 delay=50 "
+    "cf=RGB565 alpha0=n/a lit=n/a\x1b[0m\r\n"
+    # ui_port_esp.c:507 SD 热载被拒, 回退内置片段
+    "\x1b[0;33mW (17402) uiport: face reject name=happy reason=BAD_FORMAT "
+    "keep=smile_static\x1b[0m\r\n"
+    # 同源但不解析的行: ui_widget.c:210 自检不符; ui_widget.c:239 mood 回退
+    "\x1b[0;33mW (17403) ui_face: face check clip=smile_static MISMATCH "
+    "alpha0=99.5% expect=100.00% lit=12.3% expect=12.50% (tol 0.5/5 pts)"
     "\x1b[0m\r\n"
+    "\x1b[0;33mW (17404) ui_face: face clip fallback: mood=happy clip=happy "
+    "not built in, using smile_static\x1b[0m\r\n"
 )
 
 _FIXTURE_BAD = (
+    # face_perf.c boot_print(): 开机窗超时的三种行
     "W (31300) faceperf: splash: timeout n=900 d=300\n"
     "W (31301) faceperf: face first refresh: timeout\n"
     "W (31302) faceperf: face screen check: timeout loaded=0\n"
-    "I (900) ui_face: face src 125x160 (460=新素材, 125=旧素材) cf=RGB565 "
-    "alpha0=n/a\n"
+    # ui_widget.c:197: 非 RGB565A8 素材没有 alpha 平面, alpha0 与 lit 为 n/a
+    "I (900) ui_face: face clip=smile_static frames=12 delay=100 "
+    "cf=RGB565 alpha0=n/a lit=n/a\n"
 )
 
 
@@ -287,33 +315,34 @@ def selftest() -> int:
         if not cond:
             fails.append(name)
 
-    # 1. 正常启动: 各字段解析
+    # 1. 正常启动(固件格式样例整段): 各字段解析
     fc = face_parse(_FIXTURE)
     check("boot_window", fc["boot_window"] == "on")
     check("splash", fc["splash"] == {"n": 72, "p95_ms": 118.4,
                                      "max_ms": 231.0, "gt100": 4, "d": 23,
                                      "ts_ms": 4012})
     check("first", fc["first_refresh"] == {"ms": 12.3, "ts_ms": 4014})
-    check("check", fc["screen_check"] == {"nonbg_pct": 0.0, "pts": 810,
+    check("check", fc["screen_check"] == {"lit_pct": 12.3, "pts": 812,
                                           "frame": 3, "ts_ms": 4015})
-    check("src", fc["src"] == {"w": 460, "h": 460, "cf": "RGB565A8",
-                               "alpha0": "100.0%", "ts_ms": 1180})
     check("clips", fc["clips"] == [
-        {"clip": "neutral", "mood": "none", "delay": 100, "cf": "RGB565A8",
-         "alpha0": "100.0%", "ts_ms": 1182},
-        {"clip": "sd:idle", "mood": "happy", "delay": 50, "cf": "RGB565",
-         "alpha0": "n/a", "ts_ms": 17401},
-        {"clip": "happy", "mood": "happy", "load": "fail", "ts_ms": 20000}])
+        {"clip": "smile_static", "frames": 46, "delay": 100,
+         "cf": "RGB565A8", "alpha0": "100.0%", "lit": "12.3%", "ts_ms": 1182},
+        {"clip": "sd:idle", "frames": 46, "delay": 50, "cf": "RGB565",
+         "alpha0": "n/a", "lit": "n/a", "ts_ms": 17401},
+        {"clip": "sd:happy", "load": "fail", "reason": "BAD_FORMAT",
+         "keep": "smile_static", "ts_ms": 17402}])
     check("sd_up", fc["sd_up_ms"] == 17100)
-    check("lines_n", len(fc["lines"]) == 8)
+    check("lines_n", len(fc["lines"]) == 7)
     check("lines_no_ansi", all("\x1b" not in ln for ln in fc["lines"]))
     check("lines_no_sd", all("sd up" not in ln for ln in fc["lines"]))
     check("no_cputop", all("IDLE1" not in ln for ln in fc["lines"]))
-    check("brief", "p95=118.4ms" in face_brief(fc) and "sd=sd:idle"
-          in face_brief(fc))
+    b = face_brief(fc)
+    check("brief", "p95=118.4ms" in b and "lit=12.3%" in b
+          and "cf=RGB565A8 alpha0=100.0%" in b and "sd=sd:idle" in b
+          and "reject=sd:happy(BAD_FORMAT)" in b)
     check("json", json.loads(json.dumps(fc, ensure_ascii=False)) == fc)
 
-    # 2. 超时与旧素材变体
+    # 2. 开机窗超时, 非 RGB565A8 素材, n/a 与 timeout 变体
     fb = face_parse(_FIXTURE_BAD)
     check("splash_to", fb["splash"] == {"timeout": True, "n": 900, "d": 300,
                                         "ts_ms": 31300})
@@ -321,8 +350,10 @@ def selftest() -> int:
                                               "ts_ms": 31301})
     check("check_to", fb["screen_check"] == {"timeout": True, "loaded": 0,
                                              "ts_ms": 31302})
-    check("src_old", fb["src"]["w"] == 125 and fb["src"]["cf"] == "RGB565")
-    check("bw_none", fb["boot_window"] is None and fb["clips"] == [])
+    check("clip_no_alpha", fb["clips"] == [
+        {"clip": "smile_static", "frames": 12, "delay": 100, "cf": "RGB565",
+         "alpha0": "n/a", "lit": "n/a", "ts_ms": 900}])
+    check("bw_none", fb["boot_window"] is None)
     na = face_parse("W (5) faceperf: face screen check: n/a reason=4 cf=0\n"
                     "W (6) faceperf: boot window off: ESP_ERR_TIMEOUT\n")
     check("check_na", na["screen_check"] == {"na": True, "reason": 4,
@@ -330,12 +361,56 @@ def selftest() -> int:
     check("bw_off", na["boot_window"] == "off")
     check("brief_none", face_brief(face_parse("")).startswith("splash=none"))
 
+    # 2b. 每条固件 format 各一行(参数取边界值), 只检查对应字段
+    cases = [
+        # face_perf.c boot_print(): d 未挂钩时为 -1
+        ("I (1) faceperf: splash: n=75 p95=41.0ms max=99.9ms gt100=0 d=-1",
+         "splash", {"n": 75, "p95_ms": 41.0, "max_ms": 99.9, "gt100": 0,
+                    "d": -1, "ts_ms": 1}),
+        ("W (2) faceperf: splash: summary alloc failed n=900",
+         "splash", {"alloc_failed": True, "n": 900, "ts_ms": 2}),
+        ("W (3) faceperf: splash: timeout n=12 d=-1",
+         "splash", {"timeout": True, "n": 12, "d": -1, "ts_ms": 3}),
+        ("W (4) faceperf: face first refresh: timeout",
+         "first_refresh", {"timeout": True, "ts_ms": 4}),
+        ("I (5) faceperf: face screen check: lit=0.0% pts=812 frame=-1",
+         "screen_check", {"lit_pct": 0.0, "pts": 812, "frame": -1,
+                          "ts_ms": 5}),
+        ("W (6) faceperf: face screen check: n/a reason=3 cf=0",
+         "screen_check", {"na": True, "reason": 3, "cf": 0, "ts_ms": 6}),
+        ("W (7) faceperf: face screen check: timeout loaded=1",
+         "screen_check", {"timeout": True, "loaded": 1, "ts_ms": 7}),
+        ("I (8) faceperf: boot window on (lv_efc timer missing)",
+         "boot_window", "on"),
+        ("W (9) faceperf: boot window off: ESP_ERR_NO_MEM",
+         "boot_window", "off"),
+        # ui_widget.c:197 在 cf 为 none 时(未加载)
+        ("I (10) ui_face: face clip=laugh frames=0 delay=100 cf=none "
+         "alpha0=n/a lit=n/a", "clips",
+         [{"clip": "laugh", "frames": 0, "delay": 100, "cf": "none",
+           "alpha0": "n/a", "lit": "n/a", "ts_ms": 10}]),
+        # ui_port_esp.c:462 与 :478
+        ("W (11) uiport: face reject name=invalid reason=BAD_FILE "
+         "keep=current", "clips",
+         [{"clip": "sd:invalid", "load": "fail", "reason": "BAD_FILE",
+           "keep": "current", "ts_ms": 11}]),
+        ("W (12) uiport: face reject name=idle reason=LOCK_TIMEOUT "
+         "keep=current", "clips",
+         [{"clip": "sd:idle", "load": "fail", "reason": "LOCK_TIMEOUT",
+           "keep": "current", "ts_ms": 12}]),
+        # app_storage.c:202, sdio 卡
+        ("I (13) storage: sd up: SD32G 30436MB sdio", "sd_up_ms", 13),
+    ]
+    for line, field, want in cases:
+        check(f"real:{field}:{line[:30]}",
+              face_parse(line + "\n")[field] == want)
+
     # 3. 同类行取第一条; 空文本全空
     dup = face_parse("I (1) faceperf: face first refresh +1.0ms\n"
                      "I (2) faceperf: face first refresh +9.0ms\n")
     check("first_dup", dup["first_refresh"]["ms"] == 1.0)
     e = face_parse("")
-    check("empty", e["splash"] is None and e["src"] is None and
+    check("empty", e["splash"] is None and e["screen_check"] is None and
           e["clips"] == [] and e["lines"] == [] and e["sd_up_ms"] is None)
 
     # 4. 截断在任意字节处(窗口末尾半行): 不抛异常, 字段只会缺失不会错
@@ -349,7 +424,7 @@ def selftest() -> int:
             cut_bad.append(f"cut{cut}:{ex!r}")
             continue
         for k in ("boot_window", "splash", "first_refresh", "screen_check",
-                  "src", "sd_up_ms"):
+                  "sd_up_ms"):
             if p[k] is not None and p[k] != full[k]:
                 cut_bad.append(f"cut{cut}:{k}")
         if p["clips"] != full["clips"][:len(p["clips"])] or \

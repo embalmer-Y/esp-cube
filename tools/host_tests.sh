@@ -154,14 +154,29 @@ echo "== [附] freeze_watch selftest(freeze-and-face-blackscreen-fix 任务 11; 
 python3 tools/test_freeze_watch.py || { echo "FAIL: freeze_watch selftest"; FAIL=1; }
 
 # EFC 部分(任务 30.3; Property 8): 往返、键控语义、可复现来源, 以及契约检查。
+# 表情纯 C 部分(任务 31.2): alpha0/lit 宿主测试(ASan+UBSan), 期望值与 MANIFEST 的核对。
+# 统计件(任务 4.1): face_perf_stats 宿主测试。
 # 固定使用 EFC 编码器环境 ~/.venvs/efc(Pillow 13.0.0, numpy 2.5.4), 不用 IDF python3。
-echo "== [18/18] EFC 部分(任务 30.3; Property 8: 往返、键控、可复现来源、契约) =="
+echo "== [18/18] EFC 部分(任务 30.3; Property 8) + 表情纯 C(任务 31.2) + 统计件(任务 4.1) =="
 EFC_FAIL=0
 EFC_PY="$HOME/.venvs/efc/bin/python"
 if [ -x "$EFC_PY" ]; then
     "$EFC_PY" tools/test_efc.py || EFC_FAIL=1
     "$EFC_PY" tools/efc_verify.py --contract firmware/components/app_ui/ui/assets/face \
         || { echo "FAIL: efc_verify contract"; EFC_FAIL=1; }
+    "$EFC_PY" tools/test_face_expect.py || { echo "FAIL: test_face_expect"; EFC_FAIL=1; }
+    gcc -std=c11 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -fno-omit-frame-pointer -ffp-contract=off -Wall -Wextra -Wno-unused-parameter \
+        -I firmware/components/app_ui/ui -o /tmp/test_ui_face_fmt \
+        firmware/main/test/test_ui_face_fmt.c
+    if [ $? -ne 0 ]; then echo "BUILD FAIL: test_ui_face_fmt"; EFC_FAIL=1;
+    else /tmp/test_ui_face_fmt || EFC_FAIL=1; fi
+    gcc -std=c11 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
+        -fno-omit-frame-pointer -Wall -Wextra -Wno-unused-parameter \
+        -I firmware/main -o /tmp/test_face_perf_stats \
+        firmware/main/test/test_face_perf_stats.c firmware/main/face_perf_stats.c
+    if [ $? -ne 0 ]; then echo "BUILD FAIL: test_face_perf_stats"; EFC_FAIL=1;
+    else /tmp/test_face_perf_stats || EFC_FAIL=1; fi
 else
     echo "FAIL: EFC 编码器环境缺失: $EFC_PY"; EFC_FAIL=1
 fi
