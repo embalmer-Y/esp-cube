@@ -16,8 +16,21 @@ if(idf_target STREQUAL "esp32s31")
     list(APPEND main_priv_reqs esp_coex)
 endif()
 
+# 表情观测(faceperf): 只在 CONFIG_ESP_CUBE_FACE_PERF 下编译
+set(FACE_PERF_SRCS)
+if(CONFIG_ESP_CUBE_FACE_PERF)
+    list(APPEND FACE_PERF_SRCS "face_perf.c" "face_perf_stats.c")
+endif()
+
 idf_component_register(
     SRCS "main.c" "ui_port_esp.c" "cli.c" "ai_skills_setup.c" "act_gate.c" "pair_server.c"
+         ${FACE_PERF_SRCS}
     INCLUDE_DIRS "."
     PRIV_REQUIRES ${main_priv_reqs}
 )
+
+# esp_efc_codec 仅随表情开关引入(ui_port_esp.c 直接调用解码器 API, face_perf.c 包含 lv_efc.h)。
+# 与 app_ui 相同用 optional 形式: 写在 if 内的 PRIV_REQUIRES 会被需求预扫描忽略。
+if(CONFIG_ESP_CUBE_ENABLE_FACE_ANIM)
+    idf_component_optional_requires(PRIVATE espressif__esp_efc_codec)
+endif()

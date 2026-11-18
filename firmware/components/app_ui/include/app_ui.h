@@ -13,6 +13,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <esp_err.h>
 
 #ifdef __cplusplus
@@ -36,6 +37,9 @@ typedef struct {
 
 /* 初始化 LVGL 运行环境 + 绑定显示 + 构建页面(在 drv_display_init 成功后) */
 esp_err_t app_ui_start(const app_ui_boot_cfg_t *cfg);
+
+/* 启动页是否仍在播放(只读; 表情热载在其结束后再加载) */
+bool app_ui_splash_active(void);
 
 #ifdef __cplusplus
 }

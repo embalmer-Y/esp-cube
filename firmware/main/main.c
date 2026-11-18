@@ -29,6 +29,7 @@
 #include "app_player.h"
 #include "app_net.h"
 #include "app_ui.h"
+#include "face_perf.h"
 #if CONFIG_ESP_CUBE_ENABLE_BT
 #include "esp_coexist.h"
 #include "app_bt.h"
@@ -242,6 +243,10 @@ void app_main(void)
 #endif
         };
         ESP_ERROR_CHECK(app_ui_start(&ucfg));
+#if CONFIG_ESP_CUBE_FACE_PERF
+        /* 表情计时探针(只观测): splash 摘要/首帧/屏幕自检, 须紧跟 UI 启动 */
+        face_perf_boot_attach();
+#endif
         /* 亮度: DSI init 只开 5%(防点亮瞬态拉塌 3.3V, drv_display_dsi.c
          * 文件头教训), 计划的"UI 手势调高"从未实装 → 5% 成永久值,
          * 亮环境下屏幕形同全黑(2026-11-12 用户实测)。UI 稳定后提到

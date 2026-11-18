@@ -9,6 +9,10 @@
 #include "ui_pages.h"
 #include "ui_internal.h"
 
+#if __has_include("sdkconfig.h")
+#include "sdkconfig.h"
+#endif
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -67,6 +71,9 @@ static void master_timer_cb(lv_timer_t *t)
         }
         if (el >= SPLASH_MS) {
             ui_pg.splash_active = false;
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+            ui_face_set_running(ui_w.face_anim);   /* splash 结束: 面板未开则恢复表情 */
+#endif
             lv_screen_load_anim(ui_pg.scr_main, LV_SCR_LOAD_ANIM_FADE_IN,
                                 350, 0, true);
         }
@@ -169,6 +176,12 @@ static lv_obj_t *splash_create(void)
     return scr;
 }
 
+/* 启动页是否仍在播放(表情热载等待用; 只读, 任务上下文轮询) */
+bool app_ui_splash_active(void)
+{
+    return ui_pg.splash_active;
+}
+
 /* ============================================================ */
 /*                     构建入口                                  */
 /* ============================================================ */
@@ -189,6 +202,9 @@ void ui_pages_create(int w, int h)
     lv_obj_clear_flag(ui_pg.scr_main, LV_OBJ_FLAG_SCROLLABLE);
 
     ui_widget_create(ui_pg.scr_main);       /* 表情层 + 双面板 */
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+    ui_face_set_running(ui_w.face_anim);    /* 建好表情后 splash=true: 挂起 */
+#endif
     ui_widget_gesture_register(ui_pg.scr_main);
 
     /* ---- 启动页 ---- */

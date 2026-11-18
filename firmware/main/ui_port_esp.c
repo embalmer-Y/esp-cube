@@ -33,7 +33,14 @@
 #include "drv_audio.h"
 #include "drv_touch.h"
 #include "esp_lvgl_port.h"
-#include "lv_eaf.h"
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+#include <stdio.h>
+#include <sys/stat.h>
+#include "esp_efc_codec.h"
+#include "esp_heap_caps.h"
+#include "lv_efc.h"
+#include "ui_face_fmt.h"
+#endif
 
 static const char *TAG = "uiport";
 
@@ -324,38 +331,204 @@ void ui_port_panel_req(int which)
     s_model.panel_req = which;
 }
 
-/* ---- 表情素材热载(M4+/docs/09 face/ 目录) ----
- * SD 上的 .eaf → PSRAM 缓冲 → lv_eaf_set_src_data; 替换烧录换动画。
- * 生命周期: 缓冲读完即转交控件(imgdsc 引用), 不再单独释放(常驻)。 */
+/* ---- 表情素材热载(SD face/<名>.efc; design B3, streamlined §三: 5 个拒绝码) ----
+ * 任务上下文执行, 只有 set_src_data 与挂起/帧速调用持 LVGL 锁:
+ *   1. 等启动页结束(50ms 轮询, 最长 5s);
+ *   2. 读文件进 PSRAM: 先 stat 判大小(> 262144 → TOO_LARGE), 读后再核一次;
+ *   3. 预检(解码器, 不持锁): BAD_FILE、NOT_460、BAD_FORMAT、MOSTLY_KEYED → 保留当前表情;
+ *   4. 持锁: set_src_data → set_frame_delay(50) → set_loop_enabled → ui_face_set_running,
+ *      再核对发布的 cf 与尺寸; 核对失败或解码器拒绝 → 恢复内置 smile_static 并告警;
+ *   5. 释放文件缓冲(lv_efc 在 set_src_data 内复制了 blob)。 */
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
-esp_err_t ui_port_face_load(const char *rel)
+#define FACE_HOT_MAX_BYTES       262144u   /* TOO_LARGE 上限 */
+#define FACE_HOT_W               460u
+#define FACE_HOT_H               460u
+#define FACE_HOT_DELAY_MS        50u       /* SD 热载帧间隔 */
+#define FACE_HOT_SPLASH_WAIT_MS  5000u
+#define FACE_HOT_POLL_MS         50u
+#define FACE_HOT_KEYED_PERMILLE  990u      /* MOSTLY_KEYED: 第 0 帧键占比 ≥ 990‰ */
+#define FACE_HOT_LOCK_MS         500u
+
+extern lv_obj_t *ui_face_anim_obj(void);                  /* ui_widget.c */
+extern void ui_face_set_running(lv_obj_t *obj);           /* ui_widget.c */
+extern void ui_face_log_loaded(lv_obj_t *obj, const char *label);  /* ui_widget.c */
+extern bool ui_face_load_builtin(const char *name);       /* ui_widget.c */
+
+typedef enum {
+    FACE_HOT_OK = 0,
+    FACE_HOT_TOO_LARGE,
+    FACE_HOT_BAD_FILE,
+    FACE_HOT_NOT_460,
+    FACE_HOT_BAD_FORMAT,
+    FACE_HOT_MOSTLY_KEYED,
+} face_hot_reason_t;
+
+static const char *face_hot_reason_str(face_hot_reason_t r)
 {
-    extern lv_obj_t *ui_face_anim_obj(void);  /* ui_widget.c getter(类型不外泄) */
-    char path[80];
-    snprintf(path, sizeof(path), "face/%s.eaf", rel);
-    size_t len = 0;
-    char *buf = app_storage_read(path, &len);   /* PSRAM 侧堆(SPIRAM 优先) */
-    if (buf == NULL) {
-        ESP_LOGW(TAG, "face '%s' 不存在/读取失败(保留当前)", rel);
-        return ESP_ERR_NOT_FOUND;
+    switch (r) {
+    case FACE_HOT_TOO_LARGE:    return "TOO_LARGE";
+    case FACE_HOT_BAD_FILE:     return "BAD_FILE";
+    case FACE_HOT_NOT_460:      return "NOT_460";
+    case FACE_HOT_BAD_FORMAT:   return "BAD_FORMAT";
+    case FACE_HOT_MOSTLY_KEYED: return "MOSTLY_KEYED";
+    default:                    return "OK";
     }
-    if (!lvgl_port_lock(pdMS_TO_TICKS(500))) {
+}
+
+/* 等启动页结束; 超时后仍加载(运行态由 ui_face_set_running 保持暂停, 页面结束时恢复) */
+static void face_hot_wait_splash(void)
+{
+    const int64_t t_end = esp_timer_get_time() + (int64_t)FACE_HOT_SPLASH_WAIT_MS * 1000;
+    while (app_ui_splash_active()) {
+        if (esp_timer_get_time() >= t_end) {
+            ESP_LOGW(TAG, "face hot-load: splash still active after %u ms, loading anyway",
+                     (unsigned)FACE_HOT_SPLASH_WAIT_MS);
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(FACE_HOT_POLL_MS));
+    }
+}
+
+/* 读 face/<名>.efc 进 PSRAM 缓冲(名称已校验为 [a-z0-9_-]{1,15}) */
+static face_hot_reason_t face_hot_read(const char *name, uint8_t **out, size_t *out_len)
+{
+    char rel[32];
+    snprintf(rel, sizeof(rel), "face/%s.efc", name);
+    char path[96];
+    app_storage_path(path, sizeof(path), rel);
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
+        return FACE_HOT_BAD_FILE;
+    }
+    if ((uint64_t)st.st_size > FACE_HOT_MAX_BYTES) return FACE_HOT_TOO_LARGE;
+    size_t len = 0;
+    char *buf = app_storage_read(rel, &len);     /* 堆(SPIRAM 优先), 调用方 free */
+    if (buf == NULL || len == 0) {
         free(buf);
+        return FACE_HOT_BAD_FILE;
+    }
+    if (len > FACE_HOT_MAX_BYTES) {
+        free(buf);
+        return FACE_HOT_TOO_LARGE;
+    }
+    *out = (uint8_t *)buf;
+    *out_len = len;
+    return FACE_HOT_OK;
+}
+
+/* 预检(不持锁, 解码器只读): EFC 头、尺寸、第 0 帧颜色键与 alpha0(≥990‰ 拒绝)。
+ * 解码用的 634,800 字节 PSRAM 暂存在返回前释放。 */
+static face_hot_reason_t face_hot_precheck(const uint8_t *blob, size_t len)
+{
+    face_hot_reason_t why = FACE_HOT_OK;
+    esp_efc_dec_handle_t dec = NULL;
+    esp_efc_dec_info_t info;
+    uint8_t *stage = NULL;
+    if (len < 8 || memcmp(blob, "EFC1", 4) != 0 ||
+        esp_efc_dec_open(blob, len, &dec) != ESP_EFC_OK ||
+        esp_efc_dec_get_info(dec, &info) != ESP_EFC_OK) {
+        why = FACE_HOT_BAD_FILE;
+    } else if (info.width != (int)FACE_HOT_W || info.height != (int)FACE_HOT_H) {
+        why = FACE_HOT_NOT_460;
+    } else {
+        /* 颜色平面 w·h·2 + alpha 平面 w·h, 与 lv_efc 发布布局一致 */
+        const size_t stage_bytes = (size_t)FACE_HOT_W * FACE_HOT_H * 3u;
+        stage = heap_caps_malloc(stage_bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (stage == NULL ||
+            esp_efc_dec_frame_with_alpha(dec, 0, stage) != ESP_EFC_OK ||
+            esp_efc_dec_get_info(dec, &info) != ESP_EFC_OK) {
+            why = FACE_HOT_BAD_FILE;
+        } else if (info.color_key_index < 0) {
+            /* 无颜色键: lv_efc 只发布 RGB565, 不是 RGB565A8 */
+            why = FACE_HOT_BAD_FORMAT;
+        } else {
+            const int pm = ui_face_alpha0_permille(stage, stage_bytes, FACE_HOT_W,
+                                                   FACE_HOT_H, FACE_HOT_W * 2u);
+            if (pm < 0) {
+                why = FACE_HOT_BAD_FILE;
+            } else if ((uint32_t)pm >= FACE_HOT_KEYED_PERMILLE) {
+                why = FACE_HOT_MOSTLY_KEYED;
+            }
+        }
+    }
+    heap_caps_free(stage);
+    if (dec != NULL) esp_efc_dec_close(dec);
+    return why;
+}
+
+static esp_err_t face_hot_load(const char *name)
+{
+    if (!ui_face_name_ok(name)) {
+        ESP_LOGW(TAG, "face reject name=invalid reason=BAD_FILE keep=current");
+        return ESP_ERR_INVALID_ARG;
+    }
+    face_hot_wait_splash();
+    uint8_t *blob = NULL;
+    size_t len = 0;
+    face_hot_reason_t why = face_hot_read(name, &blob, &len);
+    if (why == FACE_HOT_OK) why = face_hot_precheck(blob, len);
+    if (why != FACE_HOT_OK) {
+        ESP_LOGW(TAG, "face reject name=%s reason=%s keep=current", name,
+                 face_hot_reason_str(why));
+        free(blob);
+        return ESP_FAIL;
+    }
+
+    if (!lvgl_port_lock(FACE_HOT_LOCK_MS)) {          /* lvgl_port_lock 的参数单位是 ms */
+        ESP_LOGW(TAG, "face reject name=%s reason=LOCK_TIMEOUT keep=current", name);
+        free(blob);
         return ESP_ERR_TIMEOUT;
     }
-    lv_obj_t *anim = ui_face_anim_obj();
-    lv_eaf_set_src_data(anim, buf, len);
-    bool ok = lv_eaf_is_loaded(anim);
-    if (ok) {
-        lv_eaf_set_loop_enabled(anim, true);
-        lv_eaf_set_frame_delay(anim, 50);
-        lv_eaf_restart(anim);
-        ESP_LOGI(TAG, "face '%s' 播放中(%uKB)", rel, (unsigned)(len / 1024));
+    esp_err_t err = ESP_OK;
+    lv_obj_t *obj = ui_face_anim_obj();
+    if (obj == NULL) {
+        err = ESP_ERR_INVALID_STATE;
     } else {
-        ESP_LOGW(TAG, "face '%s' 解析失败(格式/版本?), 保留当前", rel);
+        char label[24];
+        snprintf(label, sizeof(label), "sd:%s", name);
+        lv_efc_set_src_data(obj, blob, len);
+        lv_efc_set_frame_delay(obj, FACE_HOT_DELAY_MS);
+        lv_efc_set_loop_enabled(obj, true);
+        ui_face_set_running(obj);
+        /* 加载后核对发布的第 0 帧; 旧片段已被 set_src 释放, 失败只能回退内置片段 */
+        const lv_image_dsc_t *dsc = lv_efc_is_loaded(obj)
+            ? (const lv_image_dsc_t *)lv_image_get_src(obj) : NULL;
+        face_hot_reason_t post = FACE_HOT_OK;
+        if (dsc == NULL) {
+            post = FACE_HOT_BAD_FILE;
+        } else if (dsc->header.cf != LV_COLOR_FORMAT_RGB565A8) {
+            post = FACE_HOT_BAD_FORMAT;
+        } else if (dsc->header.w != FACE_HOT_W || dsc->header.h != FACE_HOT_H) {
+            post = FACE_HOT_NOT_460;
+        }
+        if (post == FACE_HOT_OK) {
+            ui_face_log_loaded(obj, label);      /* face clip=sd:<名> … */
+        } else {
+            ESP_LOGW(TAG, "face reject name=%s reason=%s keep=smile_static", name,
+                     face_hot_reason_str(post));
+            ui_face_load_builtin("smile_static");
+            err = ESP_FAIL;
+        }
     }
     lvgl_port_unlock();
-    return ok ? ESP_OK : ESP_FAIL;
+    free(blob);
+    return err;
+}
+
+/* CLI/SD 热载入口(任务上下文): name 为 face/ 下不含后缀的名称 */
+esp_err_t ui_port_face_load(const char *rel)
+{
+    return face_hot_load(rel);
+}
+
+/* 台调 mood(CLI uimood, 任务 31.4): 经单写者接口改快照 mood_tag, 只接受固定词表。
+ * ui_face_apply() 在下一个 30fps 同步周期按 mood 映射切片段。 */
+esp_err_t ui_port_mood_req(const char *tag)
+{
+    const char *v = ui_face_mood_vocab(tag);
+    if (strcmp(v, "none") == 0 || strcmp(v, "other") == 0) return ESP_ERR_INVALID_ARG;
+    model_set_str(s_model.mood_tag, v, sizeof(s_model.mood_tag));
+    return ESP_OK;
 }
 
 static void face_load_task(void *arg);   /* 前向(定义在其后) */

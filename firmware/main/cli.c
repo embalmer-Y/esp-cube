@@ -48,6 +48,7 @@
 #include "lwip/stats.h"
 #include "ai_skills.h"
 #include "sdkconfig.h"
+#include "face_perf.h"
 #if CONFIG_ESP_CUBE_ENABLE_AI
 #include "ai_session.h"
 #endif
@@ -236,6 +237,64 @@ static void cmd_wget(const char *arg)
            (long long)total, esp_err_to_name(e));
 }
 
+#if CONFIG_ESP_CUBE_FACE_PERF
+/* faceperf start <秒> [片段] | report | stop (任务 31.4; 实现与语义见 face_perf.h)。
+ * start 立即返回, 测量窗在 LVGL 任务里到时自动结束并恢复片段; 测量前后的 cputop 由操作者另行执行。 */
+static void cmd_faceperf(char *arg)
+{
+    static const char usage[] =
+        "  用法: faceperf start <1-300秒> [smile_static|laugh|investigate|shocked]"
+        " | faceperf report | faceperf stop\n";
+    char *save = NULL;
+    char *sub = arg != NULL ? strtok_r(arg, " ", &save) : NULL;
+    if (sub != NULL && strcmp(sub, "start") == 0) {
+        char *s_sec = strtok_r(NULL, " ", &save);
+        char *clip = strtok_r(NULL, " ", &save);
+        char *extra = strtok_r(NULL, " ", &save);
+        char *end = NULL;
+        unsigned long sec = s_sec != NULL ? strtoul(s_sec, &end, 10) : 0;
+        if (s_sec == NULL || end == s_sec || *end != 0 || sec == 0 ||
+            sec > FACE_PERF_WIN_MAX_S || extra != NULL) {
+            printf("%s", usage);
+            return;
+        }
+        esp_err_t e = face_perf_start_clip((uint32_t)sec, clip);
+        if (e == ESP_OK) {
+            printf("  faceperf: started %lus clip=%s(到时后 faceperf report)\n",
+                   sec, clip != NULL ? clip : "current");
+        } else if (e == ESP_ERR_INVALID_ARG) {
+            printf("%s", usage);
+        } else {
+            printf("  faceperf: start failed (%s)\n", esp_err_to_name(e));
+        }
+    } else if (sub != NULL && strcmp(sub, "report") == 0) {
+        face_perf_report(printf);
+    } else if (sub != NULL && strcmp(sub, "stop") == 0) {
+        printf("  faceperf: stop %s\n", esp_err_to_name(face_perf_stop()));
+    } else {
+        printf("%s", usage);
+    }
+}
+#endif
+
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+/* uimood <tag>: 经 ui_port 单写者接口改快照 mood_tag(任务 31.4; 切换测试用) */
+static void cmd_uimood(char *arg)
+{
+    extern esp_err_t ui_port_mood_req(const char *tag);   /* ui_port_esp.c */
+    char *save = NULL;
+    char *tag = arg != NULL ? strtok_r(arg, " ", &save) : NULL;
+    esp_err_t e = tag != NULL ? ui_port_mood_req(tag) : ESP_ERR_INVALID_ARG;
+    if (e == ESP_OK) {
+        printf("  uimood -> %s\n", tag);
+    } else if (e == ESP_ERR_INVALID_ARG) {
+        printf("  用法: uimood <happy|relaxed|angry|sad|surprised|confused|sleepy|neutral>\n");
+    } else {
+        printf("  uimood: %s\n", esp_err_to_name(e));
+    }
+}
+#endif
+
 static void handle_line(char *line)
 {
     char *sp = strchr(line, ' ');
@@ -258,6 +317,14 @@ static void handle_line(char *line)
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_SOUL
                "  bb 黑板快照 | bh 行为分数 | bbset <键> <值> [ttl] 台调\n"
+#endif
+#if CONFIG_ESP_CUBE_FACE_PERF
+               "  faceperf start <秒> [smile_static|laugh|investigate|shocked] 表情计时窗"
+               " | faceperf report | faceperf stop\n"
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+               "  uimood <tag>  台调 mood(happy relaxed angry sad surprised confused"
+               " sleepy neutral)\n"
 #endif
         );
     } else if (strcmp(line, "ncm") == 0) {
@@ -489,6 +556,14 @@ static void handle_line(char *line)
         }
 #else
         printf("  face: EFC 未启用\n");
+#endif
+#if CONFIG_ESP_CUBE_FACE_PERF
+    } else if (strcmp(line, "faceperf") == 0) {
+        cmd_faceperf(arg);
+#endif
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+    } else if (strcmp(line, "uimood") == 0) {
+        cmd_uimood(arg);
 #endif
     } else if (strcmp(line, "wget") == 0) {
         /* 素材/配置传输通道: wget <url> [相对路径](缺省 face/下载名.efc);

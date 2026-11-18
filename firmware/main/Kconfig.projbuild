@@ -61,14 +61,26 @@ menu "EspCube Configuration"
           (ai_skills 注册表, L5 注入)。
 
     config ESP_CUBE_ENABLE_FACE_ANIM
-        bool "启用表情动画(esp_lv_eaf_player, 乐鑫官方情绪素材)"
+        bool "启用表情动画(esp_efc_codec, 乐鑫官方情绪素材)"
         default n
         depends on ESP_CUBE_ENABLE_UI
+        select ESP_EFC_LVGL_WIDGET
         help
           Emote Frame Codec(乐鑫): RGB565 无损 tile 编码动画, LVGL
           lv_efc 控件承载。P4C5 推荐(32MB PSRAM + PPA 硬件缩放),
-          当前仅 sdkconfig.defaults.esp32p4 默认开; S31 可开但内部
-          RAM 紧张需实测。需同步 CONFIG_ESP_EFC_LVGL_WIDGET=y。
+          当前仅 sdkconfig.defaults.esp32p4 默认开。esp_efc_codec 仅
+          P4 目标引入(idf_component.yml rules), S31 不引入。本项
+          select CONFIG_ESP_EFC_LVGL_WIDGET(组件默认 n)。
+
+    config ESP_CUBE_FACE_PERF
+        bool "表情帧耗时观测(faceperf: lv_efc 帧 D、显示 R/F、分位数报告)"
+        depends on ESP_CUBE_ENABLE_FACE_ANIM
+        default y if ESP_CUBE_ENABLE_FACE_ANIM
+        default n
+        help
+          只观测, 不改 UI 行为: 开机窗(splash、首刷、屏幕自检 lit)与 CLI
+          faceperf start/report/stop。样本缓冲走 PSRAM, 测量时分配、测完释放。
+          依赖表情开关, 关闭表情时整段不编译(face_perf.c、face_perf_stats.c)。
 
     # ---- AI 云配置(BYOK, 只进本地 sdkconfig) ----
     config ESP_CUBE_AI_API_KEY

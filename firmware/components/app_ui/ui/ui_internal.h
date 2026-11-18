@@ -66,7 +66,7 @@ extern ui_page_t ui_pg;
 typedef struct {
     /* 表情层 */
     lv_obj_t *face_bg;                    /* 情绪底色圆(EFC 背后) */
-    lv_obj_t *face_anim;                  /* 表情动画控件(EAF; 关闭时不存在) */
+    lv_obj_t *face_anim;                  /* 表情动画控件(lv_efc; 关闭时不存在) */
     int face_state;                       /* 最近 ai_state(驱动帧速/呼吸) */
     char mood_tag_last[16];
     /* 状态栏(下滑) */
@@ -114,6 +114,13 @@ void ui_widget_create(lv_obj_t *scr);
 void ui_widget_gesture_register(lv_obj_t *scr);
 /* 每帧同步(model 快照 → 表情/面板内容; 值变化才碰 LVGL) */
 void ui_face_apply(const ui_model_t *m);
+/* 表情挂起统一入口: running = !splash && !panel_open, 再 lv_efc_resume/pause。须在 LVGL 锁内 */
+void ui_face_set_running(lv_obj_t *obj);
+/* 表情内置片段(ui_widget.c; 均须在 LVGL 锁内调用, 仅 CONFIG_ESP_CUBE_ENABLE_FACE_ANIM 下有定义) */
+bool ui_face_builtin_lookup(const char *name, const uint8_t **start, const uint8_t **end);
+bool ui_face_load_builtin(const char *name);     /* 按名加载内置片段, 帧速取当前状态 */
+void ui_face_reload_mood(void);                  /* 按最近 mood 重载(测量窗结束恢复) */
+void ui_face_log_loaded(lv_obj_t *obj, const char *label);   /* 一行 face clip=… 自检日志 */
 void ui_status_apply(const ui_model_t *m);
 void ui_soul_apply(const ui_model_t *m);
 /* 面板控制(手势/自动收回) */

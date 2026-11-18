@@ -34,7 +34,10 @@ dependencies:
     version: "3.0.10"
     rules:
       - if: "target == esp32p4"
-  # 乐鑫官方表情动画播放器(EAF 格式; LVGL v8/v9; 2026-11-14 用户裁决:
-  # 换乐鑫官方眨眼/情绪动画替代 giphy demo 片段)
-  # 双目标引入, 经 Kconfig ESP_CUBE_ENABLE_FACE_ANIM 启用(仅 P4 默认开)
-  espressif/esp_lv_eaf_player: "^0.3.0"
+  # 乐鑫官方表情动画播放器(EFC 格式, lv_efc 控件; 2026-11-15 用户裁决由 EAF 改为 EFC)
+  # 精确锁定 1.1.0(与 evidence/source/esp_efc_codec_1.1.0 同版)
+  # 仅 P4 引入(S31 表情关闭, 不增加其固件体积); 经 Kconfig ESP_CUBE_ENABLE_FACE_ANIM 启用
+  espressif/esp_efc_codec:
+    version: "1.1.0"
+    rules:
+      - if: "target == esp32p4"

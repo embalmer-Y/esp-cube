@@ -24,17 +24,19 @@
 #include "esp_log.h"
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
-#include "lv_eaf.h"
-/* 乐鑫官方情绪素材(.eaf; espressif2022/esp_emote_assets 360_360)
- * 首批嵌入 3 片段(CMakeLists EMBED_FILES): neutral/happy/wink;
- * sad/angry/confused/shocked/sleep 待素材扩容(§44)——勿提前声明
- * extern(曾致死声明误导), listening/其他情绪一律回落 neutral */
-extern const uint8_t face_neutral_eaf_start[] asm("_binary_face_neutral_eaf_start");
-extern const uint8_t face_neutral_eaf_end[]   asm("_binary_face_neutral_eaf_end");
-extern const uint8_t face_happy_eaf_start[]   asm("_binary_face_happy_eaf_start");
-extern const uint8_t face_happy_eaf_end[]     asm("_binary_face_happy_eaf_end");
-extern const uint8_t face_wink_eaf_start[]    asm("_binary_face_wink_eaf_start");
-extern const uint8_t face_wink_eaf_end[]      asm("_binary_face_wink_eaf_end");
+#include "lv_efc.h"
+#include "ui_face_fmt.h"
+#define FACE_TAG "ui_face"
+/* 乐鑫表情素材(esp_efc_codec 1.1.0; CMakeLists FACE_EMBED 内置 4 段, 符号 _binary_<名>_efc_start/end)。
+ * 名称集合与 ui_face_expect.h 的表一致(由 tools/test_face_expect.py 核对)。 */
+extern const uint8_t face_smile_static_efc_start[] asm("_binary_smile_static_efc_start");
+extern const uint8_t face_smile_static_efc_end[]   asm("_binary_smile_static_efc_end");
+extern const uint8_t face_laugh_efc_start[]       asm("_binary_laugh_efc_start");
+extern const uint8_t face_laugh_efc_end[]         asm("_binary_laugh_efc_end");
+extern const uint8_t face_investigate_efc_start[] asm("_binary_investigate_efc_start");
+extern const uint8_t face_investigate_efc_end[]   asm("_binary_investigate_efc_end");
+extern const uint8_t face_shocked_efc_start[]     asm("_binary_shocked_efc_start");
+extern const uint8_t face_shocked_efc_end[]       asm("_binary_shocked_efc_end");
 #endif
 
 ui_widget_t ui_w;
@@ -112,6 +114,146 @@ static void breath_stop(lv_obj_t *obj, int opa)
     lv_anim_del(obj, breath_opa_cb);
     lv_obj_set_style_bg_opa(obj, (lv_opa_t)opa, 0);
 }
+
+/* 表情挂起统一入口(B2): running = !splash && !panel_open, 再 resume 或 pause。
+ * splash 读 ui_pg.splash_active; 面板展开即 ui_w.panel != 0。须在 LVGL 锁内调用。 */
+void ui_face_set_running(lv_obj_t *obj)
+{
+    if (obj == NULL) return;
+    const bool running = !ui_pg.splash_active && ui_w.panel == 0;
+    if (running) lv_efc_resume(obj);
+    else lv_efc_pause(obj);
+}
+
+/* 帧速按会话状态取值(待机/聆听/思考/说话); 状态分支与内置加载共用同一映射 */
+static uint32_t face_delay_ms(int ai_state)
+{
+    switch (ai_state) {
+    case UI_AI_LISTENING: return FACE_DELAY_LISTEN_MS;
+    case UI_AI_THINKING:  return FACE_DELAY_THINK_MS;   /* 慢速=琢磨 */
+    case UI_AI_SPEAKING:  return FACE_DELAY_SPEAK_MS;   /* 快速=活泛 */
+    default:              return FACE_DELAY_BASE_MS;
+    }
+}
+
+/* 内置片段查表(FACE_EMBED 4 段)。名称须与 ui_face_expect.h 的表一致。 */
+bool ui_face_builtin_lookup(const char *name, const uint8_t **start,
+                            const uint8_t **end)
+{
+    if (name == NULL || start == NULL || end == NULL) return false;
+    if (strcmp(name, "smile_static") == 0) {
+        *start = face_smile_static_efc_start;
+        *end = face_smile_static_efc_end;
+    } else if (strcmp(name, "laugh") == 0) {
+        *start = face_laugh_efc_start;
+        *end = face_laugh_efc_end;
+    } else if (strcmp(name, "investigate") == 0) {
+        *start = face_investigate_efc_start;
+        *end = face_investigate_efc_end;
+    } else if (strcmp(name, "shocked") == 0) {
+        *start = face_shocked_efc_start;
+        *end = face_shocked_efc_end;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+/* 加载后自检(B2): 每次加载输出一行 face clip=<名> frames delay cf alpha0 lit。
+ * alpha0 与 lit 读 lv_image_get_src() 发布的第 0 帧(lv_efc 加载时已同步解码), 只遍历一次。
+ * 内置片段另与 ui_face_expect.h 比对(alpha0 ±0.5 个百分点, lit ±5 个百分点), 不符则告警。 */
+void ui_face_log_loaded(lv_obj_t *obj, const char *label)
+{
+    if (obj == NULL || label == NULL) return;
+    const lv_image_dsc_t *dsc = lv_efc_is_loaded(obj)
+        ? (const lv_image_dsc_t *)lv_image_get_src(obj) : NULL;
+    const char *cf = "none";
+    if (dsc != NULL) {
+        if (dsc->header.cf == LV_COLOR_FORMAT_RGB565A8) cf = "RGB565A8";
+        else if (dsc->header.cf == LV_COLOR_FORMAT_RGB565) cf = "RGB565";
+        else cf = "other";
+    }
+    int alpha_pm = -1;                     /* alpha0, 千分比(向下取整) */
+    uint32_t lit_n = 0;                    /* lit 采样点数 */
+    int lit_pts = -1;
+    if (dsc != NULL && dsc->header.cf == LV_COLOR_FORMAT_RGB565A8) {
+        alpha_pm = ui_face_alpha0_permille(dsc->data, dsc->data_size,
+                                           dsc->header.w, dsc->header.h,
+                                           dsc->header.stride);
+        lit_pts = ui_face_lit_count(dsc->data, dsc->data_size,
+                                    dsc->header.w, dsc->header.h,
+                                    dsc->header.stride, &lit_n);
+    }
+    /* 一位小数: alpha0 = 千分比/10; lit = 数量×1000/812 四舍五入(单位 0.1%) */
+    char alpha[24] = "n/a", lit[24] = "n/a";
+    if (alpha_pm >= 0) {
+        snprintf(alpha, sizeof(alpha), "%u.%u%%", (unsigned)alpha_pm / 10u,
+                 (unsigned)alpha_pm % 10u);
+    }
+    if (lit_pts > 0) {
+        const uint32_t t = (lit_n * 1000u + UI_FACE_LIT_POINTS / 2u) / UI_FACE_LIT_POINTS;
+        snprintf(lit, sizeof(lit), "%u.%u%%", (unsigned)(t / 10u), (unsigned)(t % 10u));
+    }
+    ESP_LOGI(FACE_TAG, "face clip=%s frames=%d delay=%u cf=%s alpha0=%s lit=%s",
+             label, (int)lv_efc_get_total_frames(obj),
+             (unsigned)lv_efc_get_frame_delay(obj), cf, alpha, lit);
+
+    const ui_face_expect_t *e = ui_face_expect_find(label);
+    if (e == NULL || alpha_pm < 0 || lit_pts <= 0) return;
+    const uint32_t a100 = (uint32_t)alpha_pm * 100u;          /* 0.01‰ */
+    const uint32_t l100 = lit_n * 10000u / UI_FACE_LIT_POINTS; /* 0.01% */
+    const uint32_t da = a100 > e->key_permille_x100 ? a100 - e->key_permille_x100
+                                                    : e->key_permille_x100 - a100;
+    const uint32_t dl = l100 > e->lit_pct_x100 ? l100 - e->lit_pct_x100
+                                               : e->lit_pct_x100 - l100;
+    if (da > UI_FACE_ALPHA0_TOL_X100 || dl > UI_FACE_LIT_TOL_X100) {
+        ESP_LOGW(FACE_TAG, "face check clip=%s MISMATCH alpha0=%s expect=%u.%02u%% "
+                 "lit=%s expect=%u.%02u%% (tol 0.5/5 pts)", label, alpha,
+                 (unsigned)(e->key_permille_x100 / 1000u),
+                 (unsigned)((e->key_permille_x100 % 1000u) / 10u), lit,
+                 (unsigned)(e->lit_pct_x100 / 100u), (unsigned)(e->lit_pct_x100 % 100u));
+    }
+}
+
+/* 按片段名加载内置片段(须在 LVGL 锁内)。顺序固定: set_src_data → set_frame_delay →
+ * set_loop_enabled → ui_face_set_running → 自检日志。不调 lv_efc_play(B4), 不用 lv_efc_set_src(path)(B7)。
+ * 返回 false: 名称不是内置片段或控件不存在。 */
+static bool face_load_clip(const char *name, uint32_t delay_ms)
+{
+    lv_obj_t *obj = ui_w.face_anim;
+    const uint8_t *start = NULL, *end = NULL;
+    if (obj == NULL || !ui_face_builtin_lookup(name, &start, &end)) return false;
+    lv_efc_set_src_data(obj, start, (size_t)(end - start));
+    lv_efc_set_frame_delay(obj, delay_ms);
+    lv_efc_set_loop_enabled(obj, true);
+    ui_face_set_running(obj);
+    ui_face_log_loaded(obj, name);
+    return true;
+}
+
+/* mood 标签 → 片段(B6 映射)。片段未内置时回退 smile_static, 并输出一条告警(B6、2.15、3.22)。 */
+static void face_apply_mood(const char *tag, int ai_state)
+{
+    const char *clip = ui_face_mood_clip(tag);
+    if (!ui_face_clip_builtin(clip)) {
+        ESP_LOGW(FACE_TAG, "face clip fallback: mood=%s clip=%s not built in, using smile_static",
+                 ui_face_mood_vocab(tag), clip);
+        clip = "smile_static";
+    }
+    face_load_clip(clip, face_delay_ms(ai_state));
+}
+
+/* 按名加载内置片段, 帧速取当前会话状态(须在 LVGL 锁内)。供热载失败回退与测量窗使用。 */
+bool ui_face_load_builtin(const char *name)
+{
+    return face_load_clip(name, face_delay_ms(ui_w.last_ai_state));
+}
+
+/* 按最近生效的 mood 重载片段(须在 LVGL 锁内)。测量窗结束后恢复用。 */
+void ui_face_reload_mood(void)
+{
+    face_apply_mood(ui_w.mood_tag_last, ui_w.last_ai_state);
+}
 #endif
 
 /* ============================================================ */
@@ -140,8 +282,7 @@ void ui_panel_show(int which)
     /* 面板打开时暂停表情解码(全屏 EFC 与面板滑动同帧抢渲染是卡顿主源;
      * 收起即恢复, 视觉上面板近乎不透明无感) */
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
-    if (which != 0) lv_eaf_pause(ui_w.face_anim);
-    else lv_eaf_resume(ui_w.face_anim);
+    ui_face_set_running(ui_w.face_anim);   /* panel 已在上方置位, 按其重算 running */
 #endif
     if (which != 0) {
         if (ui_w.panel_timer == NULL) {
@@ -194,38 +335,25 @@ void ui_face_apply(const ui_model_t *m)
     if (strcmp(m->mood_tag, ui_w.mood_tag_last) != 0) {
         snprintf(ui_w.mood_tag_last, sizeof(ui_w.mood_tag_last), "%s",
                  m->mood_tag);
-        /* T36/用户裁决: mood → 乐鑫情绪片段。460 重编码首批嵌入
-         * neutral/listen/happy/wink; 其余情绪回落 neutral(§44 素材
-         * 重编码扩容后补全) */
-        const uint8_t *src_start = face_neutral_eaf_start;
-        const uint8_t *src_end = face_neutral_eaf_end;
-        if (strcmp(ui_w.mood_tag_last, "happy") == 0 ||
-            strcmp(ui_w.mood_tag_last, "relaxed") == 0) {
-            src_start = face_happy_eaf_start;
-            src_end = face_happy_eaf_end;
-        }
-        lv_eaf_set_src_data(ui_w.face_anim, src_start,
-                            (size_t)(src_end - src_start));
-        lv_eaf_restart(ui_w.face_anim);
+        /* mood 映射(B6)选片段; 帧速取当前会话状态, 重载不把状态帧速重置为待机 */
+        face_apply_mood(m->mood_tag, (int)m->ai_state);
     }
     if ((int)m->ai_state != ui_w.last_ai_state) {
         int prev = ui_w.last_ai_state;
         ui_w.last_ai_state = (int)m->ai_state;
+        lv_efc_set_frame_delay(ui_w.face_anim,
+                               face_delay_ms((int)m->ai_state));
         switch (m->ai_state) {
         case UI_AI_LISTENING:
-            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_LISTEN_MS);
             breath_start(ui_w.face_bg);
             break;
         case UI_AI_THINKING:
-            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_THINK_MS);  /* 慢速=琢磨 */
             breath_stop(ui_w.face_bg, 30);
             break;
         case UI_AI_SPEAKING:
-            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_SPEAK_MS);  /* 快速=活泛 */
             breath_stop(ui_w.face_bg, 56);
             break;
         default:
-            lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_BASE_MS);
             breath_stop(ui_w.face_bg, 40);
             if (prev == UI_AI_IDLE || prev < 0) break;
             break;
@@ -514,34 +642,17 @@ void ui_widget_create(lv_obj_t *scr)
     lv_obj_align(ui_w.face_bg, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(ui_w.face_bg,
                       LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
-    ui_w.face_anim = lv_eaf_create(scr);
+    ui_w.face_anim = lv_efc_create(scr);
     lv_obj_clear_flag(ui_w.face_anim,
                       LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_size(ui_w.face_anim, 460, 460);
     lv_obj_align(ui_w.face_anim, LV_ALIGN_CENTER, 0, 0);
-    lv_image_set_inner_align(ui_w.face_anim,
-                             LV_IMAGE_ALIGN_CONTAIN_DOWNSCALE);
-    lv_eaf_set_src_data(ui_w.face_anim, face_neutral_eaf_start,
-                        (size_t)(face_neutral_eaf_end -
-                                 face_neutral_eaf_start));
-    lv_eaf_set_loop_enabled(ui_w.face_anim, true);
-    lv_eaf_set_frame_delay(ui_w.face_anim, FACE_DELAY_BASE_MS);
-    if (lv_eaf_is_loaded(ui_w.face_anim)) {
-        /* scale 对 EAF RAW/调色板图像绘制失败(黑屏实证, 批次 40 回退):
-         * 铺满需素材级重编码(460 分辨率, tools/eaf_codec.py 已产出) */
-        const lv_image_dsc_t *dsc =
-            (const lv_image_dsc_t *)lv_image_get_src(ui_w.face_anim);
-        ESP_LOGI("ui_face", "face src %dx%d (460=新素材, 125=旧素材)",
-                 dsc ? (int)dsc->header.w : -1,
-                 dsc ? (int)dsc->header.h : -1);
-        lv_eaf_restart(ui_w.face_anim);
-        /* EFC(RGB565 不透明 450×450)完整覆盖 430px 底色圆 → 隐藏底色,
-         * 免逐帧圆弧遮罩重绘(批次 21: outside_cb ~48ms 主源之一);
-         * 仅 EFC 加载失败时底色圆作为 fallback 显示 */
+    lv_image_set_inner_align(ui_w.face_anim, LV_IMAGE_ALIGN_CENTER);
+    face_load_clip("smile_static", FACE_DELAY_BASE_MS);   /* 日志: 一行 face clip=… */
+    if (lv_efc_is_loaded(ui_w.face_anim)) {
+        /* 加载成功: 隐藏底色圆(B10 已决维持隐藏, 3.12);
+         * 仅加载失败时底色圆作为 fallback 显示 */
         lv_obj_add_flag(ui_w.face_bg, LV_OBJ_FLAG_HIDDEN);
-        ESP_LOGI("ui_face", "efc clip ok: %d frames @%dms",
-                 (int)lv_eaf_get_total_frames(ui_w.face_anim),
-                 FACE_DELAY_BASE_MS);
     } else {
         LV_LOG_WARN("efc: clip load failed, face falls back to bg only");
         ESP_LOGE("ui_face", "efc clip load FAILED (bg-only face)");
