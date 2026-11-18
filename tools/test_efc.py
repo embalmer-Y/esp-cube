@@ -5,7 +5,7 @@ Run with the EFC encoder environment (Pillow 13.0.0, numpy 2.5.4):
     ~/.venvs/efc/bin/python tools/test_efc.py
 
 Covers Property 8 (lossless round trip, keyed semantics, reproducible source) of
-.kiro/specs/freeze-and-face-blackscreen-fix/design.md. The contract check
+the EFC pipeline contract (原 .kiro spec design.md, 2026-11-18 随 .kiro 移除; 编码器现于 tools/efc/pc). The contract check
 (tools/efc_verify.py --contract) is run by host_tests.sh, not here.
 
 **Validates: Requirements 2.9, 2.13, 2.14**

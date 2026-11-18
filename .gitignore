@@ -24,3 +24,7 @@ __pycache__/
 .DS_Store
 # Kiro AI 会话/规格目录(2026-11-18 用户裁决: 了解后整体移除, 不入库)
 .kiro/
+# EFC 源材料(乐鑫 Modified MIT 再分发限制+体积): 本地放置不入库(tools/efc_build 可重建)
+tools/efc/*.zip
+tools/efc/gif/
+tools/efc/out/

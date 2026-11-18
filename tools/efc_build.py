@@ -43,11 +43,11 @@ from PIL import Image, ImageSequence
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, ".."))
-SPEC_DIR = os.path.join(REPO, ".kiro", "specs", "freeze-and-face-blackscreen-fix")
-SOURCE_DIR = os.path.join(SPEC_DIR, "evidence", "source")
-DEFAULT_GIF_DIR = os.path.join(SOURCE_DIR, "EmotePack", "gif")
-DEFAULT_CODEC_DIR = os.path.join(SOURCE_DIR, "esp_efc_codec_1.1.0", "pc")
-DEFAULT_OUT_DIR = os.path.join(SOURCE_DIR, "efc_460")
+# 2026-11-18: .kiro 目录按用户指令移除, 编码器脚本入库 tools/efc/pc/
+# (hash 不变, 与冻结记录一致); GIF 源/输出默认指向 tools/efc/ 下可重建目录。
+DEFAULT_GIF_DIR = os.path.join(REPO, "tools", "efc", "gif")
+DEFAULT_CODEC_DIR = os.path.join(REPO, "tools", "efc", "pc")
+DEFAULT_OUT_DIR = os.path.join(REPO, "tools", "efc", "out")
 ENCODER_VENV = os.path.expanduser("~/.venvs/efc")  # the only encoder environment (D-VENV)
 
 # Frozen inputs and parameters. Changing any of these needs a new freeze record.
@@ -69,7 +69,7 @@ ALPHA_KEY_LIMIT = 128  # resized alpha < 128 is keyed
 
 ENCODER_PACKAGE = "espressif/esp_efc_codec"
 ENCODER_VERSION = "1.1.0"
-DEFAULT_ARCHIVE = os.path.join(SOURCE_DIR, "esp_efc_codec_1.1.0", ARCHIVE_NAME)
+DEFAULT_ARCHIVE = os.path.join(REPO, "tools", "efc", ARCHIVE_NAME)  # 归档不入库, 存在时才校验
 DEFAULT_MANIFEST = os.path.join(REPO, "firmware", "components", "app_ui", "ui", "assets", "face", "MANIFEST.json")
 RESAMPLE = "LANCZOS-premultiplied"
 # EFC header of the pinned codec: byte 5 holds the flags, byte 6 the tile size.
