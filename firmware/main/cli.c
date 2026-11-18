@@ -321,6 +321,7 @@ static void handle_line(char *line)
                "  sdretry <0|1> SD 重挂载(0=MMC 1=SDSPI) | sdprobe 电平诊断\n"
                "  mem            内存预算审计+分域水位(docs/22)\n"
                "  memcheck       TLSF 堆完整性校验(§55.10 腐蚀诊断)\n"
+               "  pairunbid <id> 撤销配对客户端(FR-02; 表满腾位)\n"
 #if CONFIG_ESP_CUBE_ENABLE_PROV
                "  prov start [秒] P3a 配网窗口(SoftAP+Security2) | prov stop\n"
 #endif
@@ -692,6 +693,17 @@ static void handle_line(char *line)
             printf("  PIN: %s (120s)\n", pin);
         } else {
             printf("  pairwin: 失败\n");
+        }
+    } else if (strcmp(line, "pairunbid") == 0) {
+        /* FR-02 取消配对: 撤销指定 client_id(表满时腾位; NVS 持久) */
+        if (arg == NULL || arg[0] == 0) {
+            printf("  用法: pairunbid <client_id>\n");
+        } else {
+            long id = strtol(arg, NULL, 10);
+            int rc = pair_revoke_cmd((uint32_t)id);
+            printf("  pairunbid %ld: %s (剩余 %d)\n", id,
+                   rc == PAIR_RES_OK ? "已撤销" : "未找到",
+                   pair_client_count_pub());
         }
     } else if (strcmp(line, "mem") == 0) {
         /* docs/22 预算对账: 一次性快照(启动完成时已自动审一次);

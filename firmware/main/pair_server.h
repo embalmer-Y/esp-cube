@@ -8,6 +8,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* 证书灌入(串口分块): append 累积 base64, commit 解码入 NVS */
 int pair_cert_append(const char *which, const char *b64);
@@ -20,6 +21,8 @@ int pair_window_open_cmd(void);
 void pair_window_pin(char out[7]);
 /* 已配对客户端数(CLI 展示用) */
 int pair_client_count_pub(void);
+/* 撤销指定 client_id(FR-02 取消配对; NVS 直改持久, bind 同源无竞态) */
+int pair_revoke_cmd(uint32_t client_id);
 
 /* https 服务启停(证书齐备才允许 start) */
 int pair_server_start(void);

@@ -270,6 +270,14 @@ void pair_window_pin(char out[7])
 
 int pair_client_count_pub(void) { return pair_client_count(s_pair); }
 
+/* FR-02 取消配对: 表在 NVS 单一事实源, bind/revoke 同走 tbl_load 无竞态 */
+int pair_revoke_cmd(uint32_t client_id)
+{
+    if (s_pair == NULL) pair_port_init();
+    if (s_pair == NULL) return PAIR_RES_ERR;
+    return pair_client_revoke(s_pair, client_id);
+}
+
 /* ---- hex 工具 ---- */
 
 static int hexval(char c)
