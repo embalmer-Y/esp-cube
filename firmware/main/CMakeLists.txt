@@ -7,7 +7,7 @@ set(main_priv_reqs
     cube_act persona pair credstore
     espressif__esp_lvgl_port
     nvs_flash esp_wifi esp_event esp_netif esp_timer esp_driver_uart esp_http_client
-    esp_https_server
+    esp_https_server esp_driver_usb_serial_jtag
 )
 # app_bt 组件双目标存在(P4 上空编译)保留依赖供头文件路径;
 # esp_coex 仅 S31(P4 无 BT 控制器)

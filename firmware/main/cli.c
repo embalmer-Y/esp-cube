@@ -26,6 +26,9 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "driver/uart.h"
+#if CONFIG_IDF_TARGET_ESP32P4
+#include "driver/usb_serial_jtag.h"   /* 第二输入通道(docs/19 §55.7) */
+#endif
 #include "cube_tasks.h"
 #include "app_ncm.h"
 #include "app_player.h"
@@ -871,6 +874,36 @@ static void handle_line(char *line)
     ESP_LOGD(TAG, "cmd done");
 }
 
+/* 行装配状态机(双通道共享: UART0/CH343 与 USB-Serial-JTAG 各喂各的
+ * 字节流, 命令行状态单份 —— 两通道同时敲字会串行, 实际单人使用无碍) */
+static char s_line[CLI_LINE_MAX];
+static int s_len;
+
+static void cli_char(uint8_t ch)
+{
+    if (ch == '\r' || ch == '\n') {
+        printf("\r\n");
+        if (s_len > 0) {
+            s_line[s_len] = 0;
+            s_len = 0;
+            handle_line(s_line);
+        }
+    } else if (ch == 0x08 || ch == 0x7f) {      /* 退格 */
+        if (s_len > 0) {
+            s_len--;
+            printf("\b \b");
+        }
+    } else if (s_len == 0 && (ch & 0x80)) {
+        /* 行首噪声字节(实测 0xFF: 主机打开串口的 DTR 切换毛刺, 间歇
+         * 出现)——命令恒以 ASCII 开头, 直接丢弃; 行中 UTF-8 不受影响 */
+    } else if (s_len < CLI_LINE_MAX - 1 && ch >= 0x20 && ch != 0x7f) {
+        /* 接受 ≥0x80 字节: UTF-8 中文关键词直通(搜索必需) */
+        s_line[s_len++] = (char)ch;
+        putchar(ch);                        /* 本地回显(双控制台都见) */
+        fflush(stdout);
+    }
+}
+
 static void cli_task(void *arg)
 {
     (void)arg;
@@ -882,36 +915,36 @@ static void cli_task(void *arg)
         return;
     }
 
+#if CONFIG_IDF_TARGET_ESP32P4
+    /* 第二输入通道: USB-Serial-JTAG(/dev/ttyACM1)。CH343 主控台 TX 依赖
+     * 主机 USB 状态(2026-11-18 两次 URB 挂起、无 root 不可 reset 实证),
+     * 而 USB-SJ 独立枚举且烧录通道一直健康; stdout 本就双发
+     * (CONSOLE_SECONDARY_USB_SERIAL_JTAG=y), 响应天然回显 ACM1 —— CLI
+     * 从此双通道, 单点失效不再阻塞排障(docs/19 §55.7)。 */
+    const usb_serial_jtag_driver_config_t usj_cfg =
+        USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    if (usb_serial_jtag_driver_install((usb_serial_jtag_driver_config_t *)&usj_cfg)
+        != ESP_OK) {
+        ESP_LOGW(TAG, "usj driver fail(仅 UART0 输入)");
+    }
+#endif
+
     printf("\r\n=== EspCube CLI(help 查看命令) ===\r\n");
-    char line[CLI_LINE_MAX];
-    int len = 0;
     for (;;) {
         uint8_t ch;
-        int n = uart_read_bytes(CLI_UART, &ch, 1, pdMS_TO_TICKS(200));
-        if (n <= 0) {
-            continue;                       /* 无输入: 让出(喂看门狗) */
+        int n = uart_read_bytes(CLI_UART, &ch, 1, pdMS_TO_TICKS(100));
+        if (n > 0) {
+            cli_char(ch);
+            continue;
         }
-        if (ch == '\r' || ch == '\n') {
-            printf("\r\n");
-            if (len > 0) {
-                line[len] = 0;
-                len = 0;
-                handle_line(line);
-            }
-        } else if (ch == 0x08 || ch == 0x7f) {      /* 退格 */
-            if (len > 0) {
-                len--;
-                printf("\b \b");
-            }
-        } else if (len == 0 && (ch & 0x80)) {
-            /* 行首噪声字节(实测 0xFF: 主机打开串口的 DTR 切换毛刺, 间歇
-             * 出现)——命令恒以 ASCII 开头, 直接丢弃; 行中 UTF-8 不受影响 */
-        } else if (len < CLI_LINE_MAX - 1 && ch >= 0x20 && ch != 0x7f) {
-            /* 接受 ≥0x80 字节: UTF-8 中文关键词直通(搜索必需) */
-            line[len++] = (char)ch;
-            putchar(ch);                    /* 本地回显 */
-            fflush(stdout);
+#if CONFIG_IDF_TARGET_ESP32P4
+        /* UART0 空闲间隙轮询 USB-SJ(≤100ms 延迟, 命令行足够) */
+        uint8_t ub[32];
+        int m = usb_serial_jtag_read_bytes(ub, sizeof(ub), 0);
+        for (int i = 0; i < m; i++) {
+            cli_char(ub[i]);
         }
+#endif
     }
 }
 

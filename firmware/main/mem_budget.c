@@ -29,12 +29,12 @@ typedef struct {
 #if CONFIG_IDF_TARGET_ESP32P4
 /* P4C5 下限: hosted SDIO 聚合缓冲单次 dma_alloc 15872B(§52 网络失效
  * 根因), 下限 16KB 即"hosted 下一笔必失败"; 稳态内部 free 实测 26.6KB,
- * 24KB 为挤兑告警线; psram 固定大项(LVGL fb+EFC 工作面, docs/22 §4)
- * 合计 <4MB, 32MB 板余量充足, 28MB 仅作异常哨兵。 */
+ * 24KB 为挤兑告警线; psram 电台播放期 HLS 缓冲合法吃 ~2MB(2026-11-18
+ * ×10 压测实测 28.4MB free), 哨兵取 26MB 只拦真异常。 */
 static const mem_floor_t s_floors[] = {
     { "dma_largest",   16384, "hosted 15872B 单次需求(docs/22 §3E)" },
     { "internal_free", 24576, "稳态实测 26.6KB, 低于此=已挤兑" },
-    { "psram_free",  28U<<20, "LVGL fb+EFC+通用堆异常哨兵" },
+    { "psram_free",  26U<<20, "HLS 播放期合法 ~2MB 之外的异常哨兵" },
 };
 #else
 /* S31: 无 hosted(原生 WiFi), 暂无稳态实测 —— 首次上板用 `mem` 采样
