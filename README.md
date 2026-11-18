@@ -24,7 +24,7 @@ ESP32-P4C5(鱼鹰 OSPTEK 开发板, 双核 RISC-V 400MHz + ESP32-C5 WiFi6 协处
 ## 仓库结构(约定见 [docs/06 §0](docs/06_分层架构与代码规范.md))
 
 ```
-firmware/     ESP-IDF 工程: main/(L5 装配) + components/(25 组件, L0-L4)
+firmware/     ESP-IDF 工程: main/(L5 装配) + components/(24 分层组件+vendored mp3_helix)
 sim/          宿主 LVGL 模拟器(shim/src + run.sh; 与固件 ui/ 同源编译)
 tools/        宿主工具: 层检/宿主测试/板验客户端/看护脚本/素材生成
 docs/         编号文档(01-21)

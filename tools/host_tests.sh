@@ -105,7 +105,7 @@ gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-param
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_srp_pair"; FAIL=1;
 else /tmp/test_srp_pair || FAIL=1; fi
 
-echo "== [10/12] 凭据安全存储(docs/18 T17 设备侧; ASan+UBSan) =="
+echo "== [10/14] 凭据安全存储(docs/18 T17 设备侧; ASan+UBSan) =="
 gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-parameter \
     -I firmware/components/credstore/include \
     -I firmware/components/app_storage/include \
@@ -117,7 +117,7 @@ gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-param
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_credstore"; FAIL=1;
 else /tmp/test_credstore || FAIL=1; fi
 
-echo "== [11/13] LLM 服务商 profile(docs/18 T30; ASan+UBSan) =="
+echo "== [11/14] LLM 服务商 profile(docs/18 T30; ASan+UBSan) =="
 gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-parameter \
     -I firmware/components/llmprofile/include \
     -I firmware/managed_components/espressif__cjson/cJSON \
