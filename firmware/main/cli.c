@@ -299,89 +299,8 @@ static void cmd_uimood(char *arg)
 }
 #endif
 
-/* ---- sdput 串口投递模式(§53 A3 调试通道) ----
- * 用法: sdput <rel> → 后续每行一个 base64 块(≤120 字符), 独行 "." 结束
- * 写盘, "!" 中止。投递期间抑制回显(TX 直写逐字符, 突发会拖垮 RX 处理)。
- * 主机防火墙拦 inbound 时 sdget 不可用(LAN 拉取), 此通道仅依赖串口。 */
-static char s_put_rel[64];
-static char *s_put_buf;         /* heap(SPIRAM), 块满增长 */
-static size_t s_put_len, s_put_cap;
-static bool s_put_active;
-
-static int b64_val(int c)
-{
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
-    return -1;
-}
-
-/* base64 行(4 的倍数, 末行可含 = 填充)追加解码; 按整行需求预留, 块满 2x 增长到 512KB */
-static bool sdput_line(const char *in)
-{
-    size_t n = strlen(in);
-    if (n == 0 || (n % 4) != 0 || n > 120) return false;
-    size_t need = (n / 4) * 3;                  /* 本行最大解码量(含 pad 尾) */
-    if (s_put_len + need > s_put_cap) {
-        size_t cap = s_put_cap * 2 < 8192 ? 8192 : s_put_cap * 2;
-        while (cap < s_put_len + need) cap *= 2;
-        if (cap > 512 * 1024) cap = 512 * 1024;
-        if (s_put_len + need > cap) return false;
-        char *nb = heap_caps_realloc(s_put_buf, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (nb == NULL) return false;
-        s_put_buf = nb;
-        s_put_cap = cap;
-    }
-    for (size_t i = 0; i < n; i += 4) {
-        int v[4];
-        int pad = 0;
-        for (int k = 0; k < 4; k++) {
-            char c = in[i + k];
-            if (c == '=') { pad = 4 - k; break; }   /* 只允许 3/4 位置 */
-            v[k] = b64_val(c);
-            if (v[k] < 0) return false;
-        }
-        if (pad == 1) {
-            s_put_buf[s_put_len++] = (char)((v[0] << 2) | (v[1] >> 4));
-            s_put_buf[s_put_len++] = (char)(((v[1] & 0xF) << 4) | (v[2] >> 2));
-            return i + 4 == n;
-        }
-        if (pad == 2) {
-            s_put_buf[s_put_len++] = (char)((v[0] << 2) | (v[1] >> 4));
-            return i + 4 == n;
-        }
-        if (pad != 0) return false;
-        s_put_buf[s_put_len++] = (char)((v[0] << 2) | (v[1] >> 4));
-        s_put_buf[s_put_len++] = (char)(((v[1] & 0xF) << 4) | (v[2] >> 2));
-        s_put_buf[s_put_len++] = (char)(((v[2] & 0x3) << 6) | v[3]);
-    }
-    return true;
-}
-
 static void handle_line(char *line)
 {
-    if (s_put_active) {
-        if (strcmp(line, ".") == 0) {
-            s_put_active = false;
-            esp_err_t err = app_storage_write(s_put_rel, s_put_buf, s_put_len);
-            printf("  sdput: %u bytes -> %s: %s\n",
-                   (unsigned)s_put_len, s_put_rel, esp_err_to_name(err));
-        } else if (strcmp(line, "!") == 0) {
-            s_put_active = false;
-            printf("  sdput: aborted (%u bytes discarded)\n", (unsigned)s_put_len);
-            free(s_put_buf);
-            s_put_buf = NULL;
-        } else if (!sdput_line(line)) {
-            s_put_active = false;
-            printf("  sdput: bad chunk, aborted\n");
-            free(s_put_buf);
-            s_put_buf = NULL;
-        }
-        fflush(stdout);
-        return;
-    }
     char *sp = strchr(line, ' ');
     char *arg = NULL;
     if (sp != NULL) {
@@ -397,7 +316,6 @@ static void handle_line(char *line)
                "  skill <名> <json> 直接执行技能(零 LLM 成本调试)\n"
                "  panel <0|1|2>  开关面板(0收起 1状态栏 2AI状态)\n"
                "  sdretry <0|1> SD 重挂载(0=MMC 1=SDSPI) | sdprobe 电平诊断\n"
-               "  sdget <url> <rel> 取 LAN 文件写 SD | sdput <rel> 串口投递(§53 A3)\n"
                "  mem            内存预算审计+分域水位(docs/22)\n"
 #if CONFIG_ESP_CUBE_ENABLE_AI
                "  ask <文本>    AI 会话(LLM 自主调用技能点歌/控台)\n"
@@ -717,67 +635,6 @@ static void handle_line(char *line)
     } else if (strcmp(line, "sdprobe") == 0) {
         /* SD 台调: 引脚电平全景(插/拔卡各跑一次对比) */
         app_storage_probe();
-    } else if (strcmp(line, "sdget") == 0) {
-        /* 调试通道(§53 A3): 从 LAN URL 取文件写 SD(app_storage 语义,
-         * rel 如 face/x.efc)。坏文件矩阵/素材投放用, 512KB 上限 */
-        char *sp = arg != NULL ? strchr(arg, ' ') : NULL;
-        if (sp == NULL) {
-            printf("  用法: sdget <url> <relpath>\n");
-        } else {
-            *sp = 0;
-            const char *rel = sp + 1;
-            esp_http_client_config_t hc = { .url = arg, .timeout_ms = 10000 };
-            esp_http_client_handle_t ch = esp_http_client_init(&hc);
-            if (ch == NULL) {
-                printf("  sdget: client init fail\n");
-            } else {
-                esp_err_t eerr = esp_http_client_open(ch, 0);
-                int cl = eerr == ESP_OK ? esp_http_client_fetch_headers(ch) : -1;
-                size_t cap = cl > 0 ? (size_t)cl : 8192;
-                if (cap > 512 * 1024) cap = 512 * 1024;
-                char *buf = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                size_t total = 0;
-                while (buf != NULL) {
-                    if (total == cap) {          /* chunked: 2x 增长到上限 */
-                        if (cap >= 512 * 1024) break;
-                        cap = cap * 2 > 512 * 1024 ? 512 * 1024 : cap * 2;
-                        char *nb = heap_caps_realloc(buf, cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                        if (nb == NULL) break;
-                        buf = nb;
-                    }
-                    int r = esp_http_client_read(ch, buf + total, cap - total);
-                    if (r <= 0) break;
-                    total += (size_t)r;
-                }
-                esp_http_client_cleanup(ch);
-                if (buf == NULL || total == 0) {
-                    printf("  sdget: fetch fail(%s)\n", esp_err_to_name(eerr));
-                } else {
-                    esp_err_t werr = app_storage_write(rel, buf, total);
-                    printf("  sdget: %u bytes -> %s: %s\n",
-                           (unsigned)total, rel, esp_err_to_name(werr));
-                }
-                free(buf);
-            }
-        }
-    } else if (strcmp(line, "sdput") == 0) {
-        /* 串口投递模式(§53 A3): 见 handle_line 前的 sdput 块注释 */
-        if (arg == NULL || arg[0] == 0 || strchr(arg, ' ') != NULL ||
-            strlen(arg) >= sizeof(s_put_rel)) {
-            printf("  用法: sdput <relpath>(随后 base64 行, '.' 结束 / '!' 中止)\n");
-        } else {
-            free(s_put_buf);
-            s_put_buf = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (s_put_buf == NULL) {
-                printf("  sdput: oom\n");
-            } else {
-                s_put_cap = 8192;
-                s_put_len = 0;
-                strlcpy(s_put_rel, arg, sizeof(s_put_rel));
-                s_put_active = true;
-                printf("  sdput: ready for base64 ('.'=finish)\n");
-            }
-        }
 #if CONFIG_ESP_CUBE_ENABLE_AI
     } else if (strcmp(line, "ask") == 0) {
         if (arg == NULL || arg[0] == 0) {
@@ -1021,9 +878,6 @@ static void handle_line(char *line)
  * 字节流, 命令行状态单份 —— 两通道同时敲字会串行, 实际单人使用无碍) */
 static char s_line[CLI_LINE_MAX];
 static int s_len;
-#if CONFIG_IDF_TARGET_ESP32P4
-static bool s_usj_ok;      /* USB-SJ 驱动 install 成功后才允许轮询读取 */
-#endif
 
 static void cli_char(uint8_t ch)
 {
@@ -1043,13 +897,10 @@ static void cli_char(uint8_t ch)
         /* 行首噪声字节(实测 0xFF: 主机打开串口的 DTR 切换毛刺, 间歇
          * 出现)——命令恒以 ASCII 开头, 直接丢弃; 行中 UTF-8 不受影响 */
     } else if (s_len < CLI_LINE_MAX - 1 && ch >= 0x20 && ch != 0x7f) {
-        /* 接受 ≥0x80 字节: UTF-8 中文关键词直通(搜索必需)。
-         * sdput 投递期抑制逐字符回显(TX 直写突发会拖垮 RX 处理) */
+        /* 接受 ≥0x80 字节: UTF-8 中文关键词直通(搜索必需) */
         s_line[s_len++] = (char)ch;
-        if (!s_put_active) {
-            putchar(ch);                    /* 本地回显(双控制台都见) */
-            fflush(stdout);
-        }
+        putchar(ch);                        /* 本地回显(双控制台都见) */
+        fflush(stdout);
     }
 }
 
@@ -1070,18 +921,10 @@ static void cli_task(void *arg)
      * 而 USB-SJ 独立枚举且烧录通道一直健康; stdout 本就双发
      * (CONSOLE_SECONDARY_USB_SERIAL_JTAG=y), 响应天然回显 ACM1 —— CLI
      * 从此双通道, 单点失效不再阻塞排障(docs/19 §55.7)。 */
-    /* 持续输入(串口投递)时默认 256B RX 偏小, 放大。tx 必须非 0(驱动
-     * 硬要求, 传 0 → install 失败 "TX buffer is not prepared" → 若仍
-     * 轮询读函数 = 首次调用即 Load access fault, 2026-11-18 板上实证) */
-    const usb_serial_jtag_driver_config_t usj_cfg = {
-        .rx_buffer_size = 2048,
-        .tx_buffer_size = 512,
-    };
+    const usb_serial_jtag_driver_config_t usj_cfg =
+        USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     if (usb_serial_jtag_driver_install((usb_serial_jtag_driver_config_t *)&usj_cfg)
-        == ESP_OK) {
-        s_usj_ok = true;
-    } else {
-        /* install 失败绝不可再轮询读函数(未初始化上下文=Load fault) */
+        != ESP_OK) {
         ESP_LOGW(TAG, "usj driver fail(仅 UART0 输入)");
     }
 #endif
@@ -1095,17 +938,11 @@ static void cli_task(void *arg)
             continue;
         }
 #if CONFIG_IDF_TARGET_ESP32P4
-        /* UART0 空闲窗口排空 USB-SJ(读空即止)。若只取固定小量再回 UART,
-         * 吞吐被钳在 32B/100ms=320B/s, 持续输入(串口投递)必溢出丢字节
-         * → 拼出垃圾命令行随机触发任意 CLI 命令(2026-11-18 板上实证) */
-        if (s_usj_ok) {
-            uint8_t ub[128];
-            int m;
-            while ((m = usb_serial_jtag_read_bytes(ub, sizeof(ub), 0)) > 0) {
-                for (int i = 0; i < m; i++) {
-                    cli_char(ub[i]);
-                }
-            }
+        /* UART0 空闲间隙轮询 USB-SJ(≤100ms 延迟, 命令行足够) */
+        uint8_t ub[32];
+        int m = usb_serial_jtag_read_bytes(ub, sizeof(ub), 0);
+        for (int i = 0; i < m; i++) {
+            cli_char(ub[i]);
         }
 #endif
     }
