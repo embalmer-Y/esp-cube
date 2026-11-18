@@ -694,11 +694,13 @@ esp_err_t soul_start(void)
     ESP_RETURN_ON_ERROR(cube_event_subscribe(soul_evt_cb, NULL),
                         TAG, "evt subscribe");
     /* 栈预分配(docs/22 §3B): RTCRAM 定置(1Hz 低频任务, 非 DMA/非 PIE,
-     * v6.1 释放 HP DRAM), 3KB 链接期占位 */
+     * v6.1 释放 HP DRAM)。4KB: 3KB 时 panic 转储实证帧底距栈界仅 ~20B,
+     * 向下溢出砸穿相邻 cli 栈上下文区(2026-11-18 Instruction access
+     * fault MEPC=0, 静态相邻摆放的固有害); v5 动态期同深度砸的是堆 */
     static StaticTask_t s_soul_tcb;
-    static StackType_t s_soul_stack[3072 / sizeof(StackType_t)]
+    static StackType_t s_soul_stack[4096 / sizeof(StackType_t)]
         __attribute__((section(".rtc.bss")));
-    if (xTaskCreateStatic(soul_task, "soul", 3072, NULL, 4,
+    if (xTaskCreateStatic(soul_task, "soul", 4096, NULL, 4,
                           s_soul_stack, &s_soul_tcb) == NULL) {
         return ESP_ERR_NO_MEM;
     }
