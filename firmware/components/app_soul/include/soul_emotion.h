@@ -26,15 +26,17 @@ extern "C" {
 /* ---- 感受态（九维；18 号 §2.1 的 Kaleido 剪裁版）---- */
 
 struct ke_state {
-	float valence;         /* [-1,1] 唯一带符号维（改善正/恶化负） */
+	float valence;         /* [-1,1] 显示效价 = 0.65×快层+0.35×mood(docs/24 §2.1) */
+	float mood;            /* [-1,1] 慢层心境(τ≈3h, 三水库满足度导出; docs/24 §2.1) */
 	float arousal;         /* [0,1]                            */
 	float urgency;         /* [0,1]                            */
-	float persistence;     /* [0,1] 慢谱（|valence| 达伦理阈=1） */
+	float persistence;     /* [0,1] 慢谱（|valence| 滤波; S4 随 trait 重审） */
 	float controllability; /* [0,1]                            */
 	float novelty;         /* [0,1] 感觉预测误差供给           */
 	float uncertainty;     /* [0,1] 信念不确定性供给            */
 	float social_bond;     /* [0,1] 互动强度积分（Kaleido 特有） */
 	bool ethics_latched;   /* 极端持续负面闩锁（只允许安抚模板） */
+	float ethics_load;     /* 闩锁负荷遥测 [0,∞)（docs/23 E2b 遗留收口） */
 };
 
 /* ---- 每拍输入 ---- */
@@ -53,12 +55,17 @@ struct ke_inputs {
 				    kd error_sum 直供；raw valence 域随
 				    权重与驱力数，发布 clip [−1,1]）   */
 	float drive_error_max;   /* max e_d（arousal/urgency 源）      */
+	float drive_sat[3];      /* 三驱力水位 [0,1]（social/stim/rest;
+				    mood 慢层源——AIBO 满足度口径,
+				    docs/24 §2.1; have_drive 时有效）  */
 	enum ke_receipt receipt; /* 执行回执（→controllability）       */
 	bool have_residual;      /* novelty 输入有效性位（D7：无效拍保持）*/
 	float sensory_residual_mean; /* 感觉预测误差 → novelty         */
 	bool have_uncertainty;   /* uncertainty 输入有效性位（D7）      */
 	float belief_uncertainty_mean; /* 1−p_max → uncertainty        */
 	bool social_event;       /* 本拍发生真实互动（→social_bond）   */
+	bool soothe_event;       /* 温和互动安抚(voice/touch/正面轮;
+				    闩锁期减载, docs/24 §2.2)         */
 };
 
 /* ---- 输出（消费方：express/动画、speech/TTS hint、LLM prompt 注入）---- */
@@ -103,7 +110,8 @@ void ke_step(uint64_t tick, const struct ke_inputs *in,
 	     struct ke_output *out);
 const struct ke_state *ke_state_snapshot(void);
 void ke_reset(const struct ke_state *init); /* NULL=全零 */
-/* 伦理闩锁解锁（owner 批准语义：云端确认/长正交互后调用；28 号 D3） */
+/* 伦理闩锁解锁——显式重置(owner/出厂路径)。常规解锁走动力学:
+ * 时间自愈+安抚加速+施密特(docs/24 §2.2), 无需调用本函数 */
 void ke_ethics_clear(void);
 
 /* 动力学原语（测试与 ignition 复用；18 号 §2.2 六算子）

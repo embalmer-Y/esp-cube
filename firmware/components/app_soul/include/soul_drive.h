@@ -57,6 +57,7 @@ struct kd_params {           /* 冻结表（内置 static const；可 kd_init �
 	float metabolic[KD_N];   /* 每拍水平消耗 ≥0（1Hz 拍）             */
 	float pulse[KD_EVT_CNT]; /* 按 kd_event 的 social 恢复幅度        */
 	float stim_event;        /* ROUND_OK/BARGE 对 stim 的恢复         */
+	float stim_recover;      /* stimulating 拍 stim 回充(S2: 播放/会话) */
 	float rest_recover;      /* quiet/charging 拍 rest 恢复幅度       */
 	float band;              /* 0.1（恢复正常带，锚 Q-L05-03③）      */
 };
@@ -69,6 +70,9 @@ struct kd_inputs {
 	bool quiet;              /* 本拍静息（idle 且无播放）→ rest 恢复  */
 	bool charging;           /* 充电中 → rest 恢复（与 quiet 同路
 				  * 同份，不叠加——28 号 §9.2 表口径）    */
+	bool stimulating;        /* 环境刺激在场(播放/会话中) → stim 回充
+				  * (S2, docs/24 §2.1 前置: 音乐/电台/对话
+				  * 均为刺激源, 旧表 stim 无此通道=装饰维) */
 	enum kd_event event;     /* 本拍交互事件（至多一个；多事件分拍喂）*/
 };
 

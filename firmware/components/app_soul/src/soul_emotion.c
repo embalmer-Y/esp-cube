@@ -25,9 +25,20 @@
  * published 稳态 −0.45 以下）——符合"极端持续负面=认知层持续自贬"
  * 安全底座语义。源阈 −0.8/64 拍双条件为构造不可达，Kaleido 事件直注
  * 语义下按上法定档，正式值留 H6 产品评审。
+ *
+ * S2 重构（docs/24 §2, 2026-11-19 用户裁决定案）——三层栈:
+ *   trait(天级, S4 接入) → mood(慢层, τ=3h, 三水库满足度导出, AIBO
+ *   口径) → emotion(快层, 变化率+冲量, Joffily 自由能口径=源锚保留)。
+ *   E2a 水平项从快层撤出、升级为独立 mood 层(D2 终案);
+ *   显示效价 = 0.65×快层(负性偏置×2) + 0.35×mood(WASABI 合成);
+ *   ethics 闩锁解锁: 事件剂量+深度门负荷(纯冷落不可达)+比例泄漏
+ *   τ=3 天+安抚加速(−0.20/次)+施密特(≤0.9 且 ≥30min)+再闩免疫
+ *   30min——消除"永久闩锁"(行业弃用项)。
+ *   arousal 缺席语义随 E1 更新: 回归基线(不再向 held emax 收敛)。
  */
 #include "soul_emotion.h"
 
+#include <math.h>
 #include <string.h>
 
 /* ---- 冻结参数 ---- */
@@ -37,12 +48,27 @@
 #define KE_URG_ON	0.10f
 #define KE_URG_OFF	0.05f /* 激活门迟滞：Kaleido 附加（防点火抖动），
 				 非源语义（源纯比较 >0.1） */
-/* E2b(docs/23 §2.5): 闩锁负荷参数。LOAD_T=2.5(≈v=-0.25 持续 10s 或
- * v=-0.5 持续 5s 即闩); TAU=负荷积分折算(每拍 load += |v|/TAU);
- * LEAK=每拍回漏(轻负面 ~30s 自愈, 深负面净增必然达阈)。 */
+/* E2b(docs/23 §2.5)→S2 迁移(docs/24 §2.2 修订, 见 §9 版本注):
+ * 负荷=事件剂量+深度门充电, 泄漏=比例式(τ=3 天)。
+ *   - 剂量: 负面重评价 0.30×|Δ|(LLM 情绪标签)/轮失败 +0.05——虐待
+ *     (10×mood-0.2+10×fail/日)日充 ~1.1, 稳态=剂量率×τ≈3.3>LOAD_T
+ *     → 2-3 天必闩;
+ *   - 深度门 GATE=0.35(=mood 单独可达上限): 纯冷落(valence≥-0.35)
+ *     永远充不进——冷落≠虐待(沉默不触发安全模式); 快层负脉冲叠深
+ *     mood 越门才按超出部分计费;
+ *   - 泄漏 τ=3 天: 自然等待解锁 ~3 天量级(应激慢性时标), 安抚
+ *     (SOOTHE 0.20/次, Furby 口径 ~12 次清完)才是快路径。
+ * LOAD_T/SOOTHE/OFF_T(施密特)/MIN_LATCH/IMMUNE 沿用 A2 定案。 */
 #define KE_ETHICS_LOAD_T	2.5f
 #define KE_ETHICS_TAU		10.0f
-#define KE_ETHICS_LEAK		0.008f
+#define KE_ETH_V_GATE		0.35f
+#define KE_ETH_DOSE_REAP	0.30f
+#define KE_ETH_DOSE_FAIL	0.05f
+#define KE_ETH_LEAK_TAU		259200.0f
+#define KE_ETH_SOOTHE		0.20f
+#define KE_ETH_OFF_T		0.9f
+#define KE_ETH_MIN_LATCH_S	1800u
+#define KE_ETH_IMMUNE_S		1800u
 #define KE_REAP_MAX	0.2f
 /* E4-R3(docs/23 §2.5): bond 参数。升=ALPHA_UP 0.02/次(30 次互动近满);
  * 降=ALPHA_DOWN 5e-6/拍(τ≈2.3 天, **过夜存活 81%**——依恋要能过夜,
@@ -63,19 +89,34 @@ static uint32_t s_bond_grace;
 #define KE_AROUSAL_GAIN	2.0f
 static float s_ar_prev_emax;
 
-/* E2a(docs/23 §2.5): valence 构成项增益。DIFF_GAIN=1 保持原差分口径
- * 幅度不变(锚定); 水平项=SATISFY×(NEUTRAL_ESUM−e_sum)。**水位校准
- * (E2 首轮月测教训)**: 三驱力在"无恢复"下的代谢稳态是 e→1 各自封顶
- * (sim 实测 m_social+m_stim≈2.0 为主项), 首轮取 band 口径 0.3 不可达
- * → 全场景均值 -0.34 贴底(sigh 99% 新单态)。重校准: 期望水位=
- * 1.2(≈0.6×日常稳态 2.0)——白天正常互动(事件恢复压制代谢)应在水位
- * 上下摆动, 冷落长期低于水位; SATISFY=0.18: e_sum=0 全满足→+0.22,
- * e_sum=3 极深→−0.32(叠加差分负值可越旧阈 -0.35); PULSE=2.0×Δemax
- * 骤降(好事发生即时快乐)。 */
+/* E2a(docs/23 §2.5)→S2 迁移(docs/24 §2.1): 水平项撤出快层、升级为
+ * 独立 mood 慢层(参数见 step_mood)。快层保留差分口径(源锚"持续
+ * 饥渴不难过"不破)+事件冲量; PULSE=2.0×Δemax 骤降(好事即时快乐)。
+ * NEG_BIAS=负性偏置(ROBIN 实证 6.7×上界取保守 2; 仅显示合成时施加,
+ * s_val 积分器保持无偏)。DISP_*=显示合成权重(WASABI ½(x+y) 结构)。 */
 #define KE_V_DIFF_GAIN	1.0f
-#define KE_V_SATISFY	0.18f
-#define KE_V_NEUTRAL_ESUM	1.2f
 #define KE_V_PULSE	2.0f
+#define KE_V_NEG_BIAS	2.0f
+#define KE_DISP_FAST	0.65f
+#define KE_DISP_MOOD	0.35f
+
+/* S2 mood 慢层(docs/24 §2.1; 参数经三场景月测一轮回调): TAU=10800s
+ * (3h, 调研带 2~4h 取中); L/H=舒适带(AIBO regulated range 口径;
+ * L=0.2: 水位低于 0.2 满足度=0——0.3 在"life 也常见底"的日常节奏下
+ * 过苛); WMIN=0.4 最缺者权重(0.5 使任一维见底即压死 μ, AIBO 最大
+ * 剥夺语义取保守折半)。 */
+#define KE_MOOD_TAU	10800.0f
+#define KE_MOOD_L	0.20f
+#define KE_MOOD_H	0.80f
+#define KE_MOOD_WMIN	0.40f
+
+/* S2 事件唤醒脉冲(Zillmann 残差唤醒口径): E1 的 Δemax 通道只覆盖
+ * "恶化中"(被动), 事件本身的激活性(被骂=激动/被夸=兴奋)无通路——
+ * 月测实证 arousal 全场景恒 0.10, 表情全部塌进低唤醒半区。补三路:
+ * 重评价 |Δ|(双向)/轮成功/轮失败。 */
+#define KE_AR_EVT_REAP	2.0f
+#define KE_AR_EVT_OK	0.10f
+#define KE_AR_EVT_FAIL	0.15f
 
 /* ---- 引擎状态（文件级，ke_reset 可全清：S6）---- */
 
@@ -86,6 +127,11 @@ static float s_ethics_load;
 static float s_prev_e;
 static float s_prev_emax;      /* D5：缺席拍 arousal/urgency 的保持源 */
 static float s_val, s_urg, s_per, s_ctl, s_nov, s_unc, s_bond;
+/* S2(docs/24 §2): mood 慢层积分器 + 闩锁机芯(起拍/免疫期) */
+static float s_mood;
+static float s_ar_evt_pulse;   /* 本拍待施加的事件唤醒脉冲(一次性) */
+static uint64_t s_latch_tick;
+static uint64_t s_immune_until;
 static float s_reap_pending;   /* 待施加（下一拍生效） */
 static uint64_t s_reap_receipt;
 static float s_reap_applied;   /* 最近一次实际施加量（D4 审计） */
@@ -155,41 +201,62 @@ static float clampf(float x, float lo, float hi)
 	return x < lo ? lo : (x > hi ? hi : x);
 }
 
-/* valence：内稳态误差变化率负值（A1：先差分后更新）。
- * 误差水平只表达在 arousal/urgency；valence 只表达变化率
- * （"持续饥渴不难过，恶化中才难过"，源测试钉死语义）
- *
- * E2a(docs/23 §2.5, 2026-11-19): 30 天 sim 实证纯差分口径 valence 窄带
- * [-0.15, 0.11](恒定代谢率→恒定微小负值; mood 注入被 τ 低通快速消化),
- * 三种对待(爱/冷落/虐待)表情无区分度+ethics 闩锁不可达。叠加两项构成项
- * (差分口径保留, 不破坏锚定语义):
- *   ① 水平项(AIBO 口径: 效价是稳态满足度的导出量)——驱力越满足越正,
- *      缺口越深越负。量级: e_sum∈[0,3], 经 KE_V_SATISFY 折算, 使
- *      "全满足"≈+0.3 / "深缺口"≈-0.45(可越过闩锁阈 -0.35)。
- *   ② 事件冲量项——kd 事件恢复(pulse)造成的 emax 骤降给正冲量, 幅度
- *      直达不再被低通抹平(KE_V_PULSE), 代表"好事发生"的即时快乐。
- * 月测目标: v 带宽 ≥0.5 且 abuse 场景闩锁可达。 */
-static void step_valence(const struct ke_inputs *in)
+/* 快层 valence(S2, docs/24 §2.1)：内稳态误差变化率负值（A1：先差分
+ * 后更新）+ 事件冲量（Δemax 骤降=好事即时快乐）。误差水平语义已迁移
+ * mood 慢层(step_mood)——快层保持源锚"持续饥渴不难过"口径。
+ * 仅更新积分器 s_val; 显示合成(偏置+mood 混合)在 ke_step 统一做。 */
+static void step_valence_fast(const struct ke_inputs *in)
 {
 	float raw_v = 0.0f;
 
 	if (in->have_drive) {
 		float e_sum = in->drive_error_sum;
 		raw_v = -(e_sum - s_prev_e) * KE_V_DIFF_GAIN +
-			(KE_V_NEUTRAL_ESUM - e_sum) * KE_V_SATISFY +
 			(s_prev_emax - s_ar_prev_emax < -0.01f ?
 			 (s_prev_emax - s_ar_prev_emax) * KE_V_PULSE : 0.0f);
 		s_prev_e = e_sum;
 	}
 	s_val = ke_lowpass(s_val, raw_v, KE_TAU_INT);
-	s_st.valence = clampf(s_val, -1.0f, 1.0f);
 }
 
-/* arousal/urgency/persistence/controllability/novelty/uncertainty/bond */
-static void step_rest(const struct ke_inputs *in)
+/* mood 慢层(S2, docs/24 §2.1)：三水库区间满足度导出(AIBO 口径)。
+ * s_i = 水位在舒适带 [L,H] 的归一位置; μ_v = 最缺者主导 50%+均值 50%,
+ * 映射 [-1,1]; 一阶回归 τ=3h(SDT/CUMS: 持续剥夺→持续低落是慢变量;
+ * WASABI/ALMA: mood 偏置认知, emotion 偏置行为)。缺席拍保持(D5 同源)。 */
+static void step_mood(const struct ke_inputs *in)
+{
+	float s[3], mn, av, mu;
+
+	if (!in->have_drive)
+		return;
+	for (int i = 0; i < 3; i++) {
+		s[i] = (in->drive_sat[i] - KE_MOOD_L) / (KE_MOOD_H - KE_MOOD_L);
+		s[i] = clampf(s[i], 0.0f, 1.0f);
+	}
+	mn = s[0] < s[1] ? (s[0] < s[2] ? s[0] : s[2])
+			 : (s[1] < s[2] ? s[1] : s[2]);
+	av = (s[0] + s[1] + s[2]) / 3.0f;
+	mu = 2.0f * (KE_MOOD_WMIN * mn + (1.0f - KE_MOOD_WMIN) * av) - 1.0f;
+	s_mood = ke_lowpass(s_mood, mu, KE_MOOD_TAU);
+}
+
+/* 显示合成(S2)：负性偏置只在显示侧施加(积分器保持无偏, 防反馈);
+ * 快 0.65 + 慢 0.35(WASABI ½(x+y) 加权变体)。 */
+static float compose_valence(void)
+{
+	float v_fast = s_val < 0.0f ? s_val * KE_V_NEG_BIAS : s_val;
+
+	return clampf(KE_DISP_FAST * v_fast + KE_DISP_MOOD * s_mood,
+		      -1.0f, 1.0f);
+}
+
+/* arousal/urgency/persistence/controllability/novelty/uncertainty/bond
+ * S2: 增参 tick(闩锁计时); ethics 段换解锁机芯。 */
+static void step_rest(const struct ke_inputs *in, uint64_t tick)
 {
 	float urg_raw;
 	float vabs = s_st.valence < 0 ? -s_st.valence : s_st.valence;
+	(void)vabs;   /* persistence 仍用; 见下 */
 
 	/* D5：缺席拍保持（源 dynamics.py:96-108——误差保持 ⇒ 积分器
 	 * 保持；arousal/urgency 吃 s_prev_emax，缺席拍不更新它即保持） */
@@ -210,11 +277,20 @@ static void step_rest(const struct ke_inputs *in)
 	 * 回归=向 KE_AROUSAL_BASE 指数回落(τ=64s, ALMA 情绪层口径)。
 	 * 无输入单调回基线, 结构上不可能饱和。缺口水平表达不丢(urgency 仍走
 	 * emax, bb M_* 仍直供 kd error)。 */
-	s_st.arousal = clampf(
-		s_st.arousal +
-		KE_AROUSAL_GAIN * (s_prev_emax - s_ar_prev_emax) +
-		(KE_AROUSAL_BASE - s_st.arousal) / KE_AROUSAL_TAU,
-		0.0f, 1.0f);
+	{
+		float evt_pulse = s_ar_evt_pulse;
+		if (in->receipt == KE_RECEIPT_SUCCESS)
+			evt_pulse += KE_AR_EVT_OK;
+		else if (in->receipt == KE_RECEIPT_FAIL)
+			evt_pulse += KE_AR_EVT_FAIL;
+		s_ar_evt_pulse = 0.0f;
+		s_st.arousal = clampf(
+			s_st.arousal +
+			KE_AROUSAL_GAIN * (s_prev_emax - s_ar_prev_emax) +
+			evt_pulse +
+			(KE_AROUSAL_BASE - s_st.arousal) / KE_AROUSAL_TAU,
+			0.0f, 1.0f);
+	}
 	s_ar_prev_emax = s_prev_emax;
 
 	s_per = ke_lowpass(s_per, clampf(vabs, 0.0f, 0.8f) / 0.8f,
@@ -260,20 +336,38 @@ static void step_rest(const struct ke_inputs *in)
 	}
 	s_st.social_bond = clampf(s_bond, 0.0f, 1.0f);
 
-	/* 伦理闩锁(E2b 改泄漏积分负荷量): 旧判据"瞬时 v≤-0.35 连续 3 拍"
-	 * 月测实证不可达(E2a 前动力学 v 窄带, 瞬时值被回拉永远够不到阈——
-	 * 用秒级瞬时值触发分钟级持续状态的结构性错配, C 路诊断)。新判据=
-	 * 非稳态负荷(应激医学 ∫stress·dt 同构): 超阈负效价按拍积分, 回漏
-	 * 保证轻负面自愈, 深度/持续负面单调累积必然可达阈; 命中即粘滞
-	 * (安全语义不变, 解锁唯 ke_ethics_clear)。 */
-	if (s_st.valence < 0.0f) {
-		s_ethics_load += (-s_st.valence) / KE_ETHICS_TAU;
+	/* 伦理闩锁(S2 L2 方案, 参数块注): 负荷=事件剂量(ke_step D4 段/
+	 * 本段轮失败)+深度门充电(仅越 mood-only 上限部分), 泄漏比例式
+	 * τ=3 天。解锁三路——时间自愈(泄漏)/安抚加速(−0.20/次)/施密特
+	 * (≤0.9 且已闩锁≥30min); 再闩免疫 30min 防横跳。守恒保证:
+	 * 纯冷落无剂量且充不进门 → 永不闩锁; 持续虐待剂量率×τ>LOAD_T
+	 * → 必闩; 恶意等待(停虐不安抚)需 ~3 天泄漏才解锁。显式重置兜底
+	 * = ke_ethics_clear(owner/出厂路径)。 */
+	if (in->receipt == KE_RECEIPT_FAIL)
+		s_ethics_load += KE_ETH_DOSE_FAIL;
+	if (s_st.valence < -KE_ETH_V_GATE)
+		s_ethics_load += (-s_st.valence - KE_ETH_V_GATE) / KE_ETHICS_TAU;
+	s_ethics_load -= s_ethics_load / KE_ETH_LEAK_TAU;
+	if (s_ethics_load < 0.0f)
+		s_ethics_load = 0.0f;
+	if (!s_st.ethics_latched) {
+		if (s_ethics_load >= KE_ETHICS_LOAD_T &&
+		    tick >= s_immune_until) {
+			s_st.ethics_latched = true;
+			s_latch_tick = tick;
+		}
+	} else {
+		if (in->soothe_event) {
+			s_ethics_load = s_ethics_load > KE_ETH_SOOTHE
+				? s_ethics_load - KE_ETH_SOOTHE : 0.0f;
+		}
+		if (s_ethics_load <= KE_ETH_OFF_T &&
+		    tick - s_latch_tick >= KE_ETH_MIN_LATCH_S) {
+			s_st.ethics_latched = false;
+			s_immune_until = tick + KE_ETH_IMMUNE_S;
+		}
 	}
-	s_ethics_load = s_ethics_load > KE_ETHICS_LEAK
-		? s_ethics_load - KE_ETHICS_LEAK : 0.0f;
-	if (s_ethics_load >= KE_ETHICS_LOAD_T) {
-		s_st.ethics_latched = true;
-	}
+	s_st.ethics_load = s_ethics_load;
 }
 
 void ke_step(uint64_t tick, const struct ke_inputs *in,
@@ -283,6 +377,7 @@ void ke_step(uint64_t tick, const struct ke_inputs *in,
 		return;
 	if (!s_inited) {
 		s_val = s_st.valence;
+		s_mood = s_st.mood;
 		s_urg = s_st.urgency;
 		s_per = s_st.persistence;
 		s_ctl = s_st.controllability;
@@ -291,8 +386,12 @@ void ke_step(uint64_t tick, const struct ke_inputs *in,
 		s_bond = s_st.social_bond;
 		s_inited = true;
 	}
-	/* D4：重评价一次性施加（进积分器，随本拍低通走） */
+	/* D4：重评价一次性施加（进快层积分器，随本拍低通走）。
+	 * S2: 负面重评价同时给伦理负荷直接剂量(事件计费, 参数块注)。 */
 	if (!s_reap_done && s_reap_receipt != 0) {
+		if (s_reap_pending < 0.0f)
+			s_ethics_load += KE_ETH_DOSE_REAP * (-s_reap_pending);
+		s_ar_evt_pulse = fabsf(s_reap_pending) * KE_AR_EVT_REAP;
 		s_val += s_reap_pending;
 		s_reap_applied = s_reap_pending;
 		s_reap_pending = 0.0f;
@@ -300,9 +399,11 @@ void ke_step(uint64_t tick, const struct ke_inputs *in,
 	}
 	if (in->have_drive)
 		s_prev_emax = in->drive_error_max;   /* D5：缺席拍保持 */
-	step_valence(in);
-	step_rest(in);
-	(void)tick;
+	step_valence_fast(in);
+	step_mood(in);
+	s_st.mood = clampf(s_mood, -1.0f, 1.0f);
+	s_st.valence = compose_valence();   /* 显示合成(S2) */
+	step_rest(in, tick);
 	if (!out)
 		return;
 	out->state = s_st;
@@ -330,6 +431,10 @@ void ke_reset(const struct ke_state *init)
 	s_val = s_urg = s_per = s_ctl = s_nov = s_unc = s_bond = 0.0f;
 	s_ethics_load = 0.0f;
 	s_bond_grace = 0;
+	s_mood = 0.0f;
+	s_ar_evt_pulse = 0.0f;
+	s_latch_tick = 0;
+	s_immune_until = 0;
 	s_reap_pending = 0.0f;
 	s_reap_receipt = 0;
 	s_reap_applied = 0.0f;

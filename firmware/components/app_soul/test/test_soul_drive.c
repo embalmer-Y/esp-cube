@@ -33,10 +33,12 @@ static void test_reset_full_levels(void)
 	kd_init(NULL);
 	kd_reset();
 	kd_step(0, &in, &out);
-	/* 默认表代谢首拍即消耗：0.9998/0.9999/0.9997（误差=代谢） */
-	TEST_ASSERT_TRUE(feq(out.level[KD_SOCIAL], 0.9998f));
+	/* S2 重标定默认表(docs/24 §2.1 前置): social 8e-6/stim 4e-5/
+	 * rest 3e-4 → 首拍 0.999992/0.99996/0.9997, sum=3.48e-4 */
+	TEST_ASSERT_TRUE(feq(out.level[KD_SOCIAL], 1.0f - 8e-6f));
+	TEST_ASSERT_TRUE(feq(out.level[KD_STIM], 1.0f - 4e-5f));
 	TEST_ASSERT_TRUE(feq(out.level[KD_REST], 0.9997f));
-	TEST_ASSERT_TRUE(feq(out.error_sum, 6e-4f));
+	TEST_ASSERT_TRUE(feq(out.error_sum, 3.48e-4f));
 	TEST_ASSERT_TRUE(feq(out.error_max, 3e-4f));
 	TEST_ASSERT_EQUAL_INT(KD_SEV_NONE, out.sev[KD_SOCIAL]);
 	TEST_ASSERT_TRUE(feq(out.trend[KD_REST], 3e-4f));
@@ -243,10 +245,11 @@ static void test_default_params_scale(void)
 	kd_reset();
 	for (i = 0; i < 10; i++)
 		kd_step(i, &in, &out);
-	TEST_ASSERT_TRUE(feq(out.level[KD_SOCIAL], 0.998f));
-	TEST_ASSERT_TRUE(feq(out.level[KD_STIM], 0.999f));
+	/* S2 重标定: social 8e-6/stim 4e-5/rest 3e-4 ×10 拍 */
+	TEST_ASSERT_TRUE(feq(out.level[KD_SOCIAL], 1.0f - 8e-5f));
+	TEST_ASSERT_TRUE(feq(out.level[KD_STIM], 1.0f - 4e-4f));
 	TEST_ASSERT_TRUE(feq(out.level[KD_REST], 0.997f));
-	TEST_ASSERT_TRUE(feq(out.error_sum, 0.006f));
+	TEST_ASSERT_TRUE(feq(out.error_sum, 3.48e-3f));
 	TEST_ASSERT_EQUAL_INT(KD_SEV_NONE, out.sev[KD_REST]);
 }
 

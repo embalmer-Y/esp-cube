@@ -27,12 +27,13 @@
 #include "soul_behavior.h"
 #include "soul_drive.h"
 #include "soul_emotion.h"
+#include "soul_face.h"
 #include "soul_ignition.h"
 
 /* ---- 模拟世界状态(感知侧) ---- */
 static bool w_net, w_play, w_ai, w_timesync;
 static uint8_t w_pend;              /* PEND 位(与 soul.c 同语义) */
-enum { P_BARGE = 1, P_ROUND_OK = 2, P_ROUND_FAIL = 4, P_VOICE = 8 };
+enum { P_BARGE = 1, P_ROUND_OK = 2, P_ROUND_FAIL = 4, P_VOICE = 8, P_TOUCH = 16 };
 static float w_mood_req; static uint32_t w_mood_seq;
 
 /* ---- 深思记账(复刻 soul_think.c 静态) ---- */
@@ -42,22 +43,10 @@ static bool     s_last_silent;
 static float    s_last_silent_score;
 static uint32_t s_think_fires, s_think_blocked[4], s_think_reason[6];
 
-/* ---- 底色表(复刻 soul.c s_face_map + 迟滞逻辑) ---- */
-typedef struct { const char *clip; float v, a; } fmap_t;
-static const fmap_t FMAP[] = {
-    {"smile",0.6f,0.50f},{"smile_static",0.5f,0.30f},{"laugh",0.8f,0.80f},
-    {"snigger",0.6f,0.60f},{"yummy",0.7f,0.60f},{"confident",0.5f,0.55f},
-    {"leisure",0.3f,0.30f},{"music",0.5f,0.60f},{"shy",0.2f,0.45f},
-    {"mock",-0.1f,0.55f},{"sad",-0.6f,0.25f},{"cry",-0.7f,0.45f},
-    {"sigh",-0.4f,0.20f},{"angry",-0.7f,0.80f},{"panic",-0.5f,0.90f},
-    {"shocked",0.0f,0.90f},{"question",0.0f,0.60f},{"ponder",0.0f,0.45f},
-    {"investigate",0.1f,0.55f},{"yawn",0.0f,0.10f},{"asleep",0.1f,0.05f},
-    {"mute",0.0f,0.30f},{"sleepy",-0.1f,0.15f},{"neutral",0.0f,0.40f},
-};
-#define FMAP_N (int)(sizeof FMAP / sizeof FMAP[0])
+/* ---- 底色(S2: soul_face 同源模块——扇区三件套单一真源,
+ *      与 soul.c 完全同代码同参数; 旧双份 FMAP 表废弃) ---- */
 static char cur_face[24] = "leisure";
-static uint32_t since_tick;
-static uint32_t face_dwell[FMAP_N];
+static uint32_t face_dwell[SOUL_FACE_N];
 
 /* ---- 行为打桩(条件表复刻 soul.c, exec=记录) ---- */
 static uint32_t bhv_fires[8];
@@ -86,30 +75,19 @@ static void behaviors_register_sim(void)
         .cons_n = 3, .threshold = 0.50f, .w = 1.0f, .cooldown_s = 480, .exec = on_self_face });
 }
 
-static void face_bg_select(float v, float a, uint32_t tick)
+static void face_bg_select(const struct ke_state *ke, uint32_t t, uint32_t idle_s)
 {
-    int best = -1; float bd = 1e9f;
-    for (int i = 0; i < FMAP_N; i++) {
-        float dv = v - FMAP[i].v, da = a - FMAP[i].a;
-        float d = dv * dv + da * da * 0.5f;
-        if (d < bd) { bd = d; best = i; }
+    const char *clip = soul_face_bg(ke->valence, ke->arousal, ke->mood,
+                                    t, idle_s, ke->ethics_latched);
+    if (strcmp(cur_face, clip) != 0) {
+        snprintf(cur_face, sizeof(cur_face), "%s", clip);
+        printf("[%6ds] face bg -> %s (v=%.2f a=%.2f m=%.2f)\n",
+               (int)t, cur_face, ke->valence, ke->arousal, ke->mood);
     }
-    if (best < 0) return;
-    if (strcmp(cur_face, FMAP[best].clip) == 0) { since_tick = tick; goto dwell; }
-    if (tick - since_tick < 180) return;
-    for (int i = 0; i < FMAP_N; i++) {
-        if (strcmp(cur_face, FMAP[i].clip) == 0) {
-            float cv = v - FMAP[i].v, ca = a - FMAP[i].a;
-            if (bd > 0.49f * (cv * cv + ca * ca * 0.5f)) return;
-            break;
+    for (int i = 0; i < SOUL_FACE_N; i++)
+        if (strcmp(cur_face, soul_face_map[i].clip) == 0) {
+            face_dwell[i]++; break;
         }
-    }
-    strncpy(cur_face, FMAP[best].clip, sizeof(cur_face) - 1);
-    since_tick = tick;
-    printf("[%6ds] face bg -> %s (v=%.2f a=%.2f)\n", (int)tick, cur_face, v, a);
-dwell:
-    for (int i = 0; i < FMAP_N; i++)
-        if (strcmp(cur_face, FMAP[i].clip) == 0) { face_dwell[i]++; break; }
 }
 
 /* ---- 事件脚本 ---- */
@@ -142,7 +120,10 @@ static void inject(const char *ln)
     } else if (!strcmp(cmd, "timesync")) { w_timesync = atoi(arg); soul_bb_salience(0.5f); }
     else if (!strcmp(cmd, "voice")) { w_pend |= P_VOICE; soul_bb_salience(0.3f); }
     else if (!strcmp(cmd, "barge")) { w_pend |= P_BARGE; soul_bb_salience(0.3f); }
-    else if (!strcmp(cmd, "touch")) soul_bb_set(SOUL_BB_TOUCH, 1.0f);
+    else if (!strcmp(cmd, "touch")) {
+        /* S2: touch 接 kd 事件(对齐 soul.c; 旧壳只写黑板不进 kd=保真缺口) */
+        w_pend |= P_TOUCH; soul_bb_salience(0.3f); soul_bb_set(SOUL_BB_TOUCH, 1.0f);
+    }
     else if (!strcmp(cmd, "round")) {
         soul_bb_salience(0.3f);
         if (!strcmp(arg, "ok")) w_pend |= P_ROUND_OK;
@@ -177,10 +158,11 @@ int main(int argc, char **argv)
         qsort(evs, ev_n, sizeof(evs[0]), ev_cmp);
     }
     FILE *cf = NULL;
-    if (csv) { cf = fopen(csv, "w"); fprintf(cf, "t,v,a,urgency,bond,persist,"
+    if (csv) { cf = fopen(csv, "w"); fprintf(cf, "t,v,a,mood,urgency,bond,persist,"
         "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block,ethics\n"); }
 
     soul_behavior_reset();
+    soul_face_bg_reset();
     behaviors_register_sim();
     kd_reset(); ke_reset(NULL);
     w_net = true; soul_bb_set(SOUL_BB_NET, 1);
@@ -194,17 +176,19 @@ int main(int argc, char **argv)
     for (uint64_t t = 1; t <= ticks; t++) {
         while (ev_n > 0 && evs[0].t == t) { inject(evs[0].line + strspn(evs[0].line, "0123456789 ")); memmove(&evs[0], &evs[1], (size_t)(--ev_n) * sizeof(evs[0])); }
 
-        /* 事件消费(BARGE>ROUND>VOICE; 复刻 soul.c 优先级) */
+        /* 事件消费(BARGE>ROUND>VOICE>TOUCH; 复刻 soul.c 优先级) */
         enum kd_event evt = KD_EVT_NONE;
         int receipt = KE_RECEIPT_NONE;
         if (w_pend & P_BARGE) { w_pend &= ~P_BARGE; evt = KD_EVT_BARGE; }
         else if (w_pend & P_ROUND_OK) { w_pend &= ~P_ROUND_OK; evt = KD_EVT_ROUND_OK; receipt = KE_RECEIPT_SUCCESS; }
         else if (w_pend & P_ROUND_FAIL) { w_pend &= ~P_ROUND_FAIL; evt = KD_EVT_ROUND_FAIL; receipt = KE_RECEIPT_FAIL; }
         else if (w_pend & P_VOICE) { w_pend &= ~P_VOICE; evt = KD_EVT_VOICE; }
+        else if (w_pend & P_TOUCH) { w_pend &= ~P_TOUCH; evt = KD_EVT_TOUCH; }
 
         bool quiet_world = !w_ai && !w_play;        /* kd quiet 口径 */
         if (w_ai) last_active = (uint32_t)t;
-        struct kd_inputs din = { .tick = t, .quiet = quiet_world, .charging = false, .event = evt };
+        struct kd_inputs din = { .tick = t, .quiet = quiet_world, .charging = false,
+                                 .stimulating = (w_play || w_ai), .event = evt };
         kd_step(t, &din, &kd_out);
 
         if ((w_mood_seq & 1) && w_mood_req != 0) {
@@ -217,8 +201,15 @@ int main(int argc, char **argv)
             .have_drive = true,
             .drive_error_sum = kd_out.error_sum,
             .drive_error_max = kd_out.error_max,
+            .drive_sat = {
+                [KD_SOCIAL] = kd_out.level[KD_SOCIAL],
+                [KD_STIM] = kd_out.level[KD_STIM],
+                [KD_REST] = kd_out.level[KD_REST],
+            },
             .receipt = receipt,
             .social_event = evt != KD_EVT_NONE,
+            .soothe_event = (evt == KD_EVT_TOUCH ||
+                             receipt == KE_RECEIPT_SUCCESS),
         };
         ke_step(t, &kin, &ke_out);
         const struct ke_state *ke = ke_state_snapshot();
@@ -279,18 +270,24 @@ int main(int argc, char **argv)
             }
         }
 
-        face_bg_select(ke->valence, ke->arousal, (uint32_t)t);
+        {
+            uint32_t idle_s = (uint32_t)t > last_active
+                ? (uint32_t)t - last_active : 0;
+            if (idle_s > 3600) idle_s = 3600;
+            face_bg_select(ke, (uint32_t)t, idle_s);
+        }
         if (ke->valence < v_min) v_min = ke->valence;
         if (ke->valence > v_max) v_max = ke->valence;
         if (ke->arousal > a_max) a_max = ke->arousal;
 
         if (cf && (t % stride == 0))
-            fprintf(cf, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%d,%d,%d,%s,%d,%d,%d\n",
-                (unsigned long long)t, ke->valence, ke->arousal, ke->urgency,
-                ke->social_bond, ke->persistence, kd_out.error[KD_SOCIAL],
-                kd_out.error[KD_STIM], soul_bb_get(SOUL_BB_SALIENCE),
-                soul_bb_get(SOUL_BB_IDLE), quiet_hrs, w_net, w_play,
-                cur_face, fired, blocked, ke->ethics_latched ? 1 : 0);
+            fprintf(cf, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%d,%d,%d,%s,%d,%d,%d\n",
+                (unsigned long long)t, ke->valence, ke->arousal, ke->mood,
+                ke->urgency, ke->social_bond, ke->persistence,
+                kd_out.error[KD_SOCIAL], kd_out.error[KD_STIM],
+                soul_bb_get(SOUL_BB_SALIENCE), soul_bb_get(SOUL_BB_IDLE),
+                quiet_hrs, w_net, w_play, cur_face, fired, blocked,
+                ke->ethics_latched ? 1 : 0);
     }
 
     printf("\n===== SOUL SIM 摘要(%.2f 天) =====\n", ticks / 86400.0);
@@ -308,9 +305,9 @@ int main(int argc, char **argv)
     printf("底色驻留 top5: ");
     for (int pass = 0; pass < 5; pass++) {
         int bi = -1; uint32_t bv = 0;
-        for (int i = 0; i < FMAP_N; i++) if (face_dwell[i] > bv) { bv = face_dwell[i]; bi = i; }
+        for (int i = 0; i < SOUL_FACE_N; i++) if (face_dwell[i] > bv) { bv = face_dwell[i]; bi = i; }
         if (bi < 0) break;
-        printf("%s=%us(%.0f%%) ", FMAP[bi].clip, bv, 100.0f * bv / ticks);
+        printf("%s=%us(%.0f%%) ", soul_face_map[bi].clip, bv, 100.0f * bv / ticks);
         face_dwell[bi] = 0;
     }
     printf("\n");

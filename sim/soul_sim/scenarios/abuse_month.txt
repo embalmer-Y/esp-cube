@@ -1,3 +1,5 @@
+# abuse_month v2(S2): 27.5 天虐待(10×round fail+10×mood-0.2/日) 后 2.5 天恢复尾
+# (温和互动=安抚事件; R3-C3 闩锁可达且可恢复的验收设计)
 600 timesync 1
 30928 voice
 30958 round fail 别烦我
@@ -815,87 +817,71 @@
 2374431 voice
 2374461 round fail 别烦我
 2374491 mood -0.20
-2376246 voice
-2376276 round fail 别烦我
-2376306 mood -0.20
-2382712 voice
-2382742 round fail 别烦我
-2382772 mood -0.20
-2384224 voice
-2384254 round fail 别烦我
-2384284 mood -0.20
-2386542 voice
-2386572 round fail 别烦我
-2386602 mood -0.20
-2386723 voice
-2386753 round fail 别烦我
-2386783 mood -0.20
-2386825 voice
-2386855 round fail 别烦我
-2386885 mood -0.20
-2388128 voice
-2388158 round fail 别烦我
-2388188 mood -0.20
-2394556 voice
-2394586 round fail 别烦我
-2394616 mood -0.20
-2456422 voice
-2456452 round fail 别烦我
-2456482 mood -0.20
-2458924 voice
-2458954 round fail 别烦我
-2458984 mood -0.20
-2462915 voice
-2462945 round fail 别烦我
-2462975 mood -0.20
-2465358 voice
-2465388 round fail 别烦我
-2465418 mood -0.20
-2465432 voice
-2465462 round fail 别烦我
-2465492 mood -0.20
-2468646 voice
-2468676 round fail 别烦我
-2468706 mood -0.20
-2473493 voice
-2473523 round fail 别烦我
-2473553 mood -0.20
-2480428 voice
-2480458 round fail 别烦我
-2480488 mood -0.20
-2485351 voice
-2485381 round fail 别烦我
-2485411 mood -0.20
-2495633 voice
-2495663 round fail 别烦我
-2495693 mood -0.20
-2535145 voice
-2535175 round fail 别烦我
-2535205 mood -0.20
-2540236 voice
-2540266 round fail 别烦我
-2540296 mood -0.20
-2540766 voice
-2540796 round fail 别烦我
-2540826 mood -0.20
-2542158 voice
-2542188 round fail 别烦我
-2542218 mood -0.20
-2545107 voice
-2545137 round fail 别烦我
-2545167 mood -0.20
-2548399 voice
-2548429 round fail 别烦我
-2548459 mood -0.20
-2567498 voice
-2567528 round fail 别烦我
-2567558 mood -0.20
-2570423 voice
-2570453 round fail 别烦我
-2570483 mood -0.20
-2575846 voice
-2575876 round fail 别烦我
-2575906 mood -0.20
-2577741 voice
-2577771 round fail 别烦我
-2577801 mood -0.20
+2376000 voice
+2376030 round ok 我回来了
+2383170 voice
+2383200 round ok 我回来了
+2390340 voice
+2390370 round ok 我回来了
+2397510 voice
+2397540 round ok 我回来了
+2397570 touch
+2397600 mood +0.10
+2404710 voice
+2404740 round ok 我回来了
+2411880 voice
+2411910 round ok 我回来了
+2419050 voice
+2419080 round ok 我回来了
+2426220 voice
+2426250 round ok 我回来了
+2433390 voice
+2433420 round ok 我回来了
+2440560 voice
+2440590 round ok 我回来了
+2440620 touch
+2440650 mood +0.10
+2447760 voice
+2447790 round ok 我回来了
+2454930 voice
+2454960 round ok 我回来了
+2462100 voice
+2462130 round ok 我回来了
+2469270 voice
+2469300 round ok 我回来了
+2476440 voice
+2476470 round ok 我回来了
+2483610 voice
+2483640 round ok 我回来了
+2483670 touch
+2483700 mood +0.10
+2490810 voice
+2490840 round ok 我回来了
+2497980 voice
+2498010 round ok 我回来了
+2505150 voice
+2505180 round ok 我回来了
+2512320 voice
+2512350 round ok 我回来了
+2519490 voice
+2519520 round ok 我回来了
+2526660 voice
+2526690 round ok 我回来了
+2526720 touch
+2526750 mood +0.10
+2533860 voice
+2533890 round ok 我回来了
+2541030 voice
+2541060 round ok 我回来了
+2548200 voice
+2548230 round ok 我回来了
+2555370 voice
+2555400 round ok 我回来了
+2562540 voice
+2562570 round ok 我回来了
+2569710 voice
+2569740 round ok 我回来了
+2569770 touch
+2569800 mood +0.10
+2576910 voice
+2576940 round ok 我回来了

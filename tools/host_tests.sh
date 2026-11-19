@@ -31,9 +31,9 @@ gcc -std=c11 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE \
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_ke_kd"; FAIL=1;
 else
     /tmp/test_soul_ke_kd drive || FAIL=1
-    # E1-E4 期间旧锚失守 9 处(docs/23 §6.0), 挂账放行; S2 批随 mood
-    # 三层栈重构一并重锚后清零。锚=合同: 失败数变化(无论增减)须显式更新此数。
-    EMOT_KNOWN_FAIL=9
+    # S2 已重锚(docs/24 §2 三层栈新契约, 16 测试全绿)——此数归零;
+    # 锚=合同: ke/kd 任何语义变更后失败数变化(无论增减)须显式更新此数。
+    EMOT_KNOWN_FAIL=0
     /tmp/test_soul_ke_kd emotion
     rc=$?
     if [ "$rc" -eq 0 ]; then

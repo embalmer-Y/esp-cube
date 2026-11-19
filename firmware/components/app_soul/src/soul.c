@@ -29,6 +29,7 @@
 #include "cube_act.h"
 #include "soul_drive.h"
 #include "soul_emotion.h"
+#include "soul_face.h"
 #include "soul_bb.h"
 #include "soul_behavior.h"
 
@@ -114,40 +115,11 @@ static uint64_t s_last_active_tick;        /* 最近非 IDLE 拍(idle 计时) */
 extern bool soul_think_fire(uint8_t reason, bool forced, float score);
 extern void soul_think_gate_ctx(struct ki_think_ctx *tc);
 
-/* ---- 灵魂 2.0: 表情三层决策(Phase1 实装) ----
+/* ---- 灵魂 2.0: 表情三层决策(Phase1 实装; S2 升级 docs/24 §2.3) ----
  * L0 快反射: 会话事件拍 → 瞬态段(播完回底色, ui 侧 8s 回拉);
- * L1 底色: ke valence/arousal 连续坐标 → 素材坐标最近邻 + 迟滞
- *   (最小驻留 180s 且距离优势 >30% 才切 —— 防频繁跳段);
+ * L1 底色: soul_face 模块(Russell 扇区+中性死区+分档驻留+mood 底色
+ *   回落; 素材表单一真源 soul_face.c, 与 soul_sim 同源编译);
  * L2 深思: ki_think_gate 触发 → soul_think_fire(深思轮另文件)。 */
-static const struct {
-    const char *clip;      /* face/ 段名 */
-    float v, a;            /* valence -1..1, arousal 0..1 坐标 */
-} s_face_map[] = {
-    { "smile",       0.6f, 0.50f },
-    { "smile_static",0.5f, 0.30f },
-    { "laugh",       0.8f, 0.80f },
-    { "snigger",     0.6f, 0.60f },
-    { "yummy",       0.7f, 0.60f },
-    { "confident",   0.5f, 0.55f },
-    { "leisure",     0.3f, 0.30f },
-    { "music",       0.5f, 0.60f },
-    { "shy",         0.2f, 0.45f },
-    { "mock",       -0.1f, 0.55f },
-    { "sad",        -0.6f, 0.25f },
-    { "cry",        -0.7f, 0.45f },
-    { "sigh",       -0.4f, 0.20f },
-    { "angry",      -0.7f, 0.80f },
-    { "panic",      -0.5f, 0.90f },
-    { "shocked",     0.0f, 0.90f },
-    { "question",    0.0f, 0.60f },
-    { "ponder",      0.0f, 0.45f },
-    { "investigate", 0.1f, 0.55f },
-    { "yawn",        0.0f, 0.10f },
-    { "asleep",      0.1f, 0.05f },
-    { "mute",        0.0f, 0.30f },
-    { "badminton",   0.6f, 0.70f },
-};
-#define FACE_MAP_N  (sizeof(s_face_map) / sizeof(s_face_map[0]))
 
 static void face_act_publish(uint8_t kind, const char *clip)
 {
@@ -184,38 +156,24 @@ static void act_submit_log(const char *cap, const char *param, size_t plen)
     }
 }
 
-/* L1 底色选择(最近邻 + 迟滞; 挂在 mood_publish 拍) */
+/* L1 底色选择(soul_face 扇区三件套, docs/24 §2.3; 挂在 mood_publish 拍) */
 static void face_bg_select(const struct soul_snap *sn)
 {
-    static char cur[24] = "leisure";     /* 开机底色 */
-    static uint32_t since_tick;
-    int best = -1;
-    float bd = 1e9f;
-    for (unsigned i = 0; i < FACE_MAP_N; i++) {
-        float dv = sn->emo.state.valence - s_face_map[i].v;
-        float da = sn->emo.state.arousal - s_face_map[i].a;
-        float d = dv * dv + da * da * 0.5f;
-        if (d < bd) { bd = d; best = (int)i; }
-    }
-    if (best < 0) return;
-    if (strcmp(cur, s_face_map[best].clip) == 0) {
-        since_tick = (uint32_t)sn->tick;
+    static char cur[24] = "leisure";     /* 上次发布(开机底色) */
+    uint64_t idle = sn->tick > s_last_active_tick
+        ? sn->tick - s_last_active_tick : 0;
+    const char *clip = soul_face_bg(sn->emo.state.valence,
+                                    sn->emo.state.arousal,
+                                    sn->emo.state.mood,
+                                    (uint32_t)sn->tick,
+                                    (uint32_t)(idle > 3600 ? 3600 : idle),
+                                    sn->emo.state.ethics_latched);
+    if (strcmp(cur, clip) == 0)
         return;
-    }
-    /* 迟滞: 驻留 <180s 不切; 距离优势不足(新点距 > 0.7×当前段距)不切 */
-    if (sn->tick - since_tick < 180) return;
-    for (unsigned i = 0; i < FACE_MAP_N; i++) {
-        if (strcmp(cur, s_face_map[i].clip) == 0) {
-            float cv = sn->emo.state.valence - s_face_map[i].v;
-            float ca = sn->emo.state.arousal - s_face_map[i].a;
-            if (bd > 0.7f * 0.7f * (cv * cv + ca * ca * 0.5f)) return;
-            break;
-        }
-    }
-    strlcpy(cur, s_face_map[best].clip, sizeof(cur));
-    since_tick = (uint32_t)sn->tick;
-    ESP_LOGI(TAG, "face bg -> %s (v=%.2f a=%.2f)", cur,
-             sn->emo.state.valence, sn->emo.state.arousal);
+    strlcpy(cur, clip, sizeof(cur));
+    ESP_LOGI(TAG, "face bg -> %s (v=%.2f a=%.2f m=%.2f)", cur,
+             sn->emo.state.valence, sn->emo.state.arousal,
+             sn->emo.state.mood);
     face_act_publish(0, cur);
 }
 
@@ -611,6 +569,7 @@ static void soul_task(void *arg)
             .tick = s_ticks,
             .quiet = quiet,
             .charging = false,
+            .stimulating = (!quiet || s_ai_state != AI_IDLE),
             .event = evt,
         };
         kd_step(s_ticks, &din, &kd_out);
@@ -627,15 +586,21 @@ static void soul_task(void *arg)
             s_mood_seq++;             /* 消费完清奇偶(待施槽复位) */
         }
 
-        /* 5) 感受态 */
+        /* 5) 感受态(S2: 增 mood 慢层输入 drive_sat 与安抚 soothe) */
         struct ke_inputs kin = {
             .have_drive = true,
             .drive_error_sum = kd_out.error_sum,
             .drive_error_max = kd_out.error_max,
+            .drive_sat = {
+                [KD_SOCIAL] = kd_out.level[KD_SOCIAL],
+                [KD_STIM] = kd_out.level[KD_STIM],
+                [KD_REST] = kd_out.level[KD_REST],
+            },
             .receipt = round_now ? (round_ok ? KE_RECEIPT_SUCCESS
                                               : KE_RECEIPT_FAIL)
                                  : KE_RECEIPT_NONE,
             .social_event = (evt != KD_EVT_NONE),
+            .soothe_event = (evt == KD_EVT_TOUCH || (round_now && round_ok)),
         };
         ke_step(s_ticks, &kin, &ke_out);
 

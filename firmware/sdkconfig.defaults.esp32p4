@@ -33,7 +33,8 @@ CONFIG_ESP_HOSTED_AUTO_CALL_INIT_BEFORE_APP_MAIN=n
 # (esp-hosted-mcu #219), 实测 64B 下完整可用
 CONFIG_CACHE_L2_CACHE_LINE_64B=y
 CONFIG_CACHE_L2_CACHE_256KB=y
-CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+# (2026-11-19 勘误: 上行为无效符号从未生效——真开关见下行, 配合 main/patches/)
+CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y
 CONFIG_LWIP_TCP_SACK_OUT=y
 # 共芯目标: C5(默认 C6 会芯片枚举失配 expect=0x0d got=0x17, 真机实测)
 CONFIG_SLAVE_IDF_TARGET_ESP32C5=y
@@ -48,6 +49,9 @@ CONFIG_ESP_EFC_LVGL_WIDGET=y
 # ---- TLS 内存挪 PSRAM(Kaleido convo-stage 成熟口径): esp-sr 常驻后内部
 # DMA/加密内存紧张, TTS WS 握手超时的根治(2026-11-11 板上定位) ----
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# A1a(docs/22 §3D): lwip/WiFi 缓冲→PSRAM——§25 修复曾在本地 sdkconfig 生效但未入
+# defaults, 某次重建即丢(配置回归); 本行找回并固化, HLS/TLS 窗口期 internal dma 池减压
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 
 # ---- SD 卡(app_storage): FATFS 长文件名(episodes.jsonl 等路径 >8.3) ----
 CONFIG_FATFS_LFN_HEAP=y
