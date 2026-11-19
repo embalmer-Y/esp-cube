@@ -114,7 +114,7 @@ dwell:
 
 /* ---- 事件脚本 ---- */
 typedef struct { uint32_t t; char line[96]; } ev_t;
-static ev_t evs[512]; static int ev_n;
+static ev_t evs[4096]; static int ev_n;
 static int ev_cmp(const void *x, const void *y)
 { return (int)((const ev_t *)x)->t - (int)((const ev_t *)y)->t; }
 
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
         FILE *f = fopen(scenario, "r");
         if (!f) { perror(scenario); return 1; }
         char ln[96];
-        while (fgets(ln, sizeof ln, f) && ev_n < 512) {
+        while (fgets(ln, sizeof ln, f) && ev_n < 4096) {
             if (ln[0] == '#' || ln[0] == '\n') continue;
             evs[ev_n].t = strtoul(ln, NULL, 10);
             snprintf(evs[ev_n].line, sizeof(evs[0].line), "%s", ln);

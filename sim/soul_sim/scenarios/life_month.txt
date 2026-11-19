@@ -1,0 +1,537 @@
+600 timesync 1
+900 net 0
+9600 net 1
+34199 voice
+34229 round ok 聊天5
+46604 voice
+46634 round ok 聊天1
+49042 voice
+49072 round ok 聊天2
+52032 voice
+52062 round ok 聊天6
+56122 voice
+56152 round ok 聊天3
+56182 mood -0.08
+70298 play 1
+76835 voice
+76865 round ok 聊天4
+78612 voice
+78642 round ok 聊天0
+80124 play 0
+119003 voice
+119033 round ok 聊天1
+122817 voice
+122847 round ok 聊天0
+122877 mood +0.15
+127942 voice
+127972 round ok 聊天2
+128002 mood +0.10
+133355 voice
+133385 round ok 聊天5
+133415 mood -0.08
+149516 voice
+149546 round fail 聊天6
+156443 voice
+156473 round ok 聊天3
+156503 mood +0.15
+158765 voice
+158795 round fail 聊天4
+158825 mood +0.05
+161632 play 1
+168802 play 0
+206061 voice
+206091 round ok 聊天4
+213572 voice
+213602 round ok 聊天5
+215392 voice
+215422 round ok 聊天6
+215452 mood +0.05
+233028 voice
+233058 round ok 聊天7
+233399 voice
+233429 round ok 聊天3
+236713 voice
+236743 round ok 聊天2
+243357 play 1
+244171 voice
+244201 round ok 聊天1
+248291 voice
+248321 round ok 聊天0
+253835 play 0
+311922 voice
+311952 round ok 聊天6
+312658 voice
+312688 round ok 聊天2
+313253 voice
+313283 round ok 聊天4
+325373 voice
+325403 round fail 聊天3
+325433 mood +0.15
+326637 voice
+326667 round ok 聊天5
+326697 mood +0.15
+338080 voice
+338110 round ok 聊天0
+338222 voice
+338252 round ok 聊天1
+388399 voice
+388429 round fail 聊天1
+411496 voice
+411526 round fail 聊天2
+412120 voice
+412150 round ok 聊天3
+412180 mood -0.08
+414585 play 1
+422989 voice
+423019 round fail 聊天0
+426669 play 0
+471234 voice
+471264 round ok 聊天3
+471294 mood +0.12
+472152 voice
+472182 round fail 聊天2
+489243 voice
+489273 round ok 聊天1
+502065 voice
+502095 round ok 聊天0
+575788 voice
+575818 round ok 聊天0
+579166 voice
+579196 round ok 聊天3
+582600 voice
+582630 round fail 聊天4
+582660 mood -0.08
+591133 voice
+591163 round ok 聊天2
+591193 mood -0.08
+592800 voice
+592830 round ok 聊天5
+592860 mood -0.08
+593853 voice
+593883 round ok 聊天6
+593913 mood +0.15
+596317 voice
+596347 round ok 聊天1
+650078 voice
+650108 round ok 聊天3
+653375 voice
+653405 round fail 聊天0
+653961 voice
+653991 round fail 聊天2
+654021 mood +0.05
+662356 voice
+662386 round fail 聊天1
+662416 mood +0.10
+669451 voice
+669481 round ok 聊天4
+675581 play 1
+685544 play 0
+726076 voice
+726106 round fail 聊天1
+733954 voice
+733984 round ok 聊天2
+736608 voice
+736638 round fail 聊天3
+742837 voice
+742867 round ok 聊天4
+759436 voice
+759466 round fail 聊天0
+813991 voice
+814021 round ok 聊天4
+820305 voice
+820335 round ok 聊天1
+820365 mood +0.15
+825221 voice
+825251 round ok 聊天2
+833501 voice
+833531 round fail 聊天5
+836246 voice
+836276 round ok 聊天3
+848289 voice
+848319 round ok 聊天0
+849090 play 1
+849704 voice
+849734 round fail 聊天6
+858294 play 0
+897926 voice
+897956 round ok 聊天0
+906760 voice
+906790 round fail 聊天5
+906820 mood +0.15
+910229 voice
+910259 round fail 聊天4
+917705 voice
+917735 round ok 聊天2
+921721 voice
+921751 round ok 聊天6
+921781 mood +0.12
+929571 voice
+929601 round ok 聊天3
+929631 mood +0.15
+936540 play 1
+936729 voice
+936759 round ok 聊天1
+946238 play 0
+1005741 voice
+1005771 round fail 聊天6
+1009357 voice
+1009387 round ok 聊天5
+1009417 mood +0.12
+1018741 voice
+1018771 round ok 聊天1
+1018801 mood +0.12
+1020788 voice
+1020818 round ok 聊天0
+1020848 mood +0.05
+1022620 voice
+1022650 round fail 聊天4
+1022680 mood -0.08
+1023121 voice
+1023151 round ok 聊天2
+1027034 voice
+1027064 round ok 聊天3
+1070770 voice
+1070800 round ok 聊天5
+1085240 voice
+1085270 round ok 聊天4
+1098733 voice
+1098763 round ok 聊天0
+1103052 voice
+1103082 round ok 聊天3
+1103112 mood +0.10
+1105356 voice
+1105386 round ok 聊天1
+1105416 mood +0.15
+1109540 voice
+1109570 round ok 聊天2
+1109600 mood -0.08
+1162428 voice
+1162458 round ok 聊天4
+1162488 mood +0.10
+1165061 voice
+1165091 round ok 聊天0
+1165121 mood +0.12
+1168984 voice
+1169014 round ok 聊天1
+1169145 voice
+1169175 round ok 聊天3
+1172834 voice
+1172864 round ok 聊天5
+1172894 mood +0.15
+1173371 voice
+1173401 round fail 聊天2
+1247785 voice
+1249415 round fail 不在家
+1332512 voice
+1333206 round fail 不在家
+1420905 voice
+1422282 round fail 不在家
+1502965 round fail 不在家
+1508522 voice
+1588941 round fail 不在家
+1598041 voice
+1675632 voice
+1676111 round fail 不在家
+1762210 voice
+1766954 round fail 不在家
+1857347 voice
+1857377 round ok 聊天3
+1864174 voice
+1864204 round ok 聊天1
+1864234 mood -0.08
+1875441 voice
+1875471 round ok 聊天0
+1875501 mood +0.05
+1882971 play 1
+1888126 voice
+1888156 round ok 聊天2
+1894312 play 0
+1947849 voice
+1947879 round fail 聊天4
+1958778 voice
+1958808 round ok 聊天2
+1962408 voice
+1962438 round ok 聊天3
+1962468 mood +0.15
+1978541 voice
+1978571 round fail 聊天0
+1978601 mood +0.05
+1979453 voice
+1979483 round ok 聊天1
+1979513 mood +0.15
+2020058 voice
+2020088 round ok 聊天4
+2030549 voice
+2030579 round fail 聊天1
+2032246 voice
+2032276 round ok 聊天3
+2032306 mood +0.15
+2039006 voice
+2039036 round ok 聊天0
+2039066 mood +0.10
+2044700 voice
+2044730 round ok 聊天2
+2058708 play 1
+2068763 play 0
+2108166 voice
+2108196 round ok 聊天17
+2109086 voice
+2109116 round ok 聊天18
+2109146 mood +0.12
+2113071 voice
+2113101 round ok 聊天14
+2120263 voice
+2120293 round fail 聊天2
+2120323 mood +0.12
+2121290 voice
+2121320 round fail 聊天7
+2121993 voice
+2122023 round ok 聊天11
+2122205 voice
+2122235 round ok 聊天4
+2124691 voice
+2124721 round ok 聊天15
+2124751 mood +0.10
+2128361 voice
+2128391 round fail 聊天5
+2130865 voice
+2130895 round fail 聊天16
+2130925 mood +0.05
+2130974 voice
+2131004 round fail 聊天1
+2137480 voice
+2137510 round fail 聊天0
+2137540 mood +0.12
+2139053 voice
+2139083 round ok 聊天6
+2140320 voice
+2140350 round ok 聊天13
+2140380 mood +0.12
+2140762 voice
+2140792 round ok 聊天9
+2140822 mood +0.12
+2142000 touch
+2142464 voice
+2142494 round ok 聊天12
+2142522 voice
+2142552 round ok 聊天8
+2143698 voice
+2143728 round ok 聊天3
+2143758 mood +0.10
+2144060 voice
+2144090 round ok 聊天10
+2146213 play 1
+2152896 play 0
+2192412 voice
+2192442 round ok 聊天13
+2193848 voice
+2193878 round ok 聊天1
+2194650 voice
+2194680 round ok 聊天11
+2194710 mood +0.15
+2195577 voice
+2195607 round ok 聊天3
+2196333 voice
+2196363 round fail 聊天6
+2196393 mood +0.05
+2197292 voice
+2197322 round ok 聊天5
+2197352 mood -0.08
+2198083 voice
+2198113 round fail 聊天7
+2198143 mood -0.08
+2219327 voice
+2219357 round fail 聊天8
+2220488 voice
+2220518 round fail 聊天0
+2220548 mood -0.08
+2221471 voice
+2221501 round ok 聊天4
+2224464 voice
+2224494 round ok 聊天10
+2224524 mood +0.12
+2229442 voice
+2229472 round ok 聊天9
+2229937 voice
+2229967 round ok 聊天14
+2229997 mood +0.05
+2230373 play 1
+2231681 voice
+2231711 round ok 聊天12
+2235611 voice
+2235641 round fail 聊天2
+2240907 play 0
+2281511 voice
+2281541 round ok 聊天16
+2281571 mood +0.12
+2284763 voice
+2284793 round ok 聊天7
+2286300 voice
+2286330 round ok 聊天9
+2286360 mood -0.08
+2289461 voice
+2289491 round ok 聊天2
+2295152 voice
+2295182 round ok 聊天15
+2295212 mood +0.12
+2296649 voice
+2296679 round ok 聊天1
+2298221 voice
+2298251 round ok 聊天13
+2299491 voice
+2299521 round ok 聊天14
+2299551 mood +0.15
+2300276 voice
+2300306 round ok 聊天10
+2300336 mood +0.15
+2300400 barge
+2303803 voice
+2303833 round ok 聊天11
+2304669 voice
+2304699 round ok 聊天8
+2307600 touch
+2309684 voice
+2309714 round ok 聊天5
+2313722 voice
+2313752 round ok 聊天6
+2313782 mood -0.08
+2314604 voice
+2314634 round ok 聊天0
+2315045 voice
+2315075 round ok 聊天3
+2316272 play 1
+2317376 voice
+2317406 round fail 聊天17
+2318232 voice
+2318262 round ok 聊天12
+2323412 voice
+2323442 round fail 聊天4
+2327684 play 0
+2365822 voice
+2365852 round ok 聊天2
+2365882 mood +0.12
+2367995 voice
+2368025 round ok 聊天13
+2368055 mood +0.12
+2372248 voice
+2372278 round ok 聊天9
+2372308 mood +0.15
+2375045 voice
+2375075 round ok 聊天15
+2379076 voice
+2379106 round fail 聊天4
+2381904 voice
+2381934 round ok 聊天8
+2382029 voice
+2382059 round ok 聊天10
+2382089 mood +0.15
+2383367 voice
+2383397 round ok 聊天1
+2383565 voice
+2383595 round ok 聊天7
+2383625 mood +0.10
+2391633 voice
+2391663 round ok 聊天6
+2397600 touch
+2402776 voice
+2402806 round fail 聊天11
+2403741 voice
+2403771 round ok 聊天0
+2403801 mood +0.10
+2404403 voice
+2404433 round ok 聊天12
+2407230 voice
+2407260 round ok 聊天14
+2407455 play 1
+2409520 voice
+2409550 round ok 聊天5
+2409580 mood -0.08
+2411684 voice
+2411714 round ok 聊天3
+2415310 play 0
+2452914 voice
+2452944 round fail 聊天8
+2452974 mood +0.10
+2453780 voice
+2453810 round fail 聊天14
+2456835 voice
+2456865 round ok 聊天15
+2457565 voice
+2457595 round ok 聊天13
+2458302 voice
+2458332 round ok 聊天1
+2458557 voice
+2458587 round ok 聊天5
+2458617 mood +0.05
+2461772 voice
+2461802 round ok 聊天10
+2462052 voice
+2462082 round ok 聊天2
+2465224 voice
+2465254 round ok 聊天0
+2465284 mood +0.10
+2469013 voice
+2469043 round ok 聊天9
+2469073 mood -0.08
+2476015 voice
+2476045 round ok 聊天7
+2476075 mood +0.05
+2480400 touch
+2482053 voice
+2482083 round ok 聊天11
+2482113 mood +0.10
+2482177 voice
+2482207 round fail 聊天4
+2482513 voice
+2482543 round ok 聊天12
+2494216 play 1
+2495735 voice
+2495765 round fail 聊天6
+2495795 mood +0.05
+2497337 voice
+2497367 round ok 聊天3
+2501391 play 0
+2538142 voice
+2538172 round ok 聊天1
+2538462 voice
+2538492 round fail 聊天0
+2538522 mood +0.15
+2540384 voice
+2540414 round ok 聊天5
+2540444 mood -0.08
+2541742 voice
+2541772 round ok 聊天2
+2541802 mood +0.15
+2546537 voice
+2546567 round ok 聊天13
+2546597 mood +0.05
+2549777 voice
+2549807 round ok 聊天10
+2554732 voice
+2554762 round fail 聊天11
+2554792 mood +0.15
+2560063 voice
+2560093 round ok 聊天9
+2560123 mood -0.08
+2560819 voice
+2560849 round ok 聊天8
+2567354 voice
+2567384 round ok 聊天16
+2570297 voice
+2570327 round ok 聊天6
+2570400 barge
+2570400 touch
+2571339 voice
+2571369 round fail 聊天14
+2571399 mood -0.08
+2572902 voice
+2572932 round fail 聊天4
+2574957 voice
+2574987 round ok 聊天15
+2575017 mood +0.10
+2576391 voice
+2576421 round ok 聊天7
+2581858 voice
+2581888 round ok 聊天12
+2582236 voice
+2582266 round fail 聊天3

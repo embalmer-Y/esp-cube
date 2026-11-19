@@ -1,0 +1,901 @@
+600 timesync 1
+30928 voice
+30958 round fail 别烦我
+30988 mood -0.20
+43223 voice
+43253 round fail 别烦我
+43283 mood -0.20
+44795 voice
+44825 round fail 别烦我
+44855 mood -0.20
+45474 voice
+45504 round fail 别烦我
+45534 mood -0.20
+53707 voice
+53737 round fail 别烦我
+53767 mood -0.20
+56167 voice
+56197 round fail 别烦我
+56227 mood -0.20
+56335 voice
+56365 round fail 别烦我
+56395 mood -0.20
+60860 voice
+60890 round fail 别烦我
+60920 mood -0.20
+64901 voice
+64931 round fail 别烦我
+64961 mood -0.20
+77053 voice
+77083 round fail 别烦我
+77113 mood -0.20
+124258 voice
+124288 round fail 别烦我
+124318 mood -0.20
+127349 voice
+127379 round fail 别烦我
+127409 mood -0.20
+127486 voice
+127516 round fail 别烦我
+127546 mood -0.20
+127955 voice
+127985 round fail 别烦我
+128015 mood -0.20
+129795 voice
+129825 round fail 别烦我
+129855 mood -0.20
+130105 voice
+130135 round fail 别烦我
+130165 mood -0.20
+134952 voice
+134982 round fail 别烦我
+135012 mood -0.20
+142681 voice
+142711 round fail 别烦我
+142741 mood -0.20
+152395 voice
+152425 round fail 别烦我
+152455 mood -0.20
+160104 voice
+160134 round fail 别烦我
+160164 mood -0.20
+208104 voice
+208134 round fail 别烦我
+208164 mood -0.20
+211868 voice
+211898 round fail 别烦我
+211928 mood -0.20
+211984 voice
+212014 round fail 别烦我
+212044 mood -0.20
+212843 voice
+212873 round fail 别烦我
+212903 mood -0.20
+222122 voice
+222152 round fail 别烦我
+222182 mood -0.20
+228593 voice
+228623 round fail 别烦我
+228653 mood -0.20
+232469 voice
+232499 round fail 别烦我
+232529 mood -0.20
+234649 voice
+234679 round fail 别烦我
+234709 mood -0.20
+240842 voice
+240872 round fail 别烦我
+240902 mood -0.20
+251713 voice
+251743 round fail 别烦我
+251773 mood -0.20
+292821 voice
+292851 round fail 别烦我
+292881 mood -0.20
+294886 voice
+294916 round fail 别烦我
+294946 mood -0.20
+297961 voice
+297991 round fail 别烦我
+298021 mood -0.20
+310912 voice
+310942 round fail 别烦我
+310972 mood -0.20
+311812 voice
+311842 round fail 别烦我
+311872 mood -0.20
+324504 voice
+324534 round fail 别烦我
+324564 mood -0.20
+327461 voice
+327491 round fail 别烦我
+327521 mood -0.20
+329829 voice
+329859 round fail 别烦我
+329889 mood -0.20
+333335 voice
+333365 round fail 别烦我
+333395 mood -0.20
+336081 voice
+336111 round fail 别烦我
+336141 mood -0.20
+381606 voice
+381636 round fail 别烦我
+381666 mood -0.20
+384224 voice
+384254 round fail 别烦我
+384284 mood -0.20
+387415 voice
+387445 round fail 别烦我
+387475 mood -0.20
+389053 voice
+389083 round fail 别烦我
+389113 mood -0.20
+390033 voice
+390063 round fail 别烦我
+390093 mood -0.20
+395164 voice
+395194 round fail 别烦我
+395224 mood -0.20
+395665 voice
+395695 round fail 别烦我
+395725 mood -0.20
+402295 voice
+402325 round fail 别烦我
+402355 mood -0.20
+414847 voice
+414877 round fail 别烦我
+414907 mood -0.20
+424541 voice
+424571 round fail 别烦我
+424601 mood -0.20
+474220 voice
+474250 round fail 别烦我
+474280 mood -0.20
+483760 voice
+483790 round fail 别烦我
+483820 mood -0.20
+483978 voice
+484008 round fail 别烦我
+484038 mood -0.20
+485274 voice
+485304 round fail 别烦我
+485334 mood -0.20
+485904 voice
+485934 round fail 别烦我
+485964 mood -0.20
+495706 voice
+495736 round fail 别烦我
+495766 mood -0.20
+501454 voice
+501484 round fail 别烦我
+501514 mood -0.20
+502460 voice
+502490 round fail 别烦我
+502520 mood -0.20
+503837 voice
+503867 round fail 别烦我
+503897 mood -0.20
+508506 voice
+508536 round fail 别烦我
+508566 mood -0.20
+550610 voice
+550640 round fail 别烦我
+550670 mood -0.20
+553613 voice
+553643 round fail 别烦我
+553673 mood -0.20
+558870 voice
+558900 round fail 别烦我
+558930 mood -0.20
+560455 voice
+560485 round fail 别烦我
+560515 mood -0.20
+574842 voice
+574872 round fail 别烦我
+574902 mood -0.20
+577084 voice
+577114 round fail 别烦我
+577144 mood -0.20
+578588 voice
+578618 round fail 别烦我
+578648 mood -0.20
+579996 voice
+580026 round fail 别烦我
+580056 mood -0.20
+580438 voice
+580468 round fail 别烦我
+580498 mood -0.20
+596075 voice
+596105 round fail 别烦我
+596135 mood -0.20
+635970 voice
+636000 round fail 别烦我
+636030 mood -0.20
+637350 voice
+637380 round fail 别烦我
+637410 mood -0.20
+639282 voice
+639312 round fail 别烦我
+639342 mood -0.20
+641253 voice
+641283 round fail 别烦我
+641313 mood -0.20
+641905 voice
+641935 round fail 别烦我
+641965 mood -0.20
+645649 voice
+645679 round fail 别烦我
+645709 mood -0.20
+647003 voice
+647033 round fail 别烦我
+647063 mood -0.20
+659846 voice
+659876 round fail 别烦我
+659906 mood -0.20
+667002 voice
+667032 round fail 别烦我
+667062 mood -0.20
+679556 voice
+679586 round fail 别烦我
+679616 mood -0.20
+724886 voice
+724916 round fail 别烦我
+724946 mood -0.20
+727805 voice
+727835 round fail 别烦我
+727865 mood -0.20
+738550 voice
+738580 round fail 别烦我
+738610 mood -0.20
+738738 voice
+738768 round fail 别烦我
+738798 mood -0.20
+739690 voice
+739720 round fail 别烦我
+739750 mood -0.20
+741858 voice
+741888 round fail 别烦我
+741918 mood -0.20
+745218 voice
+745248 round fail 别烦我
+745278 mood -0.20
+745353 voice
+745383 round fail 别烦我
+745413 mood -0.20
+763157 voice
+763187 round fail 别烦我
+763217 mood -0.20
+766461 voice
+766491 round fail 别烦我
+766521 mood -0.20
+807703 voice
+807733 round fail 别烦我
+807763 mood -0.20
+811389 voice
+811419 round fail 别烦我
+811449 mood -0.20
+816358 voice
+816388 round fail 别烦我
+816418 mood -0.20
+825766 voice
+825796 round fail 别烦我
+825826 mood -0.20
+826390 voice
+826420 round fail 别烦我
+826450 mood -0.20
+831910 voice
+831940 round fail 别烦我
+831970 mood -0.20
+835075 voice
+835105 round fail 别烦我
+835135 mood -0.20
+843605 voice
+843635 round fail 别烦我
+843665 mood -0.20
+844983 voice
+845013 round fail 别烦我
+845043 mood -0.20
+853178 voice
+853208 round fail 别烦我
+853238 mood -0.20
+893217 voice
+893247 round fail 别烦我
+893277 mood -0.20
+895873 voice
+895903 round fail 别烦我
+895933 mood -0.20
+910715 voice
+910745 round fail 别烦我
+910775 mood -0.20
+925570 voice
+925600 round fail 别烦我
+925630 mood -0.20
+925768 voice
+925798 round fail 别烦我
+925828 mood -0.20
+931945 voice
+931975 round fail 别烦我
+932005 mood -0.20
+935951 voice
+935981 round fail 别烦我
+936011 mood -0.20
+938033 voice
+938063 round fail 别烦我
+938093 mood -0.20
+939960 voice
+939990 round fail 别烦我
+940020 mood -0.20
+942644 voice
+942674 round fail 别烦我
+942704 mood -0.20
+981328 voice
+981358 round fail 别烦我
+981388 mood -0.20
+981558 voice
+981588 round fail 别烦我
+981618 mood -0.20
+983730 voice
+983760 round fail 别烦我
+983790 mood -0.20
+996536 voice
+996566 round fail 别烦我
+996596 mood -0.20
+1004924 voice
+1004954 round fail 别烦我
+1004984 mood -0.20
+1006298 voice
+1006328 round fail 别烦我
+1006358 mood -0.20
+1008914 voice
+1008944 round fail 别烦我
+1008974 mood -0.20
+1018155 voice
+1018185 round fail 别烦我
+1018215 mood -0.20
+1022791 voice
+1022821 round fail 别烦我
+1022851 mood -0.20
+1024301 voice
+1024331 round fail 别烦我
+1024361 mood -0.20
+1067731 voice
+1067761 round fail 别烦我
+1067791 mood -0.20
+1068396 voice
+1068426 round fail 别烦我
+1068456 mood -0.20
+1074921 voice
+1074951 round fail 别烦我
+1074981 mood -0.20
+1076090 voice
+1076120 round fail 别烦我
+1076150 mood -0.20
+1083923 voice
+1083953 round fail 别烦我
+1083983 mood -0.20
+1092894 voice
+1092924 round fail 别烦我
+1092954 mood -0.20
+1093363 voice
+1093393 round fail 别烦我
+1093423 mood -0.20
+1098829 voice
+1098859 round fail 别烦我
+1098889 mood -0.20
+1100830 voice
+1100860 round fail 别烦我
+1100890 mood -0.20
+1112219 voice
+1112249 round fail 别烦我
+1112279 mood -0.20
+1161124 voice
+1161154 round fail 别烦我
+1161184 mood -0.20
+1161282 voice
+1161312 round fail 别烦我
+1161342 mood -0.20
+1166394 voice
+1166424 round fail 别烦我
+1166454 mood -0.20
+1168982 voice
+1169012 round fail 别烦我
+1169042 mood -0.20
+1187693 voice
+1187723 round fail 别烦我
+1187753 mood -0.20
+1196864 voice
+1196894 round fail 别烦我
+1196924 mood -0.20
+1198702 voice
+1198732 round fail 别烦我
+1198762 mood -0.20
+1198885 voice
+1198915 round fail 别烦我
+1198945 mood -0.20
+1200330 voice
+1200360 round fail 别烦我
+1200390 mood -0.20
+1201433 voice
+1201463 round fail 别烦我
+1201493 mood -0.20
+1245300 voice
+1245330 round fail 别烦我
+1245360 mood -0.20
+1250005 voice
+1250035 round fail 别烦我
+1250035 voice
+1250065 mood -0.20
+1250065 round fail 别烦我
+1250095 mood -0.20
+1250111 voice
+1250141 round fail 别烦我
+1250171 mood -0.20
+1252322 voice
+1252352 round fail 别烦我
+1252382 mood -0.20
+1258494 voice
+1258524 round fail 别烦我
+1258554 mood -0.20
+1262080 voice
+1262110 round fail 别烦我
+1262140 mood -0.20
+1265421 voice
+1265451 round fail 别烦我
+1265481 mood -0.20
+1274550 voice
+1274580 round fail 别烦我
+1274610 mood -0.20
+1286160 voice
+1286190 round fail 别烦我
+1286220 mood -0.20
+1327048 voice
+1327078 round fail 别烦我
+1327108 mood -0.20
+1327224 voice
+1327254 round fail 别烦我
+1327284 mood -0.20
+1327557 voice
+1327587 round fail 别烦我
+1327617 mood -0.20
+1341730 voice
+1341760 round fail 别烦我
+1341790 mood -0.20
+1343447 voice
+1343477 round fail 别烦我
+1343507 mood -0.20
+1350953 voice
+1350983 round fail 别烦我
+1351013 mood -0.20
+1354104 voice
+1354134 round fail 别烦我
+1354164 mood -0.20
+1354447 voice
+1354477 round fail 别烦我
+1354507 mood -0.20
+1355203 voice
+1355233 round fail 别烦我
+1355263 mood -0.20
+1374273 voice
+1374303 round fail 别烦我
+1374333 mood -0.20
+1414352 voice
+1414382 round fail 别烦我
+1414412 mood -0.20
+1414524 voice
+1414554 round fail 别烦我
+1414584 mood -0.20
+1418509 voice
+1418539 round fail 别烦我
+1418569 mood -0.20
+1419322 voice
+1419352 round fail 别烦我
+1419382 mood -0.20
+1420698 voice
+1420728 round fail 别烦我
+1420758 mood -0.20
+1421040 voice
+1421070 round fail 别烦我
+1421100 mood -0.20
+1425666 voice
+1425696 round fail 别烦我
+1425726 mood -0.20
+1434700 voice
+1434730 round fail 别烦我
+1434760 mood -0.20
+1435481 voice
+1435511 round fail 别烦我
+1435541 mood -0.20
+1459170 voice
+1459200 round fail 别烦我
+1459230 mood -0.20
+1498520 voice
+1498550 round fail 别烦我
+1498580 mood -0.20
+1499804 voice
+1499834 round fail 别烦我
+1499864 mood -0.20
+1499990 voice
+1500020 round fail 别烦我
+1500050 mood -0.20
+1511761 voice
+1511791 round fail 别烦我
+1511821 mood -0.20
+1521796 voice
+1521826 round fail 别烦我
+1521856 mood -0.20
+1539997 voice
+1540027 round fail 别烦我
+1540057 mood -0.20
+1541071 voice
+1541101 round fail 别烦我
+1541131 mood -0.20
+1542454 voice
+1542484 round fail 别烦我
+1542514 mood -0.20
+1542928 voice
+1542958 round fail 别烦我
+1542988 mood -0.20
+1545539 voice
+1545569 round fail 别烦我
+1545599 mood -0.20
+1584782 voice
+1584812 round fail 别烦我
+1584842 mood -0.20
+1585843 voice
+1585873 round fail 别烦我
+1585903 mood -0.20
+1587487 voice
+1587517 round fail 别烦我
+1587547 mood -0.20
+1604530 voice
+1604560 round fail 别烦我
+1604590 mood -0.20
+1605057 voice
+1605087 round fail 别烦我
+1605117 mood -0.20
+1607390 voice
+1607420 round fail 别烦我
+1607450 mood -0.20
+1609749 voice
+1609779 round fail 别烦我
+1609809 mood -0.20
+1625623 voice
+1625653 round fail 别烦我
+1625683 mood -0.20
+1627475 voice
+1627505 round fail 别烦我
+1627535 mood -0.20
+1629118 voice
+1629148 round fail 别烦我
+1629178 mood -0.20
+1672645 voice
+1672675 round fail 别烦我
+1672705 mood -0.20
+1675378 voice
+1675408 round fail 别烦我
+1675438 mood -0.20
+1677237 voice
+1677267 round fail 别烦我
+1677297 mood -0.20
+1680846 voice
+1680876 round fail 别烦我
+1680906 mood -0.20
+1685069 voice
+1685099 round fail 别烦我
+1685129 mood -0.20
+1694083 voice
+1694113 round fail 别烦我
+1694143 mood -0.20
+1700035 voice
+1700065 round fail 别烦我
+1700095 mood -0.20
+1707501 voice
+1707531 round fail 别烦我
+1707561 mood -0.20
+1715533 voice
+1715563 round fail 别烦我
+1715593 mood -0.20
+1717237 voice
+1717267 round fail 别烦我
+1717297 mood -0.20
+1768972 voice
+1769002 round fail 别烦我
+1769032 mood -0.20
+1777091 voice
+1777121 round fail 别烦我
+1777151 mood -0.20
+1782436 voice
+1782466 round fail 别烦我
+1782496 mood -0.20
+1785821 voice
+1785851 round fail 别烦我
+1785881 mood -0.20
+1786219 voice
+1786249 round fail 别烦我
+1786279 mood -0.20
+1787111 voice
+1787141 round fail 别烦我
+1787171 mood -0.20
+1796664 voice
+1796694 round fail 别烦我
+1796724 mood -0.20
+1799029 voice
+1799059 round fail 别烦我
+1799089 mood -0.20
+1806650 voice
+1806680 round fail 别烦我
+1806710 mood -0.20
+1806917 voice
+1806947 round fail 别烦我
+1806977 mood -0.20
+1843303 voice
+1843333 round fail 别烦我
+1843363 mood -0.20
+1843427 voice
+1843457 round fail 别烦我
+1843487 mood -0.20
+1845630 voice
+1845660 round fail 别烦我
+1845690 mood -0.20
+1850311 voice
+1850341 round fail 别烦我
+1850371 mood -0.20
+1859150 voice
+1859180 round fail 别烦我
+1859210 mood -0.20
+1868602 voice
+1868632 round fail 别烦我
+1868662 mood -0.20
+1872693 voice
+1872723 round fail 别烦我
+1872753 mood -0.20
+1873805 voice
+1873835 round fail 别烦我
+1873865 mood -0.20
+1886126 voice
+1886156 round fail 别烦我
+1886186 mood -0.20
+1892947 voice
+1892977 round fail 别烦我
+1893007 mood -0.20
+1935597 voice
+1935627 round fail 别烦我
+1935657 mood -0.20
+1936286 voice
+1936316 round fail 别烦我
+1936346 mood -0.20
+1941990 voice
+1942020 round fail 别烦我
+1942050 mood -0.20
+1949884 voice
+1949914 round fail 别烦我
+1949944 mood -0.20
+1954894 voice
+1954924 round fail 别烦我
+1954954 mood -0.20
+1957638 voice
+1957668 round fail 别烦我
+1957698 mood -0.20
+1964312 voice
+1964342 round fail 别烦我
+1964372 mood -0.20
+1967581 voice
+1967611 round fail 别烦我
+1967641 mood -0.20
+1970506 voice
+1970536 round fail 别烦我
+1970566 mood -0.20
+1971872 voice
+1971902 round fail 别烦我
+1971932 mood -0.20
+2016623 voice
+2016653 round fail 别烦我
+2016683 mood -0.20
+2021859 voice
+2021889 round fail 别烦我
+2021919 mood -0.20
+2035597 voice
+2035627 round fail 别烦我
+2035657 mood -0.20
+2038317 voice
+2038347 round fail 别烦我
+2038377 mood -0.20
+2038941 voice
+2038971 round fail 别烦我
+2039001 mood -0.20
+2040325 voice
+2040355 round fail 别烦我
+2040385 mood -0.20
+2051960 voice
+2051990 round fail 别烦我
+2052020 mood -0.20
+2055055 voice
+2055085 round fail 别烦我
+2055115 mood -0.20
+2056963 voice
+2056993 round fail 别烦我
+2057023 mood -0.20
+2064393 voice
+2064423 round fail 别烦我
+2064453 mood -0.20
+2110319 voice
+2110349 round fail 别烦我
+2110379 mood -0.20
+2110481 voice
+2110511 round fail 别烦我
+2110541 mood -0.20
+2119332 voice
+2119362 round fail 别烦我
+2119392 mood -0.20
+2123830 voice
+2123860 round fail 别烦我
+2123890 mood -0.20
+2124620 voice
+2124650 round fail 别烦我
+2124680 mood -0.20
+2132186 voice
+2132216 round fail 别烦我
+2132246 mood -0.20
+2134222 voice
+2134252 round fail 别烦我
+2134282 mood -0.20
+2134870 voice
+2134900 round fail 别烦我
+2134930 mood -0.20
+2142529 voice
+2142559 round fail 别烦我
+2142589 mood -0.20
+2149050 voice
+2149080 round fail 别烦我
+2149110 mood -0.20
+2189571 voice
+2189601 round fail 别烦我
+2189631 mood -0.20
+2195111 voice
+2195141 round fail 别烦我
+2195171 mood -0.20
+2195696 voice
+2195726 round fail 别烦我
+2195756 mood -0.20
+2199664 voice
+2199694 round fail 别烦我
+2199724 mood -0.20
+2209075 voice
+2209105 round fail 别烦我
+2209135 mood -0.20
+2216013 voice
+2216043 round fail 别烦我
+2216073 mood -0.20
+2217549 voice
+2217579 round fail 别烦我
+2217609 mood -0.20
+2217990 voice
+2218020 round fail 别烦我
+2218050 mood -0.20
+2218066 voice
+2218096 round fail 别烦我
+2218126 mood -0.20
+2221042 voice
+2221072 round fail 别烦我
+2221102 mood -0.20
+2277812 voice
+2277842 round fail 别烦我
+2277872 mood -0.20
+2281914 voice
+2281944 round fail 别烦我
+2281974 mood -0.20
+2284349 voice
+2284379 round fail 别烦我
+2284409 mood -0.20
+2285514 voice
+2285544 round fail 别烦我
+2285574 mood -0.20
+2285709 voice
+2285739 round fail 别烦我
+2285769 mood -0.20
+2287393 voice
+2287423 round fail 别烦我
+2287453 mood -0.20
+2300746 voice
+2300776 round fail 别烦我
+2300806 mood -0.20
+2308617 voice
+2308647 round fail 别烦我
+2308677 mood -0.20
+2314333 voice
+2314363 round fail 别烦我
+2314393 mood -0.20
+2323424 voice
+2323454 round fail 别烦我
+2323484 mood -0.20
+2373346 voice
+2373376 round fail 别烦我
+2373406 mood -0.20
+2374431 voice
+2374461 round fail 别烦我
+2374491 mood -0.20
+2376246 voice
+2376276 round fail 别烦我
+2376306 mood -0.20
+2382712 voice
+2382742 round fail 别烦我
+2382772 mood -0.20
+2384224 voice
+2384254 round fail 别烦我
+2384284 mood -0.20
+2386542 voice
+2386572 round fail 别烦我
+2386602 mood -0.20
+2386723 voice
+2386753 round fail 别烦我
+2386783 mood -0.20
+2386825 voice
+2386855 round fail 别烦我
+2386885 mood -0.20
+2388128 voice
+2388158 round fail 别烦我
+2388188 mood -0.20
+2394556 voice
+2394586 round fail 别烦我
+2394616 mood -0.20
+2456422 voice
+2456452 round fail 别烦我
+2456482 mood -0.20
+2458924 voice
+2458954 round fail 别烦我
+2458984 mood -0.20
+2462915 voice
+2462945 round fail 别烦我
+2462975 mood -0.20
+2465358 voice
+2465388 round fail 别烦我
+2465418 mood -0.20
+2465432 voice
+2465462 round fail 别烦我
+2465492 mood -0.20
+2468646 voice
+2468676 round fail 别烦我
+2468706 mood -0.20
+2473493 voice
+2473523 round fail 别烦我
+2473553 mood -0.20
+2480428 voice
+2480458 round fail 别烦我
+2480488 mood -0.20
+2485351 voice
+2485381 round fail 别烦我
+2485411 mood -0.20
+2495633 voice
+2495663 round fail 别烦我
+2495693 mood -0.20
+2535145 voice
+2535175 round fail 别烦我
+2535205 mood -0.20
+2540236 voice
+2540266 round fail 别烦我
+2540296 mood -0.20
+2540766 voice
+2540796 round fail 别烦我
+2540826 mood -0.20
+2542158 voice
+2542188 round fail 别烦我
+2542218 mood -0.20
+2545107 voice
+2545137 round fail 别烦我
+2545167 mood -0.20
+2548399 voice
+2548429 round fail 别烦我
+2548459 mood -0.20
+2567498 voice
+2567528 round fail 别烦我
+2567558 mood -0.20
+2570423 voice
+2570453 round fail 别烦我
+2570483 mood -0.20
+2575846 voice
+2575876 round fail 别烦我
+2575906 mood -0.20
+2577741 voice
+2577771 round fail 别烦我
+2577801 mood -0.20
