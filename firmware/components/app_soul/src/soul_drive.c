@@ -40,6 +40,7 @@ static const struct kd_params s_def = {
 	},
 	.stim_event = 0.10f,
 	.stim_recover = 0.002f,   /* 播放/会话期 stim 回充(S2) */
+	.stim_self_recover = 0.0f, /* S2.5: 中性默认零; trait 活力维调制(§11.3) */
 	.rest_recover = 0.01f,
 	.band = 0.1f,
 };
@@ -51,6 +52,11 @@ static float s_prev_error[KD_N];
 static float clamp01(float x)
 {
 	return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+}
+
+const struct kd_params *kd_params_default(void)
+{
+	return &s_def;
 }
 
 void kd_init(const struct kd_params *p)
@@ -112,6 +118,8 @@ void kd_step(uint64_t tick, const struct kd_inputs *in,
 				inflow = s_p->stim_event;
 			if (in->stimulating)
 				inflow += s_p->stim_recover;
+			else if (s_p->stim_self_recover > 0.0f)
+				inflow += s_p->stim_self_recover; /* 自娱自足(S2.5) */
 		}
 
 		level = clamp01(s_level[d] - s_p->metabolic[d] + inflow);

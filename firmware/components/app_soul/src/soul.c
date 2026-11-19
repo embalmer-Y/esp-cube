@@ -30,6 +30,7 @@
 #include "soul_drive.h"
 #include "soul_emotion.h"
 #include "soul_face.h"
+#include "soul_trait.h"
 #include "soul_bb.h"
 #include "soul_behavior.h"
 
@@ -515,6 +516,7 @@ static void soul_task(void *arg)
     (void)arg;
     struct kd_output kd_out;
     struct ke_output ke_out;
+    trait_reset();   /* S2.5: 底座中性+调制面应用(建角色后由 persona 接管) */
     kd_reset();                        /* level 全 1(初始零误差) */
     ke_reset(NULL);
     TickType_t next = xTaskGetTickCount();

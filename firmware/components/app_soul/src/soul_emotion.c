@@ -118,6 +118,35 @@ static float s_ar_prev_emax;
 #define KE_AR_EVT_OK	0.10f
 #define KE_AR_EVT_FAIL	0.15f
 
+/* S2.5: trait 调谐(默认=S2 中性常数, ke_tune_set 可改) */
+static struct ke_tune s_tune = {
+	.arousal_base = KE_AROUSAL_BASE,
+	.valence_off = 0.0f,
+	.tau_dec_mod = 1.0f,
+	.bond_up_mod = 1.0f,
+	.urg_on = KE_URG_ON,
+	.novelty_gain_mod = 1.0f,
+	.eth_gate = KE_ETH_V_GATE,
+	.eth_dose_mod = 1.0f,
+	.eth_load_t = KE_ETHICS_LOAD_T,
+	.eth_heal_tau_mod = 1.0f,
+	.eth_soothe_mod = 1.0f,
+};
+
+void ke_tune_set(const struct ke_tune *t)
+{
+	if (t == NULL) {
+		s_tune = (struct ke_tune){
+			.arousal_base = KE_AROUSAL_BASE,
+			.urg_on = KE_URG_ON,
+			.eth_gate = KE_ETH_V_GATE,
+			.eth_load_t = KE_ETHICS_LOAD_T,
+		};
+		return;
+	}
+	s_tune = *t;
+}
+
 /* ---- 引擎状态（文件级，ke_reset 可全清：S6）---- */
 
 static struct ke_state s_st;
@@ -246,7 +275,8 @@ static float compose_valence(void)
 {
 	float v_fast = s_val < 0.0f ? s_val * KE_V_NEG_BIAS : s_val;
 
-	return clampf(KE_DISP_FAST * v_fast + KE_DISP_MOOD * s_mood,
+	return clampf(KE_DISP_FAST * v_fast + KE_DISP_MOOD * s_mood +
+		      s_tune.valence_off,
 		      -1.0f, 1.0f);
 }
 
@@ -260,7 +290,7 @@ static void step_rest(const struct ke_inputs *in, uint64_t tick)
 
 	/* D5：缺席拍保持（源 dynamics.py:96-108——误差保持 ⇒ 积分器
 	 * 保持；arousal/urgency 吃 s_prev_emax，缺席拍不更新它即保持） */
-	urg_raw = (s_prev_emax - KE_URG_ON) / (1.0f - KE_URG_ON);
+	urg_raw = (s_prev_emax - s_tune.urg_on) / (1.0f - s_tune.urg_on);
 
 	if (urg_raw < 0.0f)
 		urg_raw = 0.0f;
@@ -288,13 +318,13 @@ static void step_rest(const struct ke_inputs *in, uint64_t tick)
 			s_st.arousal +
 			KE_AROUSAL_GAIN * (s_prev_emax - s_ar_prev_emax) +
 			evt_pulse +
-			(KE_AROUSAL_BASE - s_st.arousal) / KE_AROUSAL_TAU,
+			(s_tune.arousal_base - s_st.arousal) / KE_AROUSAL_TAU,
 			0.0f, 1.0f);
 	}
 	s_ar_prev_emax = s_prev_emax;
 
 	s_per = ke_lowpass(s_per, clampf(vabs, 0.0f, 0.8f) / 0.8f,
-			   KE_TAU_DEC);
+			   KE_TAU_DEC * s_tune.tau_dec_mod);
 	s_st.persistence = clampf(s_per, 0.0f, 1.0f);
 
 	/* G1：三态回执——无事件拍保持 controllability；一轮结算一次 */
@@ -308,7 +338,9 @@ static void step_rest(const struct ke_inputs *in, uint64_t tick)
 
 	/* D7：有效性位——无效拍保持（禁喂 0 造成的主动衰减） */
 	if (in->have_residual)
-		s_nov = ke_lowpass(s_nov, in->sensory_residual_mean,
+		s_nov = ke_lowpass(s_nov,
+				   clampf(in->sensory_residual_mean *
+					  s_tune.novelty_gain_mod, 0.0f, 1.0f),
 				   KE_TAU_INT);
 	s_st.novelty = clampf(s_nov, 0.0f, 1.0f);
 
@@ -326,7 +358,7 @@ static void step_rest(const struct ke_inputs *in, uint64_t tick)
 	 *   ③ 地板 KE_BOND_FLOOR: 依恋不灭(慢变量衰减到地板而非 0,
 	 *      IWM 语义)。 */
 	if (in->social_event) {
-		s_bond += KE_BOND_ALPHA_UP * (1.0f - s_bond);
+		s_bond += KE_BOND_ALPHA_UP * s_tune.bond_up_mod * (1.0f - s_bond);
 		s_bond_grace = KE_BOND_GRACE_S;
 	} else if (s_bond_grace > 0) {
 		s_bond_grace--;
@@ -344,22 +376,24 @@ static void step_rest(const struct ke_inputs *in, uint64_t tick)
 	 * → 必闩; 恶意等待(停虐不安抚)需 ~3 天泄漏才解锁。显式重置兜底
 	 * = ke_ethics_clear(owner/出厂路径)。 */
 	if (in->receipt == KE_RECEIPT_FAIL)
-		s_ethics_load += KE_ETH_DOSE_FAIL;
-	if (s_st.valence < -KE_ETH_V_GATE)
-		s_ethics_load += (-s_st.valence - KE_ETH_V_GATE) / KE_ETHICS_TAU;
-	s_ethics_load -= s_ethics_load / KE_ETH_LEAK_TAU;
+		s_ethics_load += KE_ETH_DOSE_FAIL * s_tune.eth_dose_mod;
+	if (s_st.valence < -s_tune.eth_gate)
+		s_ethics_load += (-s_st.valence - s_tune.eth_gate) /
+				 KE_ETHICS_TAU * s_tune.eth_dose_mod;
+	s_ethics_load -= s_ethics_load / (KE_ETH_LEAK_TAU * s_tune.eth_heal_tau_mod);
 	if (s_ethics_load < 0.0f)
 		s_ethics_load = 0.0f;
 	if (!s_st.ethics_latched) {
-		if (s_ethics_load >= KE_ETHICS_LOAD_T &&
+		if (s_ethics_load >= s_tune.eth_load_t &&
 		    tick >= s_immune_until) {
 			s_st.ethics_latched = true;
 			s_latch_tick = tick;
 		}
 	} else {
 		if (in->soothe_event) {
-			s_ethics_load = s_ethics_load > KE_ETH_SOOTHE
-				? s_ethics_load - KE_ETH_SOOTHE : 0.0f;
+			float so = KE_ETH_SOOTHE * s_tune.eth_soothe_mod;
+			s_ethics_load = s_ethics_load > so
+				? s_ethics_load - so : 0.0f;
 		}
 		if (s_ethics_load <= KE_ETH_OFF_T &&
 		    tick - s_latch_tick >= KE_ETH_MIN_LATCH_S) {
@@ -390,7 +424,8 @@ void ke_step(uint64_t tick, const struct ke_inputs *in,
 	 * S2: 负面重评价同时给伦理负荷直接剂量(事件计费, 参数块注)。 */
 	if (!s_reap_done && s_reap_receipt != 0) {
 		if (s_reap_pending < 0.0f)
-			s_ethics_load += KE_ETH_DOSE_REAP * (-s_reap_pending);
+			s_ethics_load += KE_ETH_DOSE_REAP * s_tune.eth_dose_mod *
+					  (-s_reap_pending);
 		s_ar_evt_pulse = fabsf(s_reap_pending) * KE_AR_EVT_REAP;
 		s_val += s_reap_pending;
 		s_reap_applied = s_reap_pending;

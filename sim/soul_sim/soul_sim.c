@@ -29,6 +29,7 @@
 #include "soul_emotion.h"
 #include "soul_face.h"
 #include "soul_ignition.h"
+#include "soul_trait.h"
 
 /* ---- 模拟世界状态(感知侧) ---- */
 static bool w_net, w_play, w_ai, w_timesync;
@@ -130,6 +131,15 @@ static void inject(const char *ln)
         else w_pend |= P_ROUND_FAIL;
     } else if (!strcmp(cmd, "mood")) {
         w_mood_req = strtof(arg, NULL); w_mood_seq |= 1;
+    } else if (!strcmp(cmd, "trait")) {
+        /* S2.5: trait C E W A R(五维, band 内)——双性格对照实验入口 */
+        float t[5];
+        if (sscanf(ln, "%*s %f %f %f %f %f",
+                   &t[0], &t[1], &t[2], &t[3], &t[4]) == 5) {
+            printf("trait set %s (C=%.2f W=%.2f E=%.2f A=%.2f R=%.2f)\n",
+                   trait_set(t) ? "ok" : "OUT_OF_BAND",
+                   t[0], t[1], t[2], t[3], t[4]);
+        }
     }
 }
 
@@ -163,6 +173,7 @@ int main(int argc, char **argv)
 
     soul_behavior_reset();
     soul_face_bg_reset();
+    trait_reset();      /* S2.5: 每局回中性(场景内 trait 行可覆写) */
     behaviors_register_sim();
     kd_reset(); ke_reset(NULL);
     w_net = true; soul_bb_set(SOUL_BB_NET, 1);

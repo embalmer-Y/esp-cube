@@ -58,6 +58,7 @@ struct kd_params {           /* 冻结表（内置 static const；可 kd_init �
 	float pulse[KD_EVT_CNT]; /* 按 kd_event 的 social 恢复幅度        */
 	float stim_event;        /* ROUND_OK/BARGE 对 stim 的恢复         */
 	float stim_recover;      /* stimulating 拍 stim 回充(S2: 播放/会话) */
+	float stim_self_recover;/* 非刺激拍自娱回充(S2.5: 活力=自足, docs/24 §11.3) */
 	float rest_recover;      /* quiet/charging 拍 rest 恢复幅度       */
 	float band;              /* 0.1（恢复正常带，锚 Q-L05-03③）      */
 };
@@ -85,6 +86,7 @@ struct kd_output {
 	float trend[KD_N];       /* e_t − e_{t−1}（正=恶化，随告警上遥测）*/
 };
 
+const struct kd_params *kd_params_default(void); /* 内置冻结表(S2.5: trait 调制基底) */
 void kd_init(const struct kd_params *p);   /* NULL = 用内置冻结表；
 					    * p 须静态生存期（组件只存
 					    * 指针，评审 C4） */

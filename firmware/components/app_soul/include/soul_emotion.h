@@ -114,6 +114,23 @@ void ke_reset(const struct ke_state *init); /* NULL=全零 */
  * 时间自愈+安抚加速+施密特(docs/24 §2.2), 无需调用本函数 */
 void ke_ethics_clear(void);
 
+/* S2.5 trait 调制面(docs/24 §3.2+§11.3; 运行期可调, 默认=中性常数=锚)。
+ * trait 层(soul_trait)设置; 引擎各处读 s_tune 而非冻结宏。 */
+struct ke_tune {
+	float arousal_base;     /* [0,0.20]  基线(活力)                    */
+	float valence_off;      /* [-0.05,0.05] 显示偏移(温情)             */
+	float tau_dec_mod;      /* [0.8,1.2]×  慢衰减调制(韧性)            */
+	float bond_up_mod;      /* [0.75,1.25]× bond 上行(温情)            */
+	float urg_on;           /* [0.08,0.12]  urgency 门(主见)           */
+	float novelty_gain_mod; /* [0.7,1.3]×   novelty 增益(好奇)         */
+	float eth_gate;         /* [0.10,0.55] 深度门(脆弱度)              */
+	float eth_dose_mod;     /* [0.6,1.5]×  事件剂量(脆弱度)            */
+	float eth_load_t;       /* [1.6,3.2]   负荷阈(脆弱度)              */
+	float eth_heal_tau_mod; /* [0.5,1.67]× 自愈 τ(脆弱度)              */
+	float eth_soothe_mod;   /* [0.75,1.25]× 安抚效率(温情)             */
+};
+void ke_tune_set(const struct ke_tune *t);   /* NULL=恢复中性默认 */
+
 /* 动力学原语（测试与 ignition 复用；18 号 §2.2 六算子）
  * ke_hysteresis：band 为**半带宽**（源 dynamics.py:34-40 语义，
  * band=0.1 ⇒ ON ≥0.55 / OFF ≤0.45，边界含）——28 号 D6 修正 */

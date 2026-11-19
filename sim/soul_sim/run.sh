@@ -11,6 +11,7 @@ gcc -O2 -Wall -DSOUL_BB_HOST_TEST \
     components/app_soul/src/soul_bb.c \
     components/app_soul/src/soul_behavior.c \
     components/app_soul/src/soul_face.c \
+    components/app_soul/src/soul_trait.c \
     components/app_soul/src/soul_drive.c \
     components/app_soul/src/soul_emotion.c \
     components/app_soul/src/soul_ignition.c -lm

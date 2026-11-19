@@ -26,11 +26,14 @@ gcc -std=c11 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE \
     firmware/components/app_soul/test/test_soul_ke_kd_host.c \
     firmware/components/app_soul/test/test_soul_emotion.c \
     firmware/components/app_soul/test/test_soul_drive.c \
+    firmware/components/app_soul/test/test_soul_trait.c \
     firmware/components/app_soul/src/soul_emotion.c \
-    firmware/components/app_soul/src/soul_drive.c -lm
+    firmware/components/app_soul/src/soul_drive.c \
+    firmware/components/app_soul/src/soul_trait.c -lm
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_ke_kd"; FAIL=1;
 else
     /tmp/test_soul_ke_kd drive || FAIL=1
+    /tmp/test_soul_ke_kd trait || FAIL=1
     # S2 已重锚(docs/24 §2 三层栈新契约, 16 测试全绿)——此数归零;
     # 锚=合同: ke/kd 任何语义变更后失败数变化(无论增减)须显式更新此数。
     EMOT_KNOWN_FAIL=0
