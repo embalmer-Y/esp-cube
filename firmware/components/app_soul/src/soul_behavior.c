@@ -7,6 +7,7 @@
  */
 #include "soul_behavior.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +20,11 @@ struct bhv_slot {
     bool         ever_fired;    /* 冷却判据(0s 时刻未触发≠已触发) */
     uint32_t     last_fire;
     uint32_t     defer_until;    /* 退避截止(单调秒) */
+    /* E3(docs/23 §2.5, 2026-11-19): 习惯化+多样性状态。hab=leaky 记忆
+     * (执行↑, 静默自发恢复), 权重调制见 tick; hab_last=上次 tick 秒
+     * (dt 时基, 0=尚未 tick 过)。 */
+    float        hab;
+    uint32_t     hab_last;
 };
 
 static struct bhv_slot s_tab[SOUL_BHV_MAX];
@@ -109,7 +115,23 @@ void soul_behavior_tick(uint32_t now_s)
 {
     s_now = now_s;
 
-    /* 候选收集: 过阈值 ∧ 过冷却 ∧ 未退避 */
+    /* 候选收集: 过阈值 ∧ 过冷却 ∧ 未退避。
+     * E3: 权重三重调制(Rankin 习惯化+Cozmo recency+count bonus):
+     *   hab 休眠恢复 −= dt·BH_HAB_RECOVER(指数自发恢复);
+     *   w = score × 1/(1+hab²) × [recency< 执行间隔则乘 BH_RECENCY_PEN]
+     *       + BH_NOVELTY_BONUS/(久未执行秒数开方) —— 冷却打满的恒过
+     *       阈值行为被重复疲劳压低, 久未执行的自动升权, 10% 级随机性
+     *       已由既有 WTA 提供。 */
+    static const float BH_HAB_RECOVER = 6.0e-4f; /* ≈28min 常数(冷却 480s
+                                                  * 仅恢复 0.29<0.3, 连打
+                                                  * hab 累积 0.3→0.6→0.9) */
+    static const float BH_HAB_ONFIRE  = 0.55f;   /* 单次执行习惯化增量:
+                                                  * hab 序列 0.55→1.1 帽?不,clamp
+                                                  * 实际 0.55→0.81(帽 1)→eff 0.45
+                                                  * <th 0.5 → 第 3 次必跳 */
+    static const float BH_RECENCY_PEN = 0.25f;   /* 间隔<冷却×0.5 的乘数 */
+    static const float BH_NOVELTY_BONUS = 0.35f; /* bonus 系数(×1/√dt) */
+
     int   cand[SOUL_BHV_MAX];
     float w[SOUL_BHV_MAX];
     int   n = 0;
@@ -117,15 +139,38 @@ void soul_behavior_tick(uint32_t now_s)
 
     for (int i = 0; i < s_cnt; i++) {
         float s = soul_behavior_score(i);
+        /* habituation 记忆自发恢复(每拍) */
+        float dt = (float)(now_s - s_tab[i].hab_last);
+        if (s_tab[i].hab_last != 0 && dt > 0) {
+            s_tab[i].hab -= dt * BH_HAB_RECOVER;
+            if (s_tab[i].hab < 0) s_tab[i].hab = 0;
+        }
+        if (s_tab[i].hab > 1.0f) s_tab[i].hab = 1.0f;
+        s_tab[i].hab_last = now_s;
         if (s < s_tab[i].def.threshold) continue;
         uint16_t cd = s_tab[i].def.cooldown_s;
         if (s_tab[i].ever_fired && cd != 0 &&
             now_s - s_tab[i].last_fire < cd) continue;
         if (s_tab[i].defer_until > now_s) continue;
         if (s_tab[i].def.exec == NULL) continue;   /* 观察位不执行 */
+
+        /* 习惯化作闸门: 有效分 = score × (1−hab) — 重复疲劳直接压低
+         * 得分而非只调赢面(候选唯一时权重调制无效的教训); hab 高到
+         * 1-score 时行为自然落回阈值下, 等 hab 衰减"新鲜感恢复"。 */
+        float eff = s * (1.0f - s_tab[i].hab);
+        if (eff < s_tab[i].def.threshold) continue;
+        float weight = eff;
+        if (s_tab[i].ever_fired) {
+            uint32_t since = now_s - s_tab[i].last_fire;
+            if (cd != 0 && since < cd / 2) {
+                weight *= BH_RECENCY_PEN;          /* 刚执行过→压 */
+            }
+            weight += BH_NOVELTY_BONUS /
+                      (sqrtf((float)(since > 1 ? since : 1)));
+        }
         cand[n] = i;
-        w[n] = s;
-        wsum += s;
+        w[n] = weight;
+        wsum += weight;
         n++;
     }
     if (n == 0 || wsum <= 0) return;
@@ -140,6 +185,7 @@ void soul_behavior_tick(uint32_t now_s)
 
     s_tab[win].ever_fired = true;
     s_tab[win].last_fire = now_s;
+    s_tab[win].hab += BH_HAB_ONFIRE;               /* 习惯化上行 */
     s_tab[win].def.exec();
 }
 

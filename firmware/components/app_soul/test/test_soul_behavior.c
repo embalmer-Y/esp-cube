@@ -98,8 +98,15 @@ static void test_fire_and_cooldown(void)
     CHECK(s_exec_a == 1, "cooldown holds t=101");
     soul_behavior_tick(159);
     CHECK(s_exec_a == 1, "cooldown holds t=159");
+    /* E3(docs/23 §2.5): 习惯化闸门——t=100 首发后 hab=0.55, 冷却 60s
+     * 仅恢复 60×6e-4=0.036, t=160 出冷却时 eff=score×(1−0.514)=0.486
+     * 阈 0.8 → 被习惯化压住不再立即重发(新契约: 冷却到期≠必发,
+     * 新鲜感恢复才是发火条件)。恢复到 eff=1−hab≥0.8 → hab≤0.2,
+     * 从 0.514 需 0.314/6e-4≈524s → t≈100+60+524=684 重发。 */
     soul_behavior_tick(160);
-    CHECK(s_exec_a == 2, "a refires t=160(cooldown=60)");
+    CHECK(s_exec_a == 1, "habituation gate holds at cooldown expiry t=160");
+    soul_behavior_tick(700);
+    CHECK(s_exec_a == 2, "refires once habituation decays t=700");
 }
 
 static void test_threshold_blocks(void)
