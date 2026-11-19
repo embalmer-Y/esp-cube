@@ -1,0 +1,70 @@
+# life_week.txt —— 真实生活节奏一周场景(秒; 每天 86400s 重复模板)
+# 周期: 早 8 点(28800s 相位)校时+勿扰解除; 白天互动; 晚 23 点(82800s)勿扰
+# 用 --ticks 604800 模拟 7 天(每周事件同相位)
+86400 timesync 1
+# ---- 第 1 天 ----
+28800 play 0
+29500 voice
+29520 round ok 你好呀
+36000 voice
+36500 round ok 今天天气怎么样
+36600 mood +0.10
+43200 touch
+43300 barge
+43400 round ok 换首歌
+50000 voice
+50500 round fail 网络超时
+50600 mood -0.15
+60000 voice
+60100 round ok 讲个笑话
+60200 mood +0.15
+70000 play 1
+82800 play 0
+# ---- 第 2 天 ----
+172800 voice
+173000 round ok 早安
+173400 mood +0.10
+200000 play 1
+250000 barge
+251000 round ok 声音大一点
+300000 voice
+301000 round ok 播放新闻
+400000 touch
+500000 voice
+501000 round ok 陪我聊聊天
+502000 mood +0.12
+600000 voice
+601000 round fail 没听清
+602000 mood -0.08
+828000 play 0
+# ---- 第 3 天: 低互动日(出差) ----
+300000 voice
+301000 round ok 我出门了
+302000 mood -0.05
+400000 play 1
+# ---- 第 4 天 ----
+900000 voice
+901000 round ok 回来了
+902000 mood +0.15
+950000 barge
+951000 round ok 想你了
+1000000 play 1
+1100000 voice
+1101000 round ok 放点音乐
+1102000 mood +0.10
+# ---- 第 5-7 天: 常态混合(稀疏互动+电台) ----
+1400000 voice
+1401000 round ok 嗯
+1500000 play 1
+1700000 touch
+1900000 voice
+1901000 round ok 晚安
+1902000 mood +0.05
+2000000 play 0
+2200000 play 1
+2500000 voice
+2501000 round ok 在吗
+2502000 mood +0.08
+2600000 play 0
+2800000 voice
+2801000 round ok 周末愉快
