@@ -93,9 +93,25 @@ int store_crypt_read(store_crypt_t *c, const char *rel,
             return -1;
         }
     } else {
-        size_t k = flen < cap ? flen : cap;
-        memcpy(buf, blob, k);
-        *len = k;
+        /* 旧明文兼容(T20 迁移期): 无 EPSCV2 magic → 按明文透传。
+         * 修复(2026-11-19, §55.16 事件 A 根因): 原实现在 buf=NULL 长度
+         * 查询模式(app_storage_read 唯一用法)下 memcpy(NULL,..,0) 且
+         * 不设 cache → 调用方拿到 len=0/空 payload → 上层判 BAD_FILE
+         * ——crypt 激活后卡上全部明文资产(表情素材等)静默读失败。
+         * 统一走 cache 承载(与 GCM 路径同一出口语义)。 */
+        free(c->cache);
+        c->cache = malloc(flen ? flen : 1);
+        if (c->cache == NULL) {
+            free(blob);
+            return -1;
+        }
+        memcpy(c->cache, blob, flen);
+        c->cache_len = flen;
+        if (buf != NULL) {
+            size_t k = flen < cap ? flen : cap;
+            memcpy(buf, blob, k);
+        }
+        *len = flen;
         free(blob);
         return 0;
     }

@@ -300,6 +300,17 @@ static void scenario_tamper_and_compat(void)
     CHECK(prc == 0 && n == 12 && memcmp(out, "旧明文行", 12) == 0,
           "legacy plaintext passthrough");
 
+    /* 明文兼容 × 长度查询模式(buf=NULL)——§55.16 事件 A 根因回归:
+     * 原实现返回 len=0 且不设 cache → app_storage_read 判空 →
+     * crypt 激活后卡上全部明文资产(表情素材等)静默 BAD_FILE */
+    size_t qn = 999;
+    int qrc = store_crypt_read(&s_c, "p/a/episodes.tsv", NULL, 0, &qn);
+    CHECK(qrc == 0, "plaintext len-query rc");
+    CHECK(qn == 12, "plaintext len-query returns real length");
+    const void *pl = store_crypt_payload(&s_c);
+    CHECK(pl != NULL && memcmp(pl, "旧明文行", 12) == 0,
+          "plaintext len-query payload via cache");
+
     /* nonce 唯一: 同内容两次写 → blob 不同 */
     uint8_t blob1[TIO_CAP], blob2[TIO_CAP];
     CHECK(store_crypt_write(&s_c, "x/y", "同内容", 9) == 0, "w1");
