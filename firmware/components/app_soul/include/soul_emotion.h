@@ -130,6 +130,9 @@ struct ke_tune {
 	float eth_soothe_mod;   /* [0.75,1.25]× 安抚效率(温情)             */
 };
 void ke_tune_set(const struct ke_tune *t);   /* NULL=恢复中性默认 */
+/* appraisal 通道: 直接向伦理负荷注剂量(LLM 评价判定"这是伤害",
+ * 替代引擎的固定 FAIL→0.05 规则; docs/24 §11.6) */
+void ke_ethics_dose(float amt);
 
 /* 动力学原语（测试与 ignition 复用；18 号 §2.2 六算子）
  * ke_hysteresis：band 为**半带宽**（源 dynamics.py:34-40 语义，

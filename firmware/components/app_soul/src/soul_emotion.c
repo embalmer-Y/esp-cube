@@ -455,6 +455,13 @@ const struct ke_state *ke_state_snapshot(void)
 	return &s_st;
 }
 
+void ke_ethics_dose(float amt)
+{
+	s_ethics_load += amt;
+	if (s_ethics_load < 0.0f)
+		s_ethics_load = 0.0f;
+}
+
 void ke_reset(const struct ke_state *init)
 {
 	memset(&s_st, 0, sizeof(s_st));

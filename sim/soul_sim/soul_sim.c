@@ -34,8 +34,11 @@
 /* ---- 模拟世界状态(感知侧) ---- */
 static bool w_net, w_play, w_ai, w_timesync;
 static uint8_t w_pend;              /* PEND 位(与 soul.c 同语义) */
-enum { P_BARGE = 1, P_ROUND_OK = 2, P_ROUND_FAIL = 4, P_VOICE = 8, P_TOUCH = 16 };
+enum { P_BARGE = 1, P_ROUND_OK = 2, P_ROUND_FAIL = 4, P_VOICE = 8, P_TOUCH = 16,
+       P_DOSE = 32 };   /* S2.5 双臂: appraisal 三元组剂量(LLM 评价臂) */
+static float w_dose[3];           /* social / ethics / valence */
 static float w_mood_req; static uint32_t w_mood_seq;
+static uint32_t w_dose_seq;
 
 /* ---- 深思记账(复刻 soul_think.c 静态) ---- */
 static uint32_t s_last_think_min;
@@ -131,6 +134,10 @@ static void inject(const char *ln)
         else w_pend |= P_ROUND_FAIL;
     } else if (!strcmp(cmd, "mood")) {
         w_mood_req = strtof(arg, NULL); w_mood_seq |= 1;
+    } else if (!strcmp(cmd, "dose")) {
+        /* dose <social> <ethics> <valence>: LLM appraisal 剂量直注生理层 */
+        if (sscanf(ln, "%*s %f %f %f", &w_dose[0], &w_dose[1], &w_dose[2]) == 3)
+            w_pend |= P_DOSE;
     } else if (!strcmp(cmd, "trait")) {
         /* S2.5: trait C E W A R(五维, band 内)——双性格对照实验入口 */
         float t[5];
@@ -195,6 +202,18 @@ int main(int argc, char **argv)
         else if (w_pend & P_ROUND_FAIL) { w_pend &= ~P_ROUND_FAIL; evt = KD_EVT_ROUND_FAIL; receipt = KE_RECEIPT_FAIL; }
         else if (w_pend & P_VOICE) { w_pend &= ~P_VOICE; evt = KD_EVT_VOICE; }
         else if (w_pend & P_TOUCH) { w_pend &= ~P_TOUCH; evt = KD_EVT_TOUCH; }
+        else if (w_pend & P_DOSE) {
+            w_pend &= ~P_DOSE;
+            /* 滋养性剂量(gc>0)等价温和互动=安抚语义(对齐 round ok/touch) */
+            if (w_dose[0] > 0.0f) receipt = KE_RECEIPT_SUCCESS;
+            kd_inject_social(w_dose[0]);
+            ke_ethics_dose(w_dose[1]);
+            if (w_dose[2] != 0.0f) {
+                struct ke_reappraisal r = { .delta = w_dose[2],
+                                            .receipt_id = 0xBEEF + (w_dose_seq++) };
+                ke_reappraisal_request(&r);
+            }
+        }
 
         bool quiet_world = !w_ai && !w_play;        /* kd quiet 口径 */
         if (w_ai) last_active = (uint32_t)t;

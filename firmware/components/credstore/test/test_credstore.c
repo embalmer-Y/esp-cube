@@ -33,6 +33,9 @@
 #include "esp_err.h"
 #include "nvs.h"
 
+/* 宿主桩: heap_caps → 直通 malloc(store_crypt 链入, host_stubs 头) */
+void *heap_caps_malloc(size_t n, unsigned caps) { (void)caps; return malloc(n); }
+
 static int s_fail;
 #define CHECK(cond, msg) do { \
     if (!(cond)) { \

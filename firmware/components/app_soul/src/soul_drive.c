@@ -54,6 +54,11 @@ static float clamp01(float x)
 	return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
 }
 
+void kd_inject_social(float amt)
+{
+	s_level[KD_SOCIAL] = clamp01(s_level[KD_SOCIAL] + amt);
+}
+
 const struct kd_params *kd_params_default(void)
 {
 	return &s_def;

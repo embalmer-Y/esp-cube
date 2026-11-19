@@ -87,6 +87,10 @@ struct kd_output {
 };
 
 const struct kd_params *kd_params_default(void); /* 内置冻结表(S2.5: trait 调制基底) */
+/* S2.5/appraisal 通道: 直接向水库注剂量(LLM 评价经此进入生理层,
+ * 与事件表同一钳位; amt 可负=伤害性交互耗损——引擎事件表只做正向
+ * 恢复, 评价层可表达"这轮对话伤人")(docs/24 §11.6 触发层) */
+void kd_inject_social(float amt);
 void kd_init(const struct kd_params *p);   /* NULL = 用内置冻结表；
 					    * p 须静态生存期（组件只存
 					    * 指针，评审 C4） */
