@@ -85,9 +85,14 @@ def main():
               f"{macro} must be {want} (0.01 units)")
 
     cmake = read_text(APP_UI_CMAKE)
-    cmake_block = re.search(r"set\(FACE_EMBED(.*?)\)", cmake, re.S)
-    cmake_names = set(re.findall(r"ui/assets/face/([a-z0-9_]+)\.efc", cmake_block.group(1))) \
-        if cmake_block else set()
+    # §55.20 素材出库后 FACE_EMBED 为 foreach 条件嵌入(不再是字面量列表):
+    # 解析 foreach 名单 × 实际在场 .efc
+    m_for = re.search(r"foreach\(f ([a-z_ ]+)\)", cmake)
+    if m_for is None:
+        raise SystemExit("无法解析 app_ui CMakeLists foreach 名单")
+    present = {f for f in os.listdir(FACE_DIR) if f.endswith(".efc")}
+    cmake_names = {n.strip() for n in m_for.group(1).split()
+                   if f"{n.strip()}.efc" in present}
     check(cmake_names == names,
           f"CMakeLists FACE_EMBED {sorted(cmake_names)} != MANIFEST embedded {sorted(names)}")
 
