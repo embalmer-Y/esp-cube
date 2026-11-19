@@ -1,0 +1,113 @@
+28800 timesync 1
+29000 voice
+29030 round ok 聊几句
+29900 voice
+29930 round ok 聊几句
+30800 voice
+30830 round ok 聊几句
+31700 voice
+31730 round ok 聊几句
+32600 voice
+32630 round ok 聊几句
+33500 voice
+33530 round ok 聊几句
+34400 voice
+34430 round ok 聊几句
+35300 voice
+35330 round ok 聊几句
+36200 voice
+36230 round ok 聊几句
+37100 voice
+37130 round ok 聊几句
+38000 voice
+38030 round ok 聊几句
+38900 voice
+38930 round ok 聊几句
+39800 voice
+39830 round ok 聊几句
+40700 voice
+40730 round ok 聊几句
+41600 voice
+41630 round ok 聊几句
+42500 voice
+42530 round ok 聊几句
+43400 voice
+43430 round ok 聊几句
+44300 voice
+44330 round ok 聊几句
+45200 voice
+45230 round ok 聊几句
+46100 voice
+46130 round ok 聊几句
+47000 voice
+47030 round ok 聊几句
+47900 voice
+47930 round ok 聊几句
+48800 voice
+48830 round ok 聊几句
+49700 voice
+49730 round ok 聊几句
+50600 voice
+50630 round ok 聊几句
+51500 voice
+51530 round ok 聊几句
+52400 voice
+52430 round ok 聊几句
+53300 voice
+53330 round ok 聊几句
+54200 voice
+54230 round ok 聊几句
+55100 voice
+55130 round ok 聊几句
+56000 voice
+56030 round ok 聊几句
+56900 voice
+56930 round ok 聊几句
+57800 voice
+57830 round ok 聊几句
+58700 voice
+58730 round ok 聊几句
+59600 voice
+59630 round ok 聊几句
+60500 voice
+60530 round ok 聊几句
+61400 voice
+61430 round ok 聊几句
+62300 voice
+62330 round ok 聊几句
+63200 voice
+63230 round ok 聊几句
+64100 voice
+64130 round ok 聊几句
+65000 voice
+65030 round ok 聊几句
+65900 voice
+65930 round ok 聊几句
+66800 voice
+66830 round ok 聊几句
+67700 voice
+67730 round ok 聊几句
+68600 voice
+68630 round ok 聊几句
+69500 voice
+69530 round ok 聊几句
+70400 voice
+70430 round ok 聊几句
+71300 voice
+71330 round ok 聊几句
+72200 voice
+72230 round ok 聊几句
+73100 voice
+73130 round ok 聊几句
+74000 voice
+74030 round ok 聊几句
+74900 voice
+74930 round ok 聊几句
+75800 voice
+75830 round ok 聊几句
+76700 voice
+76730 round ok 聊几句
+77600 voice
+77630 round ok 聊几句
+78500 voice
+78530 round ok 聊几句

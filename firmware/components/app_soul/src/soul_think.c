@@ -99,11 +99,23 @@ bool soul_think_busy(void)
     return s_busy;
 }
 
-/* 触发闸上下文供给(soul tick 每拍调) */
+/* 触发闸上下文供给(soul tick 每拍调)。
+ * 2026-11-19 修复(模拟器快进一周发现, §55.14 续): thought/fired 两配额
+ * 此前只 ++ 无跨天重置——"日帽 12"实为"每次开机终身 12 次", 耗尽后深思
+ * 永久沉默(重启才恢复)。在供给点(每拍必经)做日翻转检测: now_min 显著
+ * 回绕(过午夜/SNTP 跳变)即清零两配额。 */
 void soul_think_gate_ctx(struct ki_think_ctx *tc)
 {
+    static uint32_t s_last_ctx_min;
     if (tc == NULL) return;
-    tc->now_min = uptime_min();
+    uint32_t now = uptime_min();
+    if (s_last_ctx_min != 0 && now < s_last_ctx_min &&
+        (s_last_ctx_min - now) > 12 * 60) {
+        s_thought_today = 0;
+        s_fired_today = 0;
+    }
+    s_last_ctx_min = now;
+    tc->now_min = now;
     tc->last_think_min = s_last_think_min;
     tc->thought_today = s_thought_today;
     tc->last_was_silent = s_last_silent;

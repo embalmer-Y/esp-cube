@@ -242,14 +242,21 @@ int main(int argc, char **argv)
 
         soul_behavior_tick((uint32_t)t);
 
-        /* L4 思维闸(记账复刻 soul_think.c) */
+        /* L4 思维闸(记账复刻 soul_think.c, 含 2026-11-19 日翻转清零修复) */
+        uint32_t now_min = (uint32_t)((t / 60) % 1440);
+        static uint32_t s_last_ctx_min;
+        if (s_last_ctx_min != 0 && now_min < s_last_ctx_min &&
+            (s_last_ctx_min - now_min) > 12 * 60) {
+            s_thought_today = 0;
+        }
+        s_last_ctx_min = now_min;
         struct ki_think_ctx tc = {
             .arousal = ke->arousal,
             .urgency_max = kd_out.error_max,
             .pending_command = w_ai,
             .quiet_hours = quiet_hrs,
             .new_event = soul_bb_get(SOUL_BB_SALIENCE) > 0.15f,
-            .now_min = (uint32_t)((t / 60) % 1440),
+            .now_min = now_min,
             .last_think_min = s_last_think_min,
             .thought_today = s_thought_today,
             .last_was_silent = s_last_silent,
@@ -258,7 +265,9 @@ int main(int argc, char **argv)
         struct ki_think_gate g;
         ki_think_gate(&tc, &g);
         int fired = 0, blocked = 0;
-        if (g.trigger) {
+        /* 注: 闸语义=blocked 时 trigger 已被清 false(ignition.c 尾部),
+         * 被拦观测须独立看 blocked_mask */
+        if (g.trigger || g.blocked_mask) {
             if (g.blocked_mask) { blocked = 1; for (int b = 0; b < 4; b++) if (g.blocked_mask & (1 << b)) s_think_blocked[b]++; }
             else {
                 fired = 1; s_think_fires++;
