@@ -1,0 +1,18 @@
+--- a/port/os/idf/src/eh_host_port_dma.c
++++ b/port/os/idf/src/eh_host_port_dma.c
+@@ -11,6 +11,15 @@
+ 
+ void *eh_host_port_dma_alloc(size_t n)
+ {
++#if CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM
++    /* EspCube A1a(docs/22 3C/3E): mempool(MEM_ALLOC) 走本非 aligned 路径,
++     * 上游 PREFER_SPIRAM 仅覆盖 aligned 分支——补齐同款优先序, 使 hosted
++     * 15872B SDIO 聚合缓冲可落 EDMA-capable PSRAM, 内部 DMA 池减压。 */
++    void *ptr = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
++    if (ptr) {
++        return ptr;
++    }
++#endif
+     return heap_caps_malloc(n, MALLOC_CAP_DMA);
+ }
+ 

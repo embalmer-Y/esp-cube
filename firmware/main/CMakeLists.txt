@@ -1,3 +1,23 @@
+
+# ---- A1a: esp_hosted DMA 分配补丁(幂等, configure 期自动应用) ----
+# manager 版本不支持 manifest patches 字段, 工程侧实现; 内容=非 aligned
+# dma_alloc 补 PREFER_SPIRAM 优先序(hosted 15872 聚合缓冲→EDMA PSRAM,
+# docs/22 §3C/§3E; 与 CONFIG_EH_HOST_PORT_DMA_PREFER_SPIRAM=y 配套)。
+set(_hosted_dma ${CMAKE_SOURCE_DIR}/managed_components/espressif__esp_hosted/port/os/idf/src/eh_host_port_dma.c)
+if(EXISTS ${_hosted_dma})
+    file(READ ${_hosted_dma} _dma_src)
+    if(NOT _dma_src MATCHES "EspCube A1a")
+        execute_process(
+            COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/patches/esp_hosted_dma_prefer_spiram.patch
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/managed_components/espressif__esp_hosted
+            RESULT_VARIABLE _rc)
+        if(_rc EQUAL 0)
+            message(STATUS "A1a: esp_hosted DMA patch applied")
+        else()
+            message(WARNING "A1a: esp_hosted DMA patch FAILED rc=${_rc}")
+        endif()
+    endif()
+endif()
 # main [L5 装配]: 只负责模块初始化顺序/失败域策略/ui_port_esp 后端; 唯一可横跨全层(依赖规则见 docs/06)
 set(main_priv_reqs
     cubecore boardcfg
