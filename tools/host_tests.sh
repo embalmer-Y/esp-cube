@@ -18,6 +18,49 @@ gcc -DSOUL_BB_HOST_TEST -I firmware/components/app_soul/include \
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_bh"; FAIL=1;
 else /tmp/test_soul_bh || FAIL=1; fi
 
+echo "== [1b] ke/kd 情绪/驱力黄金回归(docs/24 S1; Unity 垫片; 锚=合同) =="
+gcc -std=c11 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE \
+    -I firmware/components/app_soul/test/host_stubs \
+    -I firmware/components/app_soul/include \
+    -o /tmp/test_soul_ke_kd \
+    firmware/components/app_soul/test/test_soul_ke_kd_host.c \
+    firmware/components/app_soul/test/test_soul_emotion.c \
+    firmware/components/app_soul/test/test_soul_drive.c \
+    firmware/components/app_soul/src/soul_emotion.c \
+    firmware/components/app_soul/src/soul_drive.c -lm
+if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_ke_kd"; FAIL=1;
+else
+    /tmp/test_soul_ke_kd drive || FAIL=1
+    # E1-E4 期间旧锚失守 9 处(docs/23 §6.0), 挂账放行; S2 批随 mood
+    # 三层栈重构一并重锚后清零。锚=合同: 失败数变化(无论增减)须显式更新此数。
+    EMOT_KNOWN_FAIL=9
+    /tmp/test_soul_ke_kd emotion
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "emotion: 全绿(旧锚已修复, 请将 EMOT_KNOWN_FAIL 置 0)"
+    elif [ "$rc" -le "$EMOT_KNOWN_FAIL" ]; then
+        echo "emotion: KNOWN-FAIL($rc/$EMOT_KNOWN_FAIL, docs/24 S1 挂账) — 不阻塞"
+    else
+        echo "emotion: FAIL($rc > 已知 $EMOT_KNOWN_FAIL) — 新增失守, 锚漂移违规"
+        FAIL=1
+    fi
+fi
+
+echo "== [1c] R3 表达区分度验收(docs/24 R3/S1; soul_sim 三场景月测; 目标态) =="
+python3 -I tools/soul_accept.py
+rc=$?
+# v2 前基线 7 红(C1×3/C2×3/C3), S2 批(mood 层+表情扇区+ethics 解锁)逐项转绿;
+# 判据由绿转红即回归。
+R3_KNOWN=7
+if [ "$rc" -eq 0 ]; then
+    echo "R3: 全达标(请将 R3_KNOWN 置 0)"
+elif [ "$rc" -le "$R3_KNOWN" ]; then
+    echo "R3: KNOWN-FAIL($rc/$R3_KNOWN, v2 实施中) — 不阻塞"
+else
+    echo "R3: FAIL($rc > 已知 $R3_KNOWN) — 回归"
+    FAIL=1
+fi
+
 echo "== [2/14] 记忆系统 P0 回归(docs/15 P0-1/P0-2/M1/M4/M5; ASan+UBSan) =="
 gcc -std=c11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer \
     -I firmware/components/app_soul/test/host_stubs \

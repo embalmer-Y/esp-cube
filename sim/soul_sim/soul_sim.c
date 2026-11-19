@@ -178,7 +178,7 @@ int main(int argc, char **argv)
     }
     FILE *cf = NULL;
     if (csv) { cf = fopen(csv, "w"); fprintf(cf, "t,v,a,urgency,bond,persist,"
-        "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block\n"); }
+        "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block,ethics\n"); }
 
     soul_behavior_reset();
     behaviors_register_sim();
@@ -285,12 +285,12 @@ int main(int argc, char **argv)
         if (ke->arousal > a_max) a_max = ke->arousal;
 
         if (cf && (t % stride == 0))
-            fprintf(cf, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%d,%d,%d,%s,%d,%d\n",
+            fprintf(cf, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%d,%d,%d,%s,%d,%d,%d\n",
                 (unsigned long long)t, ke->valence, ke->arousal, ke->urgency,
                 ke->social_bond, ke->persistence, kd_out.error[KD_SOCIAL],
                 kd_out.error[KD_STIM], soul_bb_get(SOUL_BB_SALIENCE),
                 soul_bb_get(SOUL_BB_IDLE), quiet_hrs, w_net, w_play,
-                cur_face, fired, blocked);
+                cur_face, fired, blocked, ke->ethics_latched ? 1 : 0);
     }
 
     printf("\n===== SOUL SIM 摘要(%.2f 天) =====\n", ticks / 86400.0);
