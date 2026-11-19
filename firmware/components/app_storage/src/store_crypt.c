@@ -8,6 +8,8 @@
 
 #include "store_crypt.h"
 
+#include "esp_heap_caps.h"
+
 static const char SC_MAGIC[SC_MAGIC_LEN] = "EPSCV2\0";
 
 int store_crypt_init(store_crypt_t *c, const sc_port_t *port,
@@ -100,7 +102,10 @@ int store_crypt_read(store_crypt_t *c, const char *rel,
          * ——crypt 激活后卡上全部明文资产(表情素材等)静默读失败。
          * 统一走 cache 承载(与 GCM 路径同一出口语义)。 */
         free(c->cache);
-        c->cache = malloc(flen ? flen : 1);
+        /* PSRAM: 明文资产可到几十 KB(§55.16 续2: 内部堆分配失败=BAD_FILE
+         * 且与 boot 期任务争内存在 v6 时代已证不可行) */
+        c->cache = heap_caps_malloc(flen ? flen : 1,
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (c->cache == NULL) {
             free(blob);
             return -1;
@@ -121,9 +126,11 @@ int store_crypt_read(store_crypt_t *c, const char *rel,
     const uint8_t *tag = (const uint8_t *)blob + SC_MAGIC_LEN + SC_NONCE_LEN + clen;
     uint8_t key[32];
     if (derive_key(c, nonce, rel, key) != 0) { free(blob); return -1; }
-    /* 解入内部 cache(供 buf=NULL 模式原地解析); 旧 cache 释放 */
+    /* 解入内部 cache(供 buf=NULL 模式原地解析); 旧 cache 释放。
+     * PSRAM(同明文路径); 并发安全由调用方 app_storage_read 持锁 */
     free(c->cache);
-    c->cache = malloc(clen ? clen : 1);
+    c->cache = heap_caps_malloc(clen ? clen : 1,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (c->cache == NULL) { free(blob); return -1; }
     int rc = c->port->gcm_dec(c->port->ud, key, nonce,
                               (const uint8_t *)rel, strlen(rel),

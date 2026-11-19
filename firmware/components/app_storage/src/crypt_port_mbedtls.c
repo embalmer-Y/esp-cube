@@ -141,11 +141,14 @@ void app_storage_crypt_enable(void)
     uint8_t key[32];
     if (trust_sd_key(&tc, key) != 0) return;
 
-    sc_port_t port = s_mb_port;
+    /* §55.16 续2 修复: port 必须传【静态存储期】的 s_mb_port——
+     * 原实现传栈局部副本, init 返回后 c->port 悬垂, crypt 读写经
+     * c->port->rng/gcm 调进死栈帧垃圾 → Instruction access fault
+     * boot loop(批次 44 埋下, len=0 bug 挡路期间休眠, 修复后显形) */
     store_crypt_t *c = malloc(sizeof(*c));
     if (c == NULL) return;
     /* 绑定 RAW 层(防递归: 公开 read/write 会再进 crypt) */
-    if (store_crypt_init(c, &port, key,
+    if (store_crypt_init(c, &s_mb_port, key,
                          app_storage_raw_read, app_storage_raw_write) == 0) {
         app_storage_crypt_bind(c);
     } else {

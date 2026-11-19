@@ -226,6 +226,9 @@ static int io_write(void *ud, int slot, const void *buf, size_t len)
     return 0;
 }
 
+/* 宿主桩: heap_caps → 直通 malloc(host_stubs/esp_heap_caps.h) */
+void *heap_caps_malloc(size_t n, unsigned caps) { (void)caps; return malloc(n); }
+
 /* ---- EPSCV2 场景 ---- */
 static store_crypt_t s_c;
 static const sc_port_t s_stub_port = {

@@ -207,9 +207,18 @@ esp_err_t app_storage_mount_mode(int mode)
     return ESP_OK;
 }
 
+/* §55.16 续2: store_crypt 的 cache 是共享可变状态——SD_READY 时刻
+ * ui_port(表情)/persona/soul_mem 多任务并发 app_storage_read, 无锁
+ * free/malloc cache → 堆腐蚀 → 全核 Instruction access fault boot loop
+ * (d423cd8 板上实证)。读段全程持锁(payload 拷贝含在内)。 */
+static SemaphoreHandle_t s_crypt_lock;
+
 esp_err_t app_storage_init(void)
 {
-    /* 只订阅; 真正挂载在 WiFi 就绪后(见 storage_evt_cb 注释) */
+    /* 只订阅; 真正挂载在 WiFi 就绪后(见 storage_evt_cb 注释)。
+     * crypt 读锁提前建好(bind 前后都可能有人读)。 */
+    if (s_crypt_lock == NULL)
+        s_crypt_lock = xSemaphoreCreateMutex();
     return cube_event_subscribe(storage_evt_cb, NULL);
 }
 
@@ -236,22 +245,28 @@ char *app_storage_read(const char *rel, size_t *len)
 {
     if (s_crypt != NULL) {
         size_t n = 0;
+        char *out = NULL;
         /* buf=NULL + 返回值 0 → 数据在 crypt scratch; -2 → AUTH 拒读;
-         * 1 → 不存在(继续按 NULL) */
+         * 1 → 不存在(继续按 NULL)。读+拷贝全程持锁(cache 共享态) */
+        if (xSemaphoreTake(s_crypt_lock, pdMS_TO_TICKS(5000)) != pdTRUE) {
+            ESP_LOGW(TAG, "crypt read lock timeout(%s)", rel);
+            return NULL;
+        }
         int crc = store_crypt_read(s_crypt, rel, NULL, 0, &n);
         if (crc == -2) {
             ESP_LOGW(TAG, "crypt read auth fail(%s) - 保护性拒读", rel);
-            return NULL;
-        }
-        if (crc == 0) {
+        } else if (crc == 0) {
             const void *payload = store_crypt_payload(s_crypt);
-            char *out = malloc(n + 1);
-            if (out == NULL) return NULL;
-            memcpy(out, payload, n);
-            out[n] = 0;
-            if (len != NULL) *len = n;
-            return out;
+            out = payload != NULL ? malloc(n + 1) : NULL;
+            if (out != NULL) {
+                memcpy(out, payload, n);
+                out[n] = 0;
+                if (len != NULL) *len = n;
+            }
         }
+        xSemaphoreGive(s_crypt_lock);
+        if (crc == -2 || (crc == 0 && out != NULL)) return out;
+        if (crc == 0) return NULL;          /* payload/malloc 失败 */
         /* crc == 1(文件不存在) 或其他 → 落回 raw */
         if (crc != 1) return NULL;
     }
