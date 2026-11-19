@@ -8,11 +8,22 @@
 # 以上全部由 CONFIG_ESP_CUBE_ENABLE_FACE_ANIM 门控: S31(表情关闭)不嵌入素材、
 # 不要求 esp_efc_codec。
 if(CONFIG_ESP_CUBE_ENABLE_FACE_ANIM)
-    set(FACE_EMBED
-        "ui/assets/face/smile_static.efc"
-        "ui/assets/face/laugh.efc"
-        "ui/assets/face/investigate.efc"
-        "ui/assets/face/shocked.efc")
+    # 素材出库(§55.20 用户裁决): .efc 不再随仓库分发(来源许可未定,
+    # 见 vendor-licenses.md §3); 本地存在才嵌入并给对应编译定义,
+    # 缺失时构建照绿(表情走降级: builtin 查找失败=无兜底脸)。
+    # CONFIGURE_DEPEND: 素材增删自动触发重configure(ninja 对文件存在性
+    # 不建依赖, 纯 EXISTS 判断在文件消失时会用旧清单报 missing)
+    file(GLOB FACE_GOT CONFIGURE_DEPEND "${CMAKE_CURRENT_LIST_DIR}/ui/assets/face/*.efc")
+    set(FACE_EMBED "")
+    set(FACE_DEFS "")
+    foreach(f smile_static laugh investigate shocked)
+        list(FIND FACE_GOT "${CMAKE_CURRENT_LIST_DIR}/ui/assets/face/${f}.efc" IDX)
+        if(IDX GREATER -1)
+            list(APPEND FACE_EMBED "ui/assets/face/${f}.efc")
+            string(TOUPPER ${f} FU)
+            list(APPEND FACE_DEFS ESP_CUBE_FACE_EMBED_${FU}=1)
+        endif()
+    endforeach()
 endif()
 idf_component_register(
     SRCS "app_ui.c" "ui/ui_pages.c" "ui/ui_widget.c"
@@ -21,6 +32,9 @@ idf_component_register(
     EMBED_FILES ${FACE_EMBED}
     PRIV_REQUIRES cubecore espressif__esp_lvgl_port lvgl__lvgl
 )
+if(CONFIG_ESP_CUBE_ENABLE_FACE_ANIM AND FACE_DEFS)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE ${FACE_DEFS})
+endif()
 # esp_efc_codec 仅随表情开关引入。写在 if(CONFIG_*) 内的 PRIV_REQUIRES 会被 IDF 的
 # 需求预扫描忽略(该扫描不加载 sdkconfig), 故用 optional 形式: 组件在构建中时才链接,
 # S31(表情关闭, 组件不在构建中)不受影响。

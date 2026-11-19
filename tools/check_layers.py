@@ -6,7 +6,7 @@
   - 其余只允许向下紧邻一层(经对方 include/ 公开头);
   - 同层横向 include 禁止(app 层控制面走事件总线);
   - 越层/横向 → 报错退出码 1。
-例外: L5 装配层 main 可 include 一切; vendored mp3_helix 豁免;
+例外: L5 装配层 main 可 include 一切; vendored minimp3 豁免;
       sim/ 模拟器(后端=mock, 属 L5 同类装配)不在扫描范围。
 2026-11-13 修订(docs/17 §2.2, docs/18 T09): 登记全部组件(未知报错);
       依赖规则改为"上层只依赖下层稳定公开接口, 允许跨空层, 同层公开头
@@ -29,7 +29,7 @@ LAYERS = {
     "credstore": 3, "llmprofile": 3, "sessguard": 3,
     "app_ui": 4,
 }
-VENDORED = {"mp3_helix"}
+VENDORED = {"minimp3"}  # CC0 解码器(§55.20 替换 RPSL mp3_helix)
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s+"([^"]+)"')
 
 

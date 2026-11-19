@@ -31,3 +31,8 @@ tools/efc/out/
 
 # App 验证用下载物(APK 等二进制, 不入库)
 dist/
+
+# 素材出库(§55.20 用户裁决): .efc 表情与 media/ 参考素材不入库(来源许可未定,
+# vendor-licenses.md §3); 本地放置后构建自动嵌入, 获取见 tools/fetch_face_assets.sh
+firmware/components/app_ui/ui/assets/face/*.efc
+media/

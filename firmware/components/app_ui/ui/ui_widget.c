@@ -29,14 +29,24 @@
 #define FACE_TAG "ui_face"
 /* 乐鑫表情素材(esp_efc_codec 1.1.0; CMakeLists FACE_EMBED 内置 4 段, 符号 _binary_<名>_efc_start/end)。
  * 名称集合与 ui_face_expect.h 的表一致(由 tools/test_face_expect.py 核对)。 */
+/* 素材出库(§55.20): 每段独立门控——本地无该 .efc 时 CMake 不定义对应
+ * 宏、不嵌入, 查找自然失败(表情降级, 构建照绿)。 */
+#if ESP_CUBE_FACE_EMBED_SMILE_STATIC
 extern const uint8_t face_smile_static_efc_start[] asm("_binary_smile_static_efc_start");
 extern const uint8_t face_smile_static_efc_end[]   asm("_binary_smile_static_efc_end");
+#endif
+#if ESP_CUBE_FACE_EMBED_LAUGH
 extern const uint8_t face_laugh_efc_start[]       asm("_binary_laugh_efc_start");
 extern const uint8_t face_laugh_efc_end[]         asm("_binary_laugh_efc_end");
+#endif
+#if ESP_CUBE_FACE_EMBED_INVESTIGATE
 extern const uint8_t face_investigate_efc_start[] asm("_binary_investigate_efc_start");
 extern const uint8_t face_investigate_efc_end[]   asm("_binary_investigate_efc_end");
+#endif
+#if ESP_CUBE_FACE_EMBED_SHOCKED
 extern const uint8_t face_shocked_efc_start[]     asm("_binary_shocked_efc_start");
 extern const uint8_t face_shocked_efc_end[]       asm("_binary_shocked_efc_end");
+#endif
 #endif
 
 ui_widget_t ui_w;
@@ -141,22 +151,35 @@ bool ui_face_builtin_lookup(const char *name, const uint8_t **start,
                             const uint8_t **end)
 {
     if (name == NULL || start == NULL || end == NULL) return false;
+#if ESP_CUBE_FACE_EMBED_SMILE_STATIC
     if (strcmp(name, "smile_static") == 0) {
         *start = face_smile_static_efc_start;
         *end = face_smile_static_efc_end;
-    } else if (strcmp(name, "laugh") == 0) {
+        return true;
+    }
+#endif
+#if ESP_CUBE_FACE_EMBED_LAUGH
+    if (strcmp(name, "laugh") == 0) {
         *start = face_laugh_efc_start;
         *end = face_laugh_efc_end;
-    } else if (strcmp(name, "investigate") == 0) {
+        return true;
+    }
+#endif
+#if ESP_CUBE_FACE_EMBED_INVESTIGATE
+    if (strcmp(name, "investigate") == 0) {
         *start = face_investigate_efc_start;
         *end = face_investigate_efc_end;
-    } else if (strcmp(name, "shocked") == 0) {
+        return true;
+    }
+#endif
+#if ESP_CUBE_FACE_EMBED_SHOCKED
+    if (strcmp(name, "shocked") == 0) {
         *start = face_shocked_efc_start;
         *end = face_shocked_efc_end;
-    } else {
-        return false;
+        return true;
     }
-    return true;
+#endif
+    return false;
 }
 
 /* 加载后自检(B2): 每次加载输出一行 face clip=<名> frames delay cf alpha0 lit。

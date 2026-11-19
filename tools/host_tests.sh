@@ -207,10 +207,14 @@ echo "== [18/18] EFC 部分(任务 30.3; Property 8) + 表情纯 C(任务 31.2) 
 EFC_FAIL=0
 EFC_PY="$HOME/.venvs/efc/bin/python"
 if [ -x "$EFC_PY" ]; then
-    "$EFC_PY" tools/test_efc.py || EFC_FAIL=1
-    "$EFC_PY" tools/efc_verify.py --contract firmware/components/app_ui/ui/assets/face \
-        || { echo "FAIL: efc_verify contract"; EFC_FAIL=1; }
-    "$EFC_PY" tools/test_face_expect.py || { echo "FAIL: test_face_expect"; EFC_FAIL=1; }
+    if ls firmware/components/app_ui/ui/assets/face/*.efc >/dev/null 2>&1; then
+        "$EFC_PY" tools/test_efc.py || EFC_FAIL=1
+        "$EFC_PY" tools/efc_verify.py --contract firmware/components/app_ui/ui/assets/face \
+            || { echo "FAIL: efc_verify contract"; EFC_FAIL=1; }
+        "$EFC_PY" tools/test_face_expect.py || { echo "FAIL: test_face_expect"; EFC_FAIL=1; }
+    else
+        echo "素材不在库(§55.20 出库裁决): efc 契约/期望测试跳过; 见 tools/fetch_face_assets.sh"
+    fi
     gcc -std=c11 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
         -fno-omit-frame-pointer -ffp-contract=off -Wall -Wextra -Wno-unused-parameter \
         -I firmware/components/app_ui/ui -o /tmp/test_ui_face_fmt \

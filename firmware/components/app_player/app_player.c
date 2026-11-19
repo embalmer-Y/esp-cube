@@ -16,14 +16,14 @@
 #define _GNU_SOURCE              /* strcasestr(GNU 扩展, 头部嗅探用) */
 #endif
 
-#include "mp3dec.h"             /* libhelix-mp3 定点解码(chmorgan/esp-libhelix-mp3)。
+#include "mp3dec.h"             /* minimp3(CC0) 经 helix 兼容垫片(§55.20 替换 RPSL helix)。
                                  * 选型依据(GitHub 调研 2026-11-09):
                                  * - esp_audio_codec 的 MP3 即闭源 minimp3 派生,
                                  *   S31 实测 23ms/帧(仅1.1x实时, 必卡顿)且吞帧66%;
                                  * - S31 USE_ASM 汇编库不覆盖 MP3(esp-adf-libs #85);
                                  * - minimp3 上游存在未初始化 scratch 进 Huffman(#141)、
                                  *   嵌入式栈过大静默崩溃(#117) 等已知问题;
-                                 * - libhelix 定点实现, 社区实测 ESP32 44.1k/2ch 实时无压力 */
+                                 * - minimp3 整数实现(CC0), 社区 ESP32 实测同类性能 */
 #include "app_player.h"
 #include "app_net.h"       /* BT 释放后等 WiFi IP 再恢复电台 */
 
@@ -270,7 +270,7 @@ typedef struct {
     bool info_valid;
     cube_resampler_t rs;
     bool resample_needed;
-    bool is_mp3;            /* MP3: libhelix 定点解码路径 */
+    bool is_mp3;            /* MP3: minimp3(CC0)解码路径 */
     bool is_raw;            /* RAW PCM 直通(无解码) */
     HMP3Decoder mp3;        /* libhelix 解码器句柄 */
     int  frame_cnt;
@@ -293,7 +293,7 @@ static esp_audio_type_t pick_decoder_type(const char *content_type, const char *
     return ESP_AUDIO_TYPE_MP3;                      /* 电台主流为 MP3 */
 }
 
-/* 打开解码器: MP3 → libhelix; 其余(AAC等) → esp_audio_codec
+/* 打开解码器: MP3 → minimp3; 其余(AAC等) → esp_audio_codec
  * codec_cfg/cfg_sz: codec 专用配置(如 AAC 裸帧 esp_aac_dec_cfg_t), 可为 NULL */
 static esp_err_t decoder_open(decoder_t *d, esp_audio_type_t type,
                               void *codec_cfg, uint32_t codec_cfg_sz)
@@ -362,7 +362,7 @@ static void output_pcm(decoder_t *d, int16_t *pcm, size_t frames)
 }
 
 
-static void helix_feed(decoder_t *d);
+static void mp3_feed(decoder_t *d);
 static void decoder_feed(void *ctx, const void *data, size_t len);
 
 /* icy_audio_sink_fn(ctx-last) → decoder_feed(ctx-first) 形参顺序适配 */
@@ -402,8 +402,8 @@ static void decoder_feed(void *ctx, const void *data, size_t len)
     }
 
     if (d->is_mp3) {
-        /* libhelix: 自带同步字定位, 半帧返回 UNDERFLOW 且不消耗输入 */
-        helix_feed(d);
+        /* minimp3: 自带同步定位, 半帧返回 UNDERFLOW 且不消耗输入 */
+        mp3_feed(d);
         return;
     }
 
@@ -523,10 +523,10 @@ static void decoder_feed(void *ctx, const void *data, size_t len)
     }
 }
 
-/* MP3 路径: libhelix 逐帧解码。
- * 半帧处理: MP3Decode 需要完整帧在缓冲内, 不足时返回 INDATA_UNDERFLOW 且
+/* MP3 路径: minimp3 逐帧解码(经 helix 兼容垫片)。
+ * 半帧处理: MP3Decode 需要完整帧在缓冲内, 不足时垫片返回 INDATA_UNDERFLOW 且
  * 不消耗输入 —— 半帧自然留在 pending, 下次凑齐再解(无需预扫描)。 */
-static void helix_feed(decoder_t *d)
+static void mp3_feed(decoder_t *d)
 {
     static int16_t mp3pcm[1152 * 2];
     size_t off = 0;
@@ -570,7 +570,7 @@ static void helix_feed(decoder_t *d)
             cube_resampler_init(&d->rs, (float)fi.samprate, (float)CONFIG_ESP_CUBE_MIXER_RATE);
             d->resample_needed = ((uint32_t)fi.samprate != (uint32_t)CONFIG_ESP_CUBE_MIXER_RATE)
                                  || (fi.nChans == 1);
-            ESP_LOGI(TAG, "decoded: %dHz %dch (libhelix)", fi.samprate, fi.nChans);
+            ESP_LOGI(TAG, "decoded: %dHz %dch (minimp3)", fi.samprate, fi.nChans);
         }
 
         d->frame_cnt++;
