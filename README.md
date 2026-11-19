@@ -13,6 +13,13 @@ ESP32-P4C5(鱼鹰 OSPTEK 开发板, 双核 RISC-V 400MHz + ESP32-C5 WiFi6 协处
 - **历史冲刺(11-18~19)**: P1 网络稳定批关账(A1a: dma 40,960/internal 67K)/B2 开机电台板验/P3a 配网全链真机/appsim 模拟器/soul_sim 快 tick 模拟器(§55.11-14)。
 - **验证**: host_tests 全量 ALL PASS(含 ke/kd 16+9 锚与 R3 门); 双目标构建+层检+mem_budget 全绿; 8h 板上浸泡零崩溃。
 
+## 开源许可
+
+本项目（除下述例外）以 **GNU AGPL-3.0** 发布（[LICENSE](LICENSE)）——使用、
+修改或通过网络提供服务均须以同协议开源。例外与第三方义务见
+[vendor-licenses.md](vendor-licenses.md)：**mp3_helix**（RPSL，自成许可单元）、
+**表情素材**（乐鑫 esp_emote_assets 转制，上游许可待标注——处置追踪中）。
+
 ## 文档索引(编号即阅读序)
 
 | 文档 | 内容 |
