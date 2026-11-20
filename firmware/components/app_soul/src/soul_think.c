@@ -24,6 +24,7 @@
 #include "cube_act.h"
 #include "soul_ignition.h"
 #include "soul_budget.h"
+#include "soul_motiv.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -105,23 +106,9 @@ bool soul_think_busy(void)
  * 此前只 ++ 无跨天重置——"日帽 12"实为"每次开机终身 12 次", 耗尽后深思
  * 永久沉默(重启才恢复)。在供给点(每拍必经)做日翻转检测: now_min 显著
  * 回绕(过午夜/SNTP 跳变)即清零两配额。 */
-void soul_think_gate_ctx(struct ki_think_ctx *tc)
-{
-    static uint32_t s_last_ctx_min;
-    if (tc == NULL) return;
-    uint32_t now = uptime_min();
-    if (s_last_ctx_min != 0 && now < s_last_ctx_min &&
-        (s_last_ctx_min - now) > 12 * 60) {
-        s_thought_today = 0;
-        s_fired_today = 0;
-    }
-    s_last_ctx_min = now;
-    tc->now_min = now;
-    tc->last_think_min = s_last_think_min;
-    tc->thought_today = s_thought_today;
-    tc->last_was_silent = s_last_silent;
-    tc->last_silent_score = s_last_silent_score;
-}
+/* [S5 退役] ki_think_gate 固定节律触发面由 soul_motiv sm_gate 取代
+ * (docs/24 §4.2); fired_today 的日翻转迁入 think_task(行动配额仍归
+ * ki_intent_fire 出口门)。 */
 
 /* ---- 行动执行 ----
  * T13: 深思行动改经 cube_act 统一门(origin=AUTONOMOUS_LLM)。
@@ -264,6 +251,14 @@ static void think_task(void *arg)
         struct ki_decision dec;
         enum ki_parse_err pe;
         uint32_t now = uptime_min();
+        /* fired_today(行动配额)日翻转(原 gate_ctx 职责, S5 迁入) */
+        static uint32_t s_flip_min;
+        if (s_flip_min != 0 && now < s_flip_min &&
+            (s_flip_min - now) > 12 * 60) {
+            s_thought_today = 0;
+            s_fired_today = 0;
+        }
+        s_flip_min = now;
 
         reply[0] = 0;
         if (s_brain == NULL) {
@@ -276,6 +271,8 @@ static void think_task(void *arg)
         if (s_brain(prompt, reply, sizeof(reply)) != 0 || !reply[0]) {
             ESP_LOGW(TAG, "LLMFAIL deliberation");
             ki_settle2(KI_SETTLE_SILENT);
+            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+                                                       / 1000000LL));
             s_last_silent = true;
             goto out;
         }
@@ -286,6 +283,8 @@ static void think_task(void *arg)
         if (pe != KI_PARSE_OK && pe != KI_PARSE_CONTENT_LONG) {
             ESP_LOGW(TAG, "REJECT parse=%d", (int)pe);   /* 拒非降级 */
             ki_settle2(KI_SETTLE_SILENT);
+            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+                                                       / 1000000LL));
             s_last_silent = true;
             goto out;
         }
@@ -294,6 +293,8 @@ static void think_task(void *arg)
             ESP_LOGI(TAG, "SILENT conf=%.2f reason=%.32s",
                      intent.confidence, intent.reason);
             ki_settle2(KI_SETTLE_SILENT);
+            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+                                                       / 1000000LL));
             s_last_silent = true;
             s_last_silent_score = s_trig_score;
             goto out;
@@ -377,9 +378,13 @@ static void think_task(void *arg)
         }
         if (s_voice_seen) {
             ki_settle2(KI_SETTLE_RESPONDED);
+            sm_settle(SM_SETTLE_RESPONDED, (uint32_t)(esp_timer_get_time()
+                                                          / 1000000LL));
             ESP_LOGI(TAG, "SETTLE responded");
         } else {
             ki_settle2(KI_SETTLE_IGNORED);
+            sm_settle(SM_SETTLE_IGNORED, (uint32_t)(esp_timer_get_time()
+                                                        / 1000000LL));
             ESP_LOGW(TAG, "SETTLE ignored, cooldown=%umin",
                      ki_cooldown_current());
         }
@@ -428,7 +433,7 @@ void soul_think_set_brain(int (*fn)(const char *, char *, size_t)) { (void)fn; }
 void soul_think_set_speak(esp_err_t (*fn)(const char *)) { (void)fn; }
 void soul_think_note_voice(void) {}
 bool soul_think_busy(void) { return false; }
-void soul_think_gate_ctx(struct ki_think_ctx *tc) { (void)tc; }
+
 esp_err_t soul_think_start(void) { return ESP_OK; }
 bool soul_think_fire(uint8_t r, bool f, float s)
 { (void)r; (void)f; (void)s; return false; }

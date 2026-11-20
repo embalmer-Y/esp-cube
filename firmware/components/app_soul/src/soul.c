@@ -1,18 +1,17 @@
 /*
- * soul.c —— 灵魂编排: L0 感知/反射 + 1Hz tick(kd→ke→黑板) + 行为评分
+ * soul.c —— 灵魂编排: L0 感知 + 1Hz tick(kd→ke→黑板→trait) + 深思触发
  *           + prompt/消费出口(docs/14 架构蓝图)
  *
  * 移植自 Kaleido tools/hil/convo-stage/main/soul.c(W0-3), 适配 EspCube;
- * Phase A 骨架重排(2026-11-13, docs/14):
+ * Phase A 骨架重排(2026-11-13, docs/14); S3 重构(2026-11-20, docs/24 §13):
  *   - L0 感知: 总线环境事件(网络/播放/存储/校时)→边沿/跃迁检测→
- *     黑板 NET/PLAYING + 显著性充值; 反射(事件直通不过评分):
- *     瞬态表情(已有)/开机放歌(WiFi↑→music:play, AI-first: 电台是
- *     AI 的能力, 决策权从装配层移交灵魂);
+ *     黑板 NET/PLAYING + 显著性充值。反射已全部移除(R6 行为来源
+ *     原则: 行动只来自用户指令与 LLM 深思; 开机/重连放歌反射
+ *     与 L2 行为表于 S3 退役);
  *   - L1 黑板: kd/ke/情境每拍供给(soul_bb), 单写者=soul tick;
- *   - L2 行为表: S3 退役(docs/24 §6/§13), 行动只来自用户与 LLM 深思;
- *     行动出口=SOUL_ACT 广播(与深思/会话技能同一词汇表);
- *   - 直控学习: 灵魂动作窗口外的停播=用户手动 → radio_start 退避
- *     2h(礼貌红线: 不跟用户抢方向盘)。
+ *   - 行动面: 深思(ki)经预算硬门(soul_budget 分账)+SOUL_ACT 广播;
+ *     用户手动停台 → 2h 深思音频抑制窗(礼貌红线: 不跟用户抢
+ *     方向盘, docs/17 §5.5)。
  * kd/ke 为纯函数组件(零平台依赖), 本层持有唯一调用权(单写者纪律);
  * 事件钩子任意任务可调(内部只置 pending 位, tick 内按优先级消费:
  * BARGE > ROUND_* > VOICE)。
@@ -33,6 +32,7 @@
 #include "soul_trait.h"
 #include "soul_bb.h"
 #include "soul_budget.h"
+#include "soul_motiv.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -116,13 +116,12 @@ static uint64_t s_last_active_tick;        /* 最近非 IDLE 拍(idle 计时) */
 /* soul_mem record/boot 声明已收进 soul.h(批次 44, 免手写 extern 漂移) */
 /* soul_think 弱耦合(同上) */
 extern bool soul_think_fire(uint8_t reason, bool forced, float score);
-extern void soul_think_gate_ctx(struct ki_think_ctx *tc);
 
 /* ---- 灵魂 2.0: 表情三层决策(Phase1 实装; S2 升级 docs/24 §2.3) ----
  * L0 快反射: 会话事件拍 → 瞬态段(播完回底色, ui 侧 8s 回拉);
  * L1 底色: soul_face 模块(Russell 扇区+中性死区+分档驻留+mood 底色
  *   回落; 素材表单一真源 soul_face.c, 与 soul_sim 同源编译);
- * L2 深思: ki_think_gate 触发 → soul_think_fire(深思轮另文件)。 */
+ * L4 深思: sm_gate 仲裁触发(S5) → soul_think_fire(深思轮另文件)。 */
 
 static void face_act_publish(uint8_t kind, const char *clip)
 {
@@ -361,6 +360,7 @@ static void perception_consume(void)
         s_evt_net_up = false;
         soul_bb_set(SOUL_BB_NET, 1.0f);
         soul_bb_salience(0.6f);
+        sm_event(SM_EVT_NET, (uint32_t)s_ticks);
         /* S3(B-2/R6): 开机/重连反射已移除(docs/24 §6, docs/17 §5.5 合同)
          * —— 设备开机静默, 电台只由用户指令或 LLM 深思起。联网边沿仅
          * 显著性充值(深思素材), 不直接行动。 */
@@ -388,6 +388,7 @@ static void perception_consume(void)
     if (s_evt_player_chg) {
         s_evt_player_chg = false;
         soul_bb_salience(0.3f);
+        sm_event(SM_EVT_PLAY_CHG, (uint32_t)s_ticks);
     }
     s_prev_playing = playing;
     soul_bb_set(SOUL_BB_PLAYING, (float)playing);
@@ -465,10 +466,12 @@ static void soul_task(void *arg)
             s_pend &= ~PEND_BARGE;
             evt = KD_EVT_BARGE;
             face_evt_transient(KD_EVT_BARGE);       /* L0 快反射 */
+            sm_event(SM_EVT_BARGE, (uint32_t)s_ticks);
         } else if (p & PEND_ROUND_OK) {
             s_pend &= ~PEND_ROUND_OK;
             evt = KD_EVT_ROUND_OK;
             face_evt_transient(KD_EVT_ROUND_OK);
+            sm_event(SM_EVT_ROUND_OK, (uint32_t)s_ticks);
             round_now = round_ok = true;
             strlcpy(ru, s_round_user, sizeof(ru));
             strlcpy(rr, s_round_reply, sizeof(rr));
@@ -476,6 +479,7 @@ static void soul_task(void *arg)
             s_pend &= ~PEND_ROUND_FAIL;
             evt = KD_EVT_ROUND_FAIL;
             face_evt_transient(KD_EVT_ROUND_FAIL);
+            sm_event(SM_EVT_ROUND_FAIL, (uint32_t)s_ticks);
             round_now = true;
             round_ok = false;
             strlcpy(ru, s_round_user, sizeof(ru));
@@ -539,21 +543,49 @@ static void soul_task(void *arg)
         face_bg_select(&s_snap);        /* L1 底色(连续坐标+迟滞) */
 
 #if CONFIG_ESP_CUBE_SOUL_PROACTIVE
-        /* 8) L4 思维闸: J(黑板显著性/判据)+E(ke)+V(kd 误差) → 深思 */
+        /* 8) L4 思维闸(S5 重构): 动机面推进(sm_ctx/event/tick)→ 仲裁
+         * sm_gate(显著性×动机偏置×习惯化+令牌桶+kb 礼貌闸, docs/24 §4.2)
+         * —— 替换 ki_think_gate 固定 10min 节律(退役) */
         {
-            struct ki_think_ctx tc = {
+            /* kd sev 跃迁沿(任一驱力告警级变化, 调用方边沿检测) */
+            static uint8_t s_prev_sev;
+            uint8_t sev = (uint8_t)((kd_out.sev[KD_SOCIAL] << 2) |
+                                    (kd_out.sev[KD_STIM] << 1) |
+                                    kd_out.sev[KD_REST]);
+            bool sev_jump = s_prev_sev != sev;
+            s_prev_sev = sev;
+            /* 长静默事件(每满 2h 一次, U=0.30) */
+            static uint32_t s_longsil_mark;
+            uint32_t sil = (uint32_t)(s_ticks - s_last_active_tick);
+            if (sil / 7200u > s_longsil_mark) {
+                s_longsil_mark = sil / 7200u;
+                sm_event(SM_EVT_LONG_SILENCE, (uint32_t)s_ticks);
+            }
+            sm_ctx(soul_bb_get(SOUL_BB_QUIET) > 0.5f,
+                   s_ai_state != AI_IDLE,
+                   s_player_state == PLAYER_ST_CONNECTING ||
+                       s_player_state == PLAYER_ST_PLAYING);
+            sm_tick((uint32_t)s_ticks);
+            struct sm_gate_in gin = {
+                .now_s = (uint32_t)s_ticks,
+                .now_min = (uint32_t)(s_ticks / 60),
                 .arousal = ke_out.state.arousal,
-                .urgency_max = kd_out.error_max,
-                .pending_command = (s_ai_state != AI_IDLE),
+                .e_social = kd_out.error[KD_SOCIAL],
+                .e_stim = kd_out.error[KD_STIM],
+                .ai_active = (s_ai_state != AI_IDLE),
+                .playing = (s_player_state == PLAYER_ST_CONNECTING ||
+                            s_player_state == PLAYER_ST_PLAYING),
+                .net_up = soul_bb_get(SOUL_BB_NET) > 0.5f,
                 .quiet_hours = soul_bb_get(SOUL_BB_QUIET) > 0.5f,
-                .new_event = soul_bb_get(SOUL_BB_SALIENCE) > 0.15f,
-                .mem_hook = 0,             /* W4 记忆钩子后续接 */
+                .kd_sev_jump = sev_jump,
+                .mem_hook = false,     /* B-6 用户锚定时刻接线 */
+                .thinking = soul_think_busy(),
             };
-            soul_think_gate_ctx(&tc);
-            struct ki_think_gate g;
-            ki_think_gate(&tc, &g);
-            if (g.trigger && !g.blocked_mask) {
-                soul_think_fire(g.reason_mask, false, 0.6f);
+            struct sm_gate_out g;
+            sm_gate(&gin, &g);
+            if (g.trigger) {
+                soul_think_fire(g.reason_mask, false,
+                                g.S > 0.0f ? g.S : 0.6f);
                 s_initiative_tick = true;   /* 自发发起(trait EMA 观测) */
             }
         }

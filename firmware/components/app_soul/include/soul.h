@@ -37,7 +37,7 @@ esp_err_t soul_start(void);
 void soul_think_set_brain(int (*fn)(const char *sys, char *reply, size_t cap));
 void soul_think_set_speak(esp_err_t (*fn)(const char *text));
 esp_err_t soul_think_start(void);
-void soul_think_gate_ctx(struct ki_think_ctx *tc);   /* tick 供上下文 */
+/* [S5 退役] soul_think_gate_ctx —— 触发面已由 soul_motiv sm_gate 取代 */
 bool soul_think_fire(uint8_t reason_mask, bool forced, float score);
 void soul_think_note_voice(void);   /* 用户输入侧记(结算窗证据) */
 bool soul_think_busy(void);

@@ -10,6 +10,7 @@ gcc -O2 -Wall -DSOUL_BB_HOST_TEST \
     ../sim/soul_sim/soul_sim.c \
     components/app_soul/src/soul_bb.c \
     components/app_soul/src/soul_budget.c \
+    components/app_soul/src/soul_motiv.c \
     components/app_soul/src/soul_face.c \
     components/app_soul/src/soul_trait.c \
     components/app_soul/src/soul_drive.c \

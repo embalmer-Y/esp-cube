@@ -28,6 +28,7 @@
 
 #include "soul_bb.h"
 #include "soul_budget.h"
+#include "soul_motiv.h"
 #include "soul_drive.h"
 #include "soul_emotion.h"
 #include "soul_face.h"
@@ -41,12 +42,12 @@ enum { P_BARGE = 1, P_ROUND_OK = 2, P_ROUND_FAIL = 4, P_VOICE = 8, P_TOUCH = 16,
        P_DOSE = 32 };   /* S2.5 双臂: appraisal 三元组剂量(LLM 评价臂) */
 static float w_dose[3];           /* social / ethics / valence */
 static float w_mood_req; static uint32_t w_mood_seq;
+static uint32_t s_sm_t;   /* 当前拍(inject 时基; 主循环每拍刷新) */
 static uint32_t w_dose_seq;
 
 /* ---- 深思记账(复刻 soul_think.c 静态) ---- */
 static uint32_t s_last_think_min;
 static uint8_t  s_thought_today;
-static uint8_t  s_fired_today;
 static bool     s_last_silent;
 static float    s_last_silent_score;
 static uint32_t s_think_fires, s_think_blocked[4], s_think_reason[6];
@@ -100,12 +101,13 @@ static void inject(const char *ln)
      * voice/barge/round 按 ai 翻转近似 0.3(壳内无会话生命周期) */
     if (!strcmp(cmd, "net")) {
         int v = atoi(arg);
-        if (v != (int)w_net) soul_bb_salience(0.6f);
+        if (v != (int)w_net) { soul_bb_salience(0.6f); sm_event(SM_EVT_NET, s_sm_t); }
         w_net = v;
         soul_bb_set(SOUL_BB_NET, w_net ? 1 : 0);
     } else if (!strcmp(cmd, "play")) {
         int v = atoi(arg);
         soul_bb_salience(0.3f);
+        sm_event(SM_EVT_PLAY_CHG, s_sm_t);
         w_play = v; soul_bb_set(SOUL_BB_PLAYING, w_play);
     } else if (!strcmp(cmd, "ai")) {
         int v = atoi(arg);
@@ -235,16 +237,17 @@ int main(int argc, char **argv)
     struct ke_output ke_out;
 
     for (uint64_t t = 1; t <= ticks; t++) {
+        s_sm_t = (uint32_t)t;
         while (ev_n > 0 && evs[0].t == t) { inject(evs[0].line + strspn(evs[0].line, "0123456789 ")); memmove(&evs[0], &evs[1], (size_t)(--ev_n) * sizeof(evs[0])); }
 
         /* 事件消费(BARGE>ROUND>VOICE>TOUCH; 复刻 soul.c 优先级) */
         enum kd_event evt = KD_EVT_NONE;
         int receipt = KE_RECEIPT_NONE;
-        if (w_pend & P_BARGE) { w_pend &= ~P_BARGE; evt = KD_EVT_BARGE; }
-        else if (w_pend & P_ROUND_OK) { w_pend &= ~P_ROUND_OK; evt = KD_EVT_ROUND_OK; receipt = KE_RECEIPT_SUCCESS; }
-        else if (w_pend & P_ROUND_FAIL) { w_pend &= ~P_ROUND_FAIL; evt = KD_EVT_ROUND_FAIL; receipt = KE_RECEIPT_FAIL; }
+        if (w_pend & P_BARGE) { w_pend &= ~P_BARGE; evt = KD_EVT_BARGE; sm_event(SM_EVT_BARGE, (uint32_t)t); }
+        else if (w_pend & P_ROUND_OK) { w_pend &= ~P_ROUND_OK; evt = KD_EVT_ROUND_OK; receipt = KE_RECEIPT_SUCCESS; sm_event(SM_EVT_ROUND_OK, (uint32_t)t); }
+        else if (w_pend & P_ROUND_FAIL) { w_pend &= ~P_ROUND_FAIL; evt = KD_EVT_ROUND_FAIL; receipt = KE_RECEIPT_FAIL; sm_event(SM_EVT_ROUND_FAIL, (uint32_t)t); }
         else if (w_pend & P_VOICE) { w_pend &= ~P_VOICE; evt = KD_EVT_VOICE; }
-        else if (w_pend & P_TOUCH) { w_pend &= ~P_TOUCH; evt = KD_EVT_TOUCH; }
+        else if (w_pend & P_TOUCH) { w_pend &= ~P_TOUCH; evt = KD_EVT_TOUCH; sm_event(SM_EVT_TOUCH, (uint32_t)t); }
         else if (w_pend & P_DOSE) {
             w_pend &= ~P_DOSE;
             /* 滋养性剂量(gc>0)等价温和互动=安抚语义(对齐 round ok/touch) */
@@ -304,43 +307,47 @@ int main(int argc, char **argv)
         if (quiet_hrs) quiet_secs++;
         soul_bb_tick((uint32_t)t);
 
-        /* L4 思维闸(记账复刻 soul_think.c, 含 2026-11-19 日翻转清零修复) */
-        uint32_t now_min = (uint32_t)((t / 60) % 1440);
-        static uint32_t s_last_ctx_min;
-        if (s_last_ctx_min != 0 && now_min < s_last_ctx_min &&
-            (s_last_ctx_min - now_min) > 12 * 60) {
-            s_thought_today = 0;
-            s_fired_today = 0;        /* 与固件口径一致(soul_think.c) */
-        }
-        s_last_ctx_min = now_min;
-        struct ki_think_ctx tc = {
-            .arousal = ke->arousal,
-            .urgency_max = kd_out.error_max,
-            .pending_command = w_ai,
-            .quiet_hours = quiet_hrs,
-            .new_event = soul_bb_get(SOUL_BB_SALIENCE) > 0.15f,
-            .now_min = now_min,
-            .last_think_min = s_last_think_min,
-            .thought_today = s_thought_today,
-            .last_was_silent = s_last_silent,
-            .last_silent_score = s_last_silent_score,
-        };
-        struct ki_think_gate g;
-        ki_think_gate(&tc, &g);
+        /* L4 思维闸(S5 重构): sm_ctx/event/tick + sm_gate 仲裁(令牌桶
+         * +kb 礼貌闸; docs/24 §4.2), 与 soul.c 同款接线 */
         int fired = 0, blocked = 0;
-        /* 注: 闸语义=blocked 时 trigger 已被清 false(ignition.c 尾部),
-         * 被拦观测须独立看 blocked_mask */
-        if (g.trigger || g.blocked_mask) {
-            if (g.blocked_mask) { blocked = 1; for (int b = 0; b < 4; b++) if (g.blocked_mask & (1 << b)) s_think_blocked[b]++; }
-            else {
-                fired = 1; s_think_fires++;
-                for (int b = 0; b < 6; b++) if (g.reason_mask & (1 << b)) s_think_reason[b]++;
-                s_last_think_min = tc.now_min;
+        uint32_t now_min = (uint32_t)((t / 60) % 1440);
+        static uint8_t s_prev_sev;
+        {
+            uint8_t sev = (uint8_t)((kd_out.sev[KD_SOCIAL] << 2) |
+                                    (kd_out.sev[KD_STIM] << 1) |
+                                    kd_out.sev[KD_REST]);
+            bool sev_jump = s_prev_sev != sev;
+            s_prev_sev = sev;
+            sm_ctx(quiet_hrs, w_ai, w_play);
+            sm_tick((uint32_t)t);
+            struct sm_gate_in gin = {
+                .now_s = (uint32_t)t, .now_min = (uint32_t)(t / 60),
+                .arousal = ke->arousal,
+                .e_social = kd_out.error[KD_SOCIAL],
+                .e_stim = kd_out.error[KD_STIM],
+                .ai_active = w_ai, .playing = w_play,
+                .net_up = w_net, .quiet_hours = quiet_hrs,
+                .kd_sev_jump = sev_jump, .mem_hook = false,
+                .thinking = false,
+            };
+            struct sm_gate_out g;
+            sm_gate(&gin, &g);
+            /* 拦截观测(bit0 quiet/1 无令牌/2 kb/3 降采样/4 去重/5 单飞) */
+            for (int b = 0; b < 6; b++)
+                if (g.blocked_mask & (1 << b)) {
+                    s_think_blocked[b < 4 ? b : 3]++;
+                    blocked = 1;
+                }
+            if (g.trigger) {
+                fired = 1;
+                s_think_fires++;
+                for (int b = 0; b < 5; b++)
+                    if (g.reason_mask & (1 << b)) s_think_reason[b]++;
+                s_last_think_min = now_min;
                 s_thought_today++;
                 s_last_silent = true;         /* 模拟: LLM 结算多为沉默 */
                 s_last_silent_score = 0.5f;
-                /* 行动面占位(S3): 最强驱力缺口选类 → 预算硬门执法。
-                 * 占位行动即 sim 的"深思行动"替身(真实语义=板上 LLM)。 */
+                /* 行动面占位(S3): 最强驱力缺口选类 → 预算硬门执法 */
                 int cat = act_pick(&kd_out);
                 if (sb_allow(cat, (uint32_t)t)) {
                     sb_charge(cat, (uint32_t)t);
@@ -398,12 +405,12 @@ int main(int argc, char **argv)
     }
 
     printf("\n===== SOUL SIM 摘要(%.2f 天) =====\n", ticks / 86400.0);
-    printf("深思: 触发 %u 次 | 被拦: quiet=%u interval=%u cap=%u no_new=%u\n",
+    printf("深思: 触发 %u 次 | 被拦: quiet=%u 无令牌=%u kb=%u 其他=%u\n",
         s_think_fires, s_think_blocked[0], s_think_blocked[1],
         s_think_blocked[2], s_think_blocked[3]);
-    printf("深思原因位: idle=%u low_arousal=%u bin=%u salient=%u new_event=%u mem=%u\n",
+    printf("深思原因位: 仲裁S=%u kc=%u ku=%u kd跃迁=%u mem=%u\n",
         s_think_reason[0], s_think_reason[1], s_think_reason[2],
-        s_think_reason[3], s_think_reason[4], s_think_reason[5]);
+        s_think_reason[3], s_think_reason[4]);
     printf("情绪: valence [%.3f, %.3f] | arousal max %.3f\n", v_min, v_max, a_max);
     printf("深思行动(预算分账): speak=%u music=%u face=%u 预算拦=%u\n",
         s_act_fires[0], s_act_fires[1], s_act_fires[2], s_budget_blocks);
