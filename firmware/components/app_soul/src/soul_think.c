@@ -240,7 +240,8 @@ static void think_prompt(char *buf, size_t n)
         "content 规则: speak=那句话; face=如 \"face:laugh\", 段名可选 "
         "smile|laugh|angry|sad|cry|shy|shocked|panic|sigh|yawn|asleep|"
         "ponder|question|music|leisure|mock|snigger|confident|investigate|"
-        "yummy|mute|badminton; music=next(切台)或random(随便放)。content "
+        "yummy|mute|badminton; music=如 \"music:next\"(切台)或 \"music:random\""
+        "(随便放)。content "
         "不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。",
         st.idle_sec, chg, feel,
         quota, q_cost,

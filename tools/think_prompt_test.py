@@ -31,7 +31,7 @@ _gid = json.loads(base64.urlsafe_b64decode(
 # 同步自检: 下方模板关键片段必须在 C 源中出现(防漂移)
 _SRC = open(f"{HERE}/../firmware/components/app_soul/src/soul_think.c").read()
 # 片段须不跨 C 字符串字面量拼接边界(换行拼接处会夹引号)
-for _frag in ("这是背景信息, 不是台词", "stay_silent 是默认动作",
+for _frag in ("这是背景信息, 不是台词", "stay_silent 是默认动作", "music:next",
               "act 只能是", "不要出现数字。", "前缀只能是 drive|affect|mem|dialog"):
     if _frag not in _SRC:
         raise SystemExit(f"prompt 模板漂移: soul_think.c 缺 {_frag!r}")
@@ -47,8 +47,9 @@ TEMPLATE = (
     "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
     "\"reason\":\"一句话理由\"}}。act 只能是: speak(说一句不超过25字的"
     "话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
-    "content 规则: speak=那句话; face=如 \"face:laugh\"; music=next(切台)"
-    "或random(随便放)。content 不要出现数字。evidence 至少一条, "
+    "content 规则: speak=那句话; face=如 \"face:laugh\"; music=如 "
+    "\"music:next\"(切台)或 \"music:random\"(随便放)。content 不要出现数字。"
+    "evidence 至少一条, "
     "前缀只能是 drive|affect|mem|dialog。"
 )
 
