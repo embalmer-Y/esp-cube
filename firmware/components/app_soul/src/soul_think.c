@@ -107,8 +107,20 @@ bool soul_think_busy(void)
  * 永久沉默(重启才恢复)。在供给点(每拍必经)做日翻转检测: now_min 显著
  * 回绕(过午夜/SNTP 跳变)即清零两配额。 */
 /* [S5 退役] ki_think_gate 固定节律触发面由 soul_motiv sm_gate 取代
- * (docs/24 §4.2); fired_today 的日翻转迁入 think_task(行动配额仍归
- * ki_intent_fire 出口门)。 */
+ * (docs/24 §4.2); 行动配额(fired_today)日翻转改由 soul tick 每拍调
+ * soul_think_day_flip(触发间隔>24h 时任务内自检会漏翻)。 */
+
+/* 配额日翻转(now_min=uptime 分; soul tick 每拍调) */
+void soul_think_day_flip(uint32_t now_min)
+{
+    static uint32_t s_flip_min;
+    if (s_flip_min != 0 && now_min < s_flip_min &&
+        (s_flip_min - now_min) > 12 * 60) {
+        s_thought_today = 0;
+        s_fired_today = 0;
+    }
+    s_flip_min = now_min;
+}
 
 /* ---- 行动执行 ----
  * T13: 深思行动改经 cube_act 统一门(origin=AUTONOMOUS_LLM)。
@@ -251,14 +263,6 @@ static void think_task(void *arg)
         struct ki_decision dec;
         enum ki_parse_err pe;
         uint32_t now = uptime_min();
-        /* fired_today(行动配额)日翻转(原 gate_ctx 职责, S5 迁入) */
-        static uint32_t s_flip_min;
-        if (s_flip_min != 0 && now < s_flip_min &&
-            (s_flip_min - now) > 12 * 60) {
-            s_thought_today = 0;
-            s_fired_today = 0;
-        }
-        s_flip_min = now;
 
         reply[0] = 0;
         if (s_brain == NULL) {
@@ -433,6 +437,7 @@ void soul_think_set_brain(int (*fn)(const char *, char *, size_t)) { (void)fn; }
 void soul_think_set_speak(esp_err_t (*fn)(const char *)) { (void)fn; }
 void soul_think_note_voice(void) {}
 bool soul_think_busy(void) { return false; }
+void soul_think_day_flip(uint32_t now_min) { (void)now_min; }
 
 esp_err_t soul_think_start(void) { return ESP_OK; }
 bool soul_think_fire(uint8_t r, bool f, float s)

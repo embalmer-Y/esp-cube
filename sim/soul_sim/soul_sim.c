@@ -313,8 +313,8 @@ int main(int argc, char **argv)
         uint32_t now_min = (uint32_t)((t / 60) % 1440);
         static uint8_t s_prev_sev;
         {
-            uint8_t sev = (uint8_t)((kd_out.sev[KD_SOCIAL] << 2) |
-                                    (kd_out.sev[KD_STIM] << 1) |
+            uint8_t sev = (uint8_t)((kd_out.sev[KD_SOCIAL] << 4) |
+                                    (kd_out.sev[KD_STIM] << 2) |
                                     kd_out.sev[KD_REST]);
             bool sev_jump = s_prev_sev != sev;
             s_prev_sev = sev;
@@ -333,7 +333,7 @@ int main(int argc, char **argv)
             struct sm_gate_out g;
             sm_gate(&gin, &g);
             /* 拦截观测(bit0 quiet/1 无令牌/2 kb/3 降采样/4 去重/5 单飞) */
-            for (int b = 0; b < 6; b++)
+            for (int b = 0; b < 7; b++)
                 if (g.blocked_mask & (1 << b)) {
                     s_think_blocked[b < 4 ? b : 3]++;
                     blocked = 1;

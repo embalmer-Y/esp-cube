@@ -62,7 +62,8 @@ static uint8_t s_kl_ref[SM_KL_BINS];
 static uint32_t s_last_interact_s;
 static bool     s_have_interact;
 static float    s_skl;              /* 最近一次间隔 KL[0,1]      */
-static float    s_kl_burst;         /* 惊奇事件充能(τ=1h 衰减)   */
+static float    s_kl_burst;         /* 惊奇事件充能当前值        */
+static float    s_kl_burst0;        /* 充能初值(自 t0 全量衰减)  */
 static uint32_t s_kl_burst_t0;
 
 /* ku: 遗留意图槽 {s, h 被忽次数} + 事件余辉 */
@@ -105,6 +106,7 @@ static struct {
 /* 仲裁材料(tick 侧经 sm_event 记录; gate 消费) */
 static enum sm_evt s_evt;
 static uint32_t s_low_ar_last_min;
+static bool     s_low_ar_seen;
 /* per-key 去重(docs §4.2 "5min 同 key"; key=触发通道) */
 static uint32_t s_last_trig_min[5];
 static bool     s_last_trig_valid[5];
@@ -138,6 +140,7 @@ void sm_reset(void)
     s_tb.tokens = SM_CFG_DEFAULT.tb_capacity;
     s_evt = SM_EVT_NONE;
     s_low_ar_last_min = 0;
+    s_low_ar_seen = false;
     memset(s_last_trig_min, 0, sizeof(s_last_trig_min));
     memset(s_last_trig_valid, 0, sizeof(s_last_trig_valid));
     s_habit_last_min = 0;
@@ -189,10 +192,12 @@ void sm_event(enum sm_evt e, uint32_t now_s)
                                            : s_cfg.ku_touch);
         break;
     case SM_EVT_ROUND_OK:
-        s_kf = clampf(s_kf + s_cfg.kf_ap, 0.0f, 1.0f);
+        /* 结算非对称 EMA(docs §4.1: α_负0.30/α_正0.10, 事件值 +1/−1) */
+        s_kf = clampf(s_kf + s_cfg.kf_ap * (1.0f - s_kf), 0.0f, 1.0f);
         break;
     case SM_EVT_ROUND_FAIL:
-        s_kf = clampf(s_kf - s_cfg.kf_an, 0.0f, 1.0f);
+        /* 事件值 −0.5(docs §4.1 表) */
+        s_kf = clampf(s_kf + s_cfg.kf_an * (-0.5f - s_kf), 0.0f, 1.0f);
         break;
     default:
         break;
@@ -211,13 +216,16 @@ void sm_event(enum sm_evt e, uint32_t now_s)
             for (int i = 0; i < SM_KL_BINS - 1; i++) {
                 if (gap_s < edges_s[i]) { b = i; break; }
             }
-            s_kl_cur[b]++;
+            if (s_kl_cur[b] < 255)
+                s_kl_cur[b]++;
             s_skl = kl_compute();
             if (s_skl > s_cfg.skl_gate) {
-                /* 惊奇事件 → kc 充能(τ=1h 衰减的突发项) */
+                /* 惊奇事件 → kc 充能(τ=1h 全量衰减突发项;
+                 * 叠加取现值+增量, 初值重置时基) */
                 s_kl_burst += s_cfg.skl_gain * s_skl;
                 if (s_kl_burst > 0.5f)
                     s_kl_burst = 0.5f;
+                s_kl_burst0 = s_kl_burst;
                 s_kl_burst_t0 = now_s;
             }
         }
@@ -231,12 +239,17 @@ void sm_settle(enum sm_settle s, uint32_t now_s)
     (void)now_s;
     switch (s) {
     case SM_SETTLE_RESPONDED:
+        s_kf = clampf(s_kf + s_cfg.kf_ap * (1.0f - s_kf), 0.0f, 1.0f);
+        break;
     case SM_SETTLE_SILENT:
-        s_kf = clampf(s_kf + s_cfg.kf_ap, 0.0f, 1.0f);
+        /* SILENT 事件值 +0.5(docs §4.1) */
+        s_kf = clampf(s_kf + s_cfg.kf_ap * (0.5f - s_kf), 0.0f, 1.0f);
         break;
     case SM_SETTLE_IGNORED:
-        s_kf = clampf(s_kf - s_cfg.kf_an, 0.0f, 1.0f);
-        /* R2 被忽即清仓: ku 槽清零(被忽即失去索 引资格) */
+        s_kf = clampf(s_kf + s_cfg.kf_an * (-1.0f - s_kf), 0.0f, 1.0f);
+        /* R2 被忽即清仓(docs §4.1: IGNORED→槽清仓 h++, s=0)——h 使
+         * 再武装的老化除子增大(反复被忽→意图愈发难再触发) */
+        s_ku.h++;
         if (s_ku.armed) {
             s_ku.armed = false;
             s_ku.s = 0.0f;
@@ -316,17 +329,26 @@ void sm_tick(uint32_t now_s)
     if (s_kl_burst > 0.0f) {
         float dt = (float)(now_s > s_kl_burst_t0
                                ? now_s - s_kl_burst_t0 : 0);
-        s_kl_burst *= expf(-dt / 3600.0f);
+        /* 初值×exp(−dt/τ) 全量式(旧实现每拍对现值复合衰减=二次坍缩,
+         * S5 审计 P1-1) */
+        s_kl_burst = s_kl_burst0 * expf(-dt / 3600.0f);
         kc += s_kl_burst;
     }
     s_kc = clampf(kc, 0.0f, 1.0f);
 
-    /* ku = 遗留槽老化 ×1.02^Δmin/(1+h) + 余辉(τ=600s 指数) */
+    /* ku = 遗留槽老化 ×1.02^Δmin/(1+h) + 余辉(τ=600s 指数)。
+     * 寿命 48h 上限(1.02^Δmin 在 ~75h float 溢出且 R3 自消退精神
+     * 不允许意图永不过期, 审计 P2-8) */
     float ku = 0.0f;
     if (s_ku.armed) {
         float dt_min = (float)((now_s > s_ku.t0_s ? now_s - s_ku.t0_s
                                                   : 0) / 60);
-        ku += s_ku.s * powf(s_cfg.ku_grow, dt_min) / (1.0f + s_ku.h);
+        if (dt_min > 2880.0f) {
+            s_ku.armed = false;        /* 48h 自消退 */
+            s_ku.s = 0.0f;
+        } else {
+            ku += s_ku.s * powf(s_cfg.ku_grow, dt_min) / (1.0f + s_ku.h);
+        }
     }
     if (s_ku.after_on) {
         float dt = (float)(now_s > s_ku.after_t0_s
@@ -432,9 +454,11 @@ void sm_gate(const struct sm_gate_in *in, struct sm_gate_out *out)
     }
 
     /* ---- 触发通道(L7 修复内建) ---- */
-    /* 通道 0: 仲裁 S=U×M×H; 仅 U≥0.5 事件参与(new_event 修复) */
+    /* 通道 0: 仲裁 S=U×M×H。全部 U 表事件参与, S>0.5 门裁决
+     * (docs §4.2 "new_event 只收 S>0.5 打分事件"; S5 初版的 U≥0.5
+     * 参与门使低突发事件永不可触发=死参数, 审计 P1-5 修正) */
     float u = (s_evt != SM_EVT_NONE) ? burst_u(s_evt) : 0.0f;
-    if (u >= 0.5f) {
+    if (u > 0.0f) {
         float m = 1.0f;
         if (in->ai_active)
             m *= 1.0f + 0.5f * clampf(in->e_social, 0.0f, 1.0f);
@@ -486,13 +510,13 @@ void sm_gate(const struct sm_gate_in *in, struct sm_gate_out *out)
 
     /* ---- 低唤醒降采样(L7: arousal<0.1 检查 1/5min) ---- */
     if (in->arousal < 0.1f) {
-        if (s_low_ar_last_min != 0 &&
-            in->now_min >= s_low_ar_last_min &&
+        if (s_low_ar_seen && in->now_min >= s_low_ar_last_min &&
             in->now_min - s_low_ar_last_min < 5) {
             out->blocked_mask |= 1 << 3;
             goto done;
         }
         s_low_ar_last_min = in->now_min;
+        s_low_ar_seen = true;
     }
     /* ---- 同 key 去重(5min; key=触发通道) ---- */
     for (int b = 0; b < 5; b++) {

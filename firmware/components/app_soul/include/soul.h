@@ -38,6 +38,9 @@ void soul_think_set_brain(int (*fn)(const char *sys, char *reply, size_t cap));
 void soul_think_set_speak(esp_err_t (*fn)(const char *text));
 esp_err_t soul_think_start(void);
 /* [S5 退役] soul_think_gate_ctx —— 触发面已由 soul_motiv sm_gate 取代 */
+
+/* 配额日翻转(soul tick 每拍调; PROACTIVE=n 时空实现) */
+void soul_think_day_flip(uint32_t now_min);
 bool soul_think_fire(uint8_t reason_mask, bool forced, float score);
 void soul_think_note_voice(void);   /* 用户输入侧记(结算窗证据) */
 bool soul_think_busy(void);

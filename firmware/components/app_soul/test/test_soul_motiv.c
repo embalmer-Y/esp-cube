@@ -83,26 +83,32 @@ static void golden_ku(void)
 	sm_tick(3600);
 	snap();
 	TEST_ASSERT_TRUE(S.ku >= 1.49f);   /* 帽 */
-	/* IGNORED 清仓(R2) */
+	/* IGNORED 清仓(R2): 槽清零+h++(再武装老化除子减半) */
 	sm_settle(SM_SETTLE_IGNORED, 3600);
 	sm_tick(3700);
 	snap();
 	TEST_ASSERT_TRUE(S.ku < 0.2f);     /* 槽清零, 仅余辉 */
+	sm_intent_arm(0.5f, 4000);
+	sm_tick(4000 + 3600);
+	snap();
+	/* h=1: 0.5×3.28/2≈0.82(无 h 时 1.64 顶帽) */
+	TEST_ASSERT_TRUE(S.ku < 1.0f);
+	TEST_ASSERT_TRUE(S.ku > 0.7f);
 }
 
-/* kf: 非对称 EMA+挫败线 */
+/* kf: 非对称 EMA(docs §4.1: 事件值 ±1/+0.5, α_负0.30/α_正0.10)+挫败线 */
 static void golden_kf(void)
 {
 	sm_reset();
 	snap();
 	TEST_ASSERT_TRUE(feq(S.kf, 0.5f));
-	sm_event(SM_EVT_ROUND_FAIL, 100);  /* −0.30 */
+	sm_event(SM_EVT_ROUND_FAIL, 100);  /* 0.5+0.3×(−0.5−0.5)=0.2 */
 	snap();
 	TEST_ASSERT_TRUE(feq(S.kf, 0.2f));
-	sm_event(SM_EVT_ROUND_OK, 200);    /* +0.10 */
+	sm_event(SM_EVT_ROUND_OK, 200);    /* 0.2+0.1×(1−0.2)=0.28 */
 	snap();
-	TEST_ASSERT_TRUE(feq(S.kf, 0.3f));
-	sm_settle(SM_SETTLE_IGNORED, 300); /* −0.30 → 0 */
+	TEST_ASSERT_TRUE(feq(S.kf, 0.28f));
+	sm_settle(SM_SETTLE_IGNORED, 300); /* 0.28+0.3×(−1.28)<0 → 0 */
 	snap();
 	TEST_ASSERT_TRUE(feq(S.kf, 0.0f));
 	TEST_ASSERT_TRUE(feq(S.e_frustrate, 0.55f));   /* 0.55−0 → 满挫败 */

@@ -538,6 +538,9 @@ static void soul_task(void *arg)
             s_snap.tick = s_ticks;
             xSemaphoreGive(s_lock);
         }
+        soul_think_day_flip((uint32_t)(s_ticks / 60));   /* S5: 配额日
+            翻转每拍检测(旧 gate_ctx 职责; think_task 内仅触发时检查,
+            触发间隔>24h 时会漏翻, 审计 P2-12) */
         bb_feed(&kd_out, &ke_out);
         mood_publish(&s_snap, false);
         face_bg_select(&s_snap);        /* L1 底色(连续坐标+迟滞) */
@@ -549,13 +552,20 @@ static void soul_task(void *arg)
         {
             /* kd sev 跃迁沿(任一驱力告警级变化, 调用方边沿检测) */
             static uint8_t s_prev_sev;
-            uint8_t sev = (uint8_t)((kd_out.sev[KD_SOCIAL] << 2) |
-                                    (kd_out.sev[KD_STIM] << 1) |
+            /* 4 值枚举各占 2bit(<<2 拼接曾碰撞漏沿, S5 审计 P1-3) */
+            uint8_t sev = (uint8_t)((kd_out.sev[KD_SOCIAL] << 4) |
+                                    (kd_out.sev[KD_STIM] << 2) |
                                     kd_out.sev[KD_REST]);
             bool sev_jump = s_prev_sev != sev;
             s_prev_sev = sev;
-            /* 长静默事件(每满 2h 一次, U=0.30) */
+            /* 长静默事件(每满 2h 一次, U=0.30); 用户活动即重置标记
+             * (旧实现 mark 只增不减→交互后首事件延迟无界, 审计 P1-4) */
             static uint32_t s_longsil_mark;
+            static uint64_t s_longsil_prev_active;
+            if (s_last_active_tick != s_longsil_prev_active) {
+                s_longsil_prev_active = s_last_active_tick;
+                s_longsil_mark = 0;
+            }
             uint32_t sil = (uint32_t)(s_ticks - s_last_active_tick);
             if (sil / 7200u > s_longsil_mark) {
                 s_longsil_mark = sil / 7200u;
