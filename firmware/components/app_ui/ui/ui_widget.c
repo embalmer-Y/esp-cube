@@ -355,12 +355,24 @@ static void panel_req_consume(const ui_model_t *m)
 void ui_face_apply(const ui_model_t *m)
 {
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+    /* 表情双权威门控(B-8, S2.5b): SOUL=y 时底色片段由 soul_face 扇区
+     * 三件套经 CUBE_EVT_SOUL_ACT 发布(face_req 路径), 是唯一权威——
+     * 此处 B6 mood 映射不再重载片段(否则 anim_tag 每次变化都会把
+     * soul 扇区选择打回 B6 词表片段, docs/19 §56 B-8)。SOUL=n 时
+     * 维持原 B6 演示映射。mood 词(文字)显示不受影响。 */
+#if CONFIG_ESP_CUBE_ENABLE_SOUL
+    if (strcmp(m->mood_tag, ui_w.mood_tag_last) != 0) {
+        snprintf(ui_w.mood_tag_last, sizeof(ui_w.mood_tag_last), "%s",
+                 m->mood_tag);
+    }
+#else
     if (strcmp(m->mood_tag, ui_w.mood_tag_last) != 0) {
         snprintf(ui_w.mood_tag_last, sizeof(ui_w.mood_tag_last), "%s",
                  m->mood_tag);
         /* mood 映射(B6)选片段; 帧速取当前会话状态, 重载不把状态帧速重置为待机 */
         face_apply_mood(m->mood_tag, (int)m->ai_state);
     }
+#endif
     if ((int)m->ai_state != ui_w.last_ai_state) {
         int prev = ui_w.last_ai_state;
         ui_w.last_ai_state = (int)m->ai_state;

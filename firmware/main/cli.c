@@ -381,6 +381,11 @@ static void handle_line(char *line)
             soul_mem_scope_bind(key,
                                 persona_consent_memory(ps,
                                                        persona_active_id(ps)));
+            {   /* S2.5b: 切角色 → trait 慢变量重载(B-5) */
+                float tr[PSN_TRAIT_MAX];
+                if (persona_trait_read(ps, persona_active_id(ps), tr))
+                    soul_trait_load(tr);
+            }
 #endif
             printf("  psn: active #%08lx epoch=%lu\n",
                    (unsigned long)persona_active_id(ps),

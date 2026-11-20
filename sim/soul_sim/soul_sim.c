@@ -9,6 +9,8 @@
  * 事件脚本(每行): <秒> <cmd> [arg]
  *   net 0|1 / play 0|1 / ai 0|1 / voice / touch / barge
  *   round ok|fail <用户语截断> / mood +0.15 / timesync 0|1
+ *   dose <soc> <eth> <val> / trait C W E A R / reflect dC dW dE dA dR [conf evid depth]
+ *   (S2.5b: trait=建角色注入, reflect=深思轮 trait_delta 注入)
  * 默认(无脚本): 空场景纯代谢(无人陪跑一天=系统自然演化)。
  *
  * 输出: stdout 摘要; --csv FILE 轨迹(1Hz 全量或 --stride N 抽稀)。
@@ -147,6 +149,25 @@ static void inject(const char *ln)
                    trait_set(t) ? "ok" : "OUT_OF_BAND",
                    t[0], t[1], t[2], t[3], t[4]);
         }
+    } else if (!strcmp(cmd, "reflect")) {
+        /* S2.5b 通道二: 反思跃迁注入(LLM 深思轮 trait_delta 的替身)。
+         * 行格式: <t> reflect <dC> <dW> <dE> <dA> <dR> [conf [evid [depth]]]
+         * 缺省 conf=0.9 evid=2 depth=2(过门; 调低即测拒绝门) */
+        struct trait_reflect rf;
+        memset(&rf, 0, sizeof(rf));
+        float conf = 0.9f; int evid = 2, depth = 2;
+        int k = sscanf(ln, "%*s %f %f %f %f %f %f %d %d",
+                       &rf.delta[0], &rf.delta[1], &rf.delta[2],
+                       &rf.delta[3], &rf.delta[4], &conf, &evid, &depth);
+        if (k >= 5) {
+            rf.conf = conf; rf.evidence_n = (uint8_t)evid;
+            rf.ref_depth = (uint8_t)depth;
+            bool ok = trait_reflect_apply(&rf);
+            printf("reflect %s (dC=%+.2f dW=%+.2f dE=%+.2f dA=%+.2f"
+                   " dR=%+.2f)\n", ok ? "applied" : "REJECTED",
+                   rf.delta[0], rf.delta[1], rf.delta[2], rf.delta[3],
+                   rf.delta[4]);
+        }
     }
 }
 
@@ -160,6 +181,41 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--csv") && i + 1 < argc) csv = argv[++i];
         else if (!strcmp(argv[i], "--scenario") && i + 1 < argc) scenario = argv[++i];
         else if (!strcmp(argv[i], "--stride") && i + 1 < argc) stride = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--tune-only") && i + 1 < argc) {
+            /* genesis 面试协议出口(docs/24 §11.6 参数层): 五维 → 全调制
+             * 系数 JSON(真源=soul_trait tune_recalc, 宿主工具零复刻) */
+            float t[TRAIT_DIM];
+            if (sscanf(argv[++i], "%f %f %f %f %f",
+                       &t[0], &t[1], &t[2], &t[3], &t[4]) != TRAIT_DIM) {
+                fprintf(stderr, "usage: --tune-only \"C W E A R\"\n");
+                return 2;
+            }
+            trait_reset();
+            if (!trait_set(t)) {
+                fprintf(stderr, "OUT_OF_BAND\n");
+                return 3;
+            }
+            const trait_tune_t *u = trait_tune();
+            printf("{\n"
+                   "  \"trait\": [%.3f, %.3f, %.3f, %.3f, %.3f],\n"
+                   "  \"frag\": %.3f,\n"
+                   "  \"ke\": {\"arousal_base\": %.3f, \"valence_off\": %.3f, "
+                   "\"tau_dec_mod\": %.3f, \"bond_up_mod\": %.3f, "
+                   "\"urg_on\": %.3f, \"novelty_gain_mod\": %.3f},\n"
+                   "  \"ethics\": {\"gate\": %.3f, \"dose_mod\": %.3f, "
+                   "\"load_t\": %.3f, \"heal_tau_mod\": %.3f, "
+                   "\"soothe_mod\": %.3f},\n"
+                   "  \"kd\": {\"social_met_mod\": %.3f, "
+                   "\"stim_self_recover\": %.1e}\n"
+                   "}\n",
+                   t[0], t[1], t[2], t[3], t[4], u->frag,
+                   u->arousal_base, u->valence_off, u->tau_dec_mod,
+                   u->bond_up_mod, u->urg_on, u->novelty_gain_mod,
+                   u->eth_gate, u->eth_dose_mod, u->eth_load_t,
+                   u->eth_heal_tau_mod, u->eth_soothe_mod,
+                   u->social_met_mod, u->stim_self_recover);
+            return 0;
+        }
     }
     if (scenario) {
         FILE *f = fopen(scenario, "r");
@@ -176,7 +232,7 @@ int main(int argc, char **argv)
     }
     FILE *cf = NULL;
     if (csv) { cf = fopen(csv, "w"); fprintf(cf, "t,v,a,mood,urgency,bond,persist,"
-        "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block,ethics\n"); }
+        "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block,ethics,novelty\n"); }
 
     soul_behavior_reset();
     soul_face_bg_reset();
@@ -306,18 +362,44 @@ int main(int argc, char **argv)
             if (idle_s > 3600) idle_s = 3600;
             face_bg_select(ke, (uint32_t)t, idle_s);
         }
+
+        /* S2.5b trait 双通道: 每拍残差观测(自发发起=深思行动成立),
+         * 日界结算 EMA+互斥+熔断(与 soul.c 同语义同参数) */
+        struct trait_obs tobs = {
+            .arousal = ke->arousal,
+            .salience = soul_bb_get(SOUL_BB_SALIENCE),
+            .urgency = ke->urgency,
+            .social_bond = ke->social_bond,
+            .valence = ke->valence,
+            .initiative = fired == 1,
+        };
+        trait_stat_observe(&tobs);
+        if (t % 86400 == 0) {
+            float tr_after[TRAIT_DIM];
+            trait_ema_settle();
+            trait_get(tr_after);
+            for (int d = 0; d < TRAIT_DIM; d++)
+                if (trait_last_ema(d) != 0.0f || trait_frozen(d)) {
+                    printf("[%6llus] trait day %u: C=%.3f W=%.3f E=%.3f"
+                           " A=%.3f R=%.3f%s\n", (unsigned long long)t,
+                           trait_day_count(), tr_after[0], tr_after[1],
+                           tr_after[2], tr_after[3], tr_after[4],
+                           trait_frozen(d) ? " [FROZEN]" : "");
+                    break;
+                }
+        }
         if (ke->valence < v_min) v_min = ke->valence;
         if (ke->valence > v_max) v_max = ke->valence;
         if (ke->arousal > a_max) a_max = ke->arousal;
 
         if (cf && (t % stride == 0))
-            fprintf(cf, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%d,%d,%d,%s,%d,%d,%d\n",
+            fprintf(cf, "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.2f,%d,%d,%d,%s,%d,%d,%d,%.3f\n",
                 (unsigned long long)t, ke->valence, ke->arousal, ke->mood,
                 ke->urgency, ke->social_bond, ke->persistence,
                 kd_out.error[KD_SOCIAL], kd_out.error[KD_STIM],
                 soul_bb_get(SOUL_BB_SALIENCE), soul_bb_get(SOUL_BB_IDLE),
                 quiet_hrs, w_net, w_play, cur_face, fired, blocked,
-                ke->ethics_latched ? 1 : 0);
+                ke->ethics_latched ? 1 : 0, ke->novelty);
     }
 
     printf("\n===== SOUL SIM 摘要(%.2f 天) =====\n", ticks / 86400.0);
@@ -332,6 +414,12 @@ int main(int argc, char **argv)
         bhv_fires[0], bhv_fires[1], bhv_fires[2]);
     printf("勿扰时段占比: %.1f%% | 底色终态: %s\n",
         100.0f * quiet_secs / ticks, cur_face);
+    {
+        float tr[TRAIT_DIM];
+        trait_get(tr);
+        printf("trait 终值(day %u): C=%.3f W=%.3f E=%.3f A=%.3f R=%.3f\n",
+               trait_day_count(), tr[0], tr[1], tr[2], tr[3], tr[4]);
+    }
     printf("底色驻留 top5: ");
     for (int pass = 0; pass < 5; pass++) {
         int bi = -1; uint32_t bv = 0;

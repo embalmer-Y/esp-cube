@@ -36,6 +36,7 @@ extern "C" {
 #define PSN_LOCKED_NAME_MAX 24
 #define PSN_LIST_MAX        8     /* 角色上限(首版工作初值) */
 #define PSN_DIM_MAX         4     /* 演化维度(docs/17 §7.4) */
+#define PSN_TRAIT_MAX       5     /* soul trait 维数(docs/24 §3.1) */
 #define PSN_EVO_MAX_DELTA   0.05f /* 单提案限幅(工作初值, 离线回归校准) */
 #define PSN_EVO_MIN_EVID    1     /* 最小证据数(工作初值) */
 #define PSN_REVISIONS_MAX   4     /* 每角色保留的演化修订数(环形) */
@@ -107,6 +108,12 @@ typedef struct {
         psn_evo_rev_t revs[PSN_REVISIONS_MAX];
         int   rev_n, rev_head;
     } evo[PSN_LIST_MAX];
+    /* soul trait 慢变量(per persona; docs/24 §3.1 "存 persona 卡")。
+     * 语义归 soul 层(5 维 band 钳位), 本组件只存取; 演化写入走
+     * persona_trait_write(不经 draft/confirm——那是用户编辑面,
+     * trait 自然演化=非干预, docs/24 §11.2)。 */
+    float trait[PSN_LIST_MAX][PSN_TRAIT_MAX];
+    bool  trait_valid[PSN_LIST_MAX];          /* 默认 false→中性 0.5 */
     uint32_t evo_revision;    /* 全 svc 递增修订号 */
     uint64_t (*rng)(void);    /* 注入随机源(persona_id 生成) */
     const store_io_t *store;  /* 持久化 io(T20; bind 后非空) */
@@ -198,6 +205,14 @@ psn_res_t persona_consent_set(persona_svc_t *s, uint32_t id,
 bool persona_consent_memory(const persona_svc_t *s, uint32_t id);
 bool persona_consent_evolution(const persona_svc_t *s, uint32_t id);
 uint32_t persona_consent_epoch(const persona_svc_t *s, uint32_t id);
+
+/* ---- soul trait 慢变量存取(S2.5b; docs/24 §3.1) ----
+ * write: 全维覆盖, 值域 [0,1] 钳位(语义校验在 soul 层); 成功后调用方
+ * 负责 persona_save。read: 无有效值返回 false(调用方保持中性 0.5)。 */
+psn_res_t persona_trait_write(persona_svc_t *s, uint32_t id,
+                              const float v[PSN_TRAIT_MAX]);
+bool persona_trait_read(const persona_svc_t *s, uint32_t id,
+                        float out[PSN_TRAIT_MAX]);
 
 #ifdef __cplusplus
 }

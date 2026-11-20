@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "persona.h"
+#include "store_slot.h"
 
 static int s_fail;
 #define CHECK(cond, msg) do { \
@@ -159,6 +160,22 @@ static void scenario_roundtrip(void)
           strcmp(rev->evidence[0], "round:ok:1") == 0,
           "revision evidence viewable");
 
+    /* S2.5b trait 慢变量往返(docs/24 §3.1): 写→存→载→读一致; 缺省中性 */
+    float tv[PSN_TRAIT_MAX] = { 0.62f, 0.41f, 0.55f, 0.50f, 0.38f };
+    CHECK(persona_trait_write(&s2, a, tv) == PSN_RES_OK, "trait write");
+    CHECK(persona_save(&s2) == PSN_RES_OK, "save trait");
+    persona_svc_t s4;
+    persona_init(&s4, test_rng);
+    persona_store_bind(&s4, &s_io, s_scratch, sizeof(s_scratch));
+    CHECK(persona_load(&s4) == PSN_RES_OK, "load trait");
+    float tr[PSN_TRAIT_MAX];
+    CHECK(persona_trait_read(&s4, a, tr), "trait valid after reload");
+    for (int k = 0; k < PSN_TRAIT_MAX; k++)
+        CHECK(tr[k] > tv[k] - 0.0001f && tr[k] < tv[k] + 0.0001f,
+              "trait value restored");
+    float tn[PSN_TRAIT_MAX];
+    CHECK(!persona_trait_read(&s4, b_id, tn), "无 trait 角色=中性缺省");
+
     /* 恢复后可继续切换并再存 */
     CHECK(persona_activate_begin(&s2, a, 0) == PSN_RES_OK, "begin A");
     CHECK(persona_activate_commit(&s2) == PSN_RES_OK, "A on again");
@@ -188,6 +205,89 @@ static void scenario_corrupt_fallback(void)
 }
 
 /* 无有效提交代 → RECOVERY_REQUIRED → load 报错且不写 */
+/* v2 旧注册表兼容读(S2.5b): 冻结的 v2 布局重放 + trait 缺省中性 */
+static void scenario_v2_compat(void)
+{
+    /* v2 记录布局(冻结于 PSN_STORE_VER=2 时代, 与 persona_core 的
+     * persona_rec_t 逐字段一致; 变更即破坏兼容=违背本测试目的) */
+    #pragma pack(push, 1)
+    typedef struct {
+        uint32_t revision;
+        uint32_t persona_id;
+        uint8_t  dim;
+        float    old_value, new_value, delta_applied;
+        char     reason[32];
+        char     evidence[2][16];
+        uint8_t  evidence_n;
+        char     algo_ver[8];
+    } v2_rev_t;
+    typedef struct {
+        uint32_t id;
+        uint16_t version;
+        uint8_t  draft;
+        char     name[24];
+        char     desc[128];
+        char     voice[24];
+        uint8_t  locked_n;
+        char     locked[8][24];
+        uint8_t  mem_en, evo_en;
+        uint32_t consent_epoch;
+        float    evo_value[4];
+        uint8_t  evo_paused;
+        uint8_t  rev_n;
+        v2_rev_t revs[4];
+    } v2_rec_t;
+    #pragma pack(pop)
+
+    memset(&s_tio, 0, sizeof(s_tio));
+    v2_rec_t r;
+    memset(&r, 0, sizeof(r));
+    r.id = 0xAABBCCDD;
+    r.version = 1;
+    r.draft = 0;
+    strcpy(r.name, "旧角色");
+    strcpy(r.voice, "longanrou_v3");
+    r.mem_en = 1;
+    struct { uint32_t magic; uint16_t ver; uint8_t n; int8_t active;
+             uint32_t last_epoch; } h = {
+        0x50535231u, 2, 1, 0, 4,
+    };
+    uint8_t v2buf[1024];   /* v2 rec ~776B + 注册表头 */
+    size_t off = 0;
+    memcpy(v2buf + off, &h, sizeof(h)); off += sizeof(h);
+    memcpy(v2buf + off, &r, sizeof(r)); off += sizeof(r);
+    CHECK(off <= sizeof(v2buf), "v2 payload fits");
+    /* 经 store_slot 正规提交(槽头+CRC+提交位), 模拟 v2 时代真实落盘 */
+    {
+        static store_slot_t ctx;
+        static uint8_t ctx_scratch[8224 + 24];
+        CHECK(store_slot_init(&ctx, &s_io, 8000, ctx_scratch,
+                              sizeof(ctx_scratch)) == STORE_STATUS_EMPTY,
+              "fresh store");
+        uint32_t gen = 0;
+        CHECK(store_slot_commit(&ctx, v2buf, off, &gen) ==
+              STORE_STATUS_OK, "commit v2 payload");
+    }
+
+    persona_svc_t s;
+    CHECK(persona_init(&s, test_rng) == PSN_RES_OK, "init");
+    CHECK(persona_store_bind(&s, &s_io, s_scratch, sizeof(s_scratch)) ==
+          PSN_RES_OK, "bind");
+    CHECK(persona_load(&s) == PSN_RES_OK, "v2 load ok");
+    CHECK(s.n == 1, "v2 角色不丢");
+    const persona_base_t *b = persona_get(&s, 0xAABBCCDD);
+    CHECK(b != NULL && !b->draft && b->version == 1 &&
+          strcmp(b->display_name, "旧角色") == 0 &&
+          strcmp(b->default_voice, "longanrou_v3") == 0,
+          "v2 字段恢复");
+    CHECK(persona_active_id(&s) == 0xAABBCCDD, "v2 active 恢复");
+    float tr[PSN_TRAIT_MAX];
+    CHECK(!persona_trait_read(&s, 0xAABBCCDD, tr),
+          "v2 无 trait → 中性缺省(soul 层保持 0.5)");
+    /* 再存=升格 v3(trait 以后才有值) */
+    CHECK(persona_save(&s) == PSN_RES_OK, "re-save upgrades to v3");
+}
+
 static void scenario_recovery_required(void)
 {
     memset(&s_tio, 0, sizeof(s_tio));
@@ -225,6 +325,7 @@ int main(int argc, char **argv)
         { "roundtrip", scenario_roundtrip },
         { "corrupt",   scenario_corrupt_fallback },
         { "recovery",  scenario_recovery_required },
+        { "v2compat",  scenario_v2_compat },
         { "empty",     scenario_empty },
     };
     if (argc > 1) {

@@ -285,6 +285,29 @@ uint32_t persona_consent_epoch(const persona_svc_t *s, uint32_t id)
     return i >= 0 ? s->consent[i].consent_epoch : 0;
 }
 
+/* ---- soul trait 慢变量存取(S2.5b; docs/24 §3.1) ---- */
+psn_res_t persona_trait_write(persona_svc_t *s, uint32_t id,
+                              const float v[PSN_TRAIT_MAX])
+{
+    int i = find_idx(s, id);
+    if (i < 0 || v == NULL) return PSN_RES_INVALID;
+    for (int k = 0; k < PSN_TRAIT_MAX; k++) {
+        float x = v[k];
+        s->trait[i][k] = x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x);
+    }
+    s->trait_valid[i] = true;
+    return PSN_RES_OK;
+}
+
+bool persona_trait_read(const persona_svc_t *s, uint32_t id,
+                        float out[PSN_TRAIT_MAX])
+{
+    int i = find_idx(s, id);
+    if (i < 0 || out == NULL || !s->trait_valid[i]) return false;
+    memcpy(out, s->trait[i], sizeof(float) * PSN_TRAIT_MAX);
+    return true;
+}
+
 
 /* ================= 持久化(T20; store_slot 双槽落地) ================= */
 #pragma pack(push, 1)
@@ -324,14 +347,21 @@ typedef struct {
     uint8_t  rev_n;
     persona_rec_rev_t revs[PSN_REVISIONS_MAX];   /* 按最新→最旧存 */
 } persona_rec_t;
+
+/* v3: + soul trait 慢变量(S2.5b; docs/24 §3.1 存 persona 卡) */
+typedef struct {
+    persona_rec_t base;
+    float    trait[PSN_TRAIT_MAX];
+    uint8_t  trait_valid;
+} persona_rec3_t;
 #pragma pack(pop)
 
 _Static_assert(sizeof(persona_hdr_t) == 12, "hdr 12B");
-_Static_assert(PSN_LIST_MAX * sizeof(persona_rec_t) + 16 < 8000,
-               "8 角色载荷(含演化)应小于 8KB scratch(含槽头冗余)");
+_Static_assert(PSN_LIST_MAX * sizeof(persona_rec3_t) + 16 < 8000,
+               "8 角色载荷(含演化+trait)应小于 8KB scratch(含槽头冗余)");
 
 #define PSN_STORE_MAGIC 0x50535231u   /* 'PSR1' */
-#define PSN_STORE_VER   2u   /* v2: +演化字段(T24); 旧版本作废重建(T22 用户裁决) */
+#define PSN_STORE_VER   3u   /* v3: +trait 慢变量(S2.5b); v2 兼容读(trait 缺省中性) */
 
 psn_res_t persona_store_bind(persona_svc_t *s, const store_io_t *io,
                              uint8_t *scratch, uint32_t scratch_cap)
@@ -372,47 +402,58 @@ psn_res_t persona_load(persona_svc_t *s)
     persona_hdr_t h;
     memcpy(&h, store_slot_payload(&s->store_ctx), sizeof(h));  /* payload 区头 */
     if (h.magic != PSN_STORE_MAGIC) return PSN_RES_IO_ERROR;
-    if (h.ver != PSN_STORE_VER) {
-        /* 旧版本注册表: T22 用户裁决(测试资料不保留)→作废, 按空库重建 */
+    if (h.ver != 2 && h.ver != PSN_STORE_VER) {
+        /* 更旧版本注册表: T22 用户裁决(测试资料不保留)→作废, 按空库重建
+         * (v2 特批兼容读: S2.5b 升版不弃角色, trait 缺省中性) */
         return PSN_RES_OK;
     }
     if (h.n > PSN_LIST_MAX) return PSN_RES_IO_ERROR;
     /* 静态: load 仅启动/SD-ready 一次(单 owner); 3KB 栈数组曾压破
      * SD mount 任务栈(板上 T20 实证) */
-    static persona_rec_t recs[PSN_LIST_MAX];
-    if (len != sizeof(h) + sizeof(persona_rec_t) * h.n) {
-        return PSN_RES_IO_ERROR;
+    static persona_rec3_t recs[PSN_LIST_MAX];
+    memset(recs, 0, sizeof(recs));
+    const uint8_t *disk = (const uint8_t *)store_slot_payload(&s->store_ctx)
+                          + sizeof(h);
+    if (h.ver == 2) {
+        /* v2 兼容读(v3 起 trait 入卡): 布局=旧 persona_rec_t, trait
+         * 缺省中性(trait_valid=false) */
+        if (len != sizeof(h) + sizeof(persona_rec_t) * h.n)
+            return PSN_RES_IO_ERROR;
+        for (int i = 0; i < h.n; i++)
+            memcpy(&recs[i].base, disk + (size_t)i * sizeof(persona_rec_t),
+                   sizeof(persona_rec_t));
+    } else {
+        if (len != sizeof(h) + sizeof(persona_rec3_t) * h.n)
+            return PSN_RES_IO_ERROR;
+        memcpy(recs, disk, sizeof(persona_rec3_t) * h.n);
     }
-    const persona_rec_t *disk = (const persona_rec_t *)
-        ((const uint8_t *)store_slot_payload(&s->store_ctx) + sizeof(h));
-    memcpy(recs, disk, sizeof(persona_rec_t) * h.n);
 
     for (int i = 0; i < h.n; i++) {
         persona_base_t *b = &s->slot[i];
         memset(b, 0, sizeof(*b));
-        b->persona_id = recs[i].id;
-        b->version = recs[i].version;
-        b->draft = recs[i].draft != 0;
-        memcpy(b->display_name, recs[i].name, sizeof(b->display_name));
-        memcpy(b->description, recs[i].desc, sizeof(b->description));
-        memcpy(b->default_voice, recs[i].voice, sizeof(b->default_voice));
-        b->locked_n = recs[i].locked_n > PSN_LOCKED_MAX
-                          ? PSN_LOCKED_MAX : recs[i].locked_n;
-        memcpy(b->locked, recs[i].locked, sizeof(b->locked));
-        s->consent[i].memory_enabled = recs[i].mem_en != 0;
-        s->consent[i].evolution_enabled = recs[i].evo_en != 0;
-        s->consent[i].consent_epoch = recs[i].consent_epoch;
-        memcpy(s->evo[i].evo_value, recs[i].evo_value,
+        b->persona_id = recs[i].base.id;
+        b->version = recs[i].base.version;
+        b->draft = recs[i].base.draft != 0;
+        memcpy(b->display_name, recs[i].base.name, sizeof(b->display_name));
+        memcpy(b->description, recs[i].base.desc, sizeof(b->description));
+        memcpy(b->default_voice, recs[i].base.voice, sizeof(b->default_voice));
+        b->locked_n = recs[i].base.locked_n > PSN_LOCKED_MAX
+                          ? PSN_LOCKED_MAX : recs[i].base.locked_n;
+        memcpy(b->locked, recs[i].base.locked, sizeof(b->locked));
+        s->consent[i].memory_enabled = recs[i].base.mem_en != 0;
+        s->consent[i].evolution_enabled = recs[i].base.evo_en != 0;
+        s->consent[i].consent_epoch = recs[i].base.consent_epoch;
+        memcpy(s->evo[i].evo_value, recs[i].base.evo_value,
                sizeof(s->evo[i].evo_value));
-        s->evo[i].evolution_paused = recs[i].evo_paused != 0;
-        s->evo[i].rev_n = recs[i].rev_n > PSN_REVISIONS_MAX
-                              ? PSN_REVISIONS_MAX : recs[i].rev_n;
+        s->evo[i].evolution_paused = recs[i].base.evo_paused != 0;
+        s->evo[i].rev_n = recs[i].base.rev_n > PSN_REVISIONS_MAX
+                              ? PSN_REVISIONS_MAX : recs[i].base.rev_n;
         s->evo[i].rev_head = s->evo[i].rev_n;   /* 顺序队列: head=rev_n */
         for (int k = 0; k < s->evo[i].rev_n; k++) {
             /* 逐字段转换; 存序最新在前 → 队列最旧在前(反转), 使
              * persona_evo_revision(idx=0)=队列尾=最新 */
             psn_evo_rev_t *d = &s->evo[i].revs[s->evo[i].rev_n - 1 - k];
-            const persona_rec_rev_t *src = &recs[i].revs[k];
+            const persona_rec_rev_t *src = &recs[i].base.revs[k];
             d->revision = src->revision;
             d->persona_id = src->persona_id;
             d->dim = src->dim;
@@ -424,6 +465,9 @@ psn_res_t persona_load(persona_svc_t *s)
             d->evidence_n = src->evidence_n;
             memcpy(d->algo_ver, src->algo_ver, sizeof(d->algo_ver));
         }
+        for (int k = 0; k < PSN_TRAIT_MAX; k++)
+            s->trait[i][k] = recs[i].trait[k];
+        s->trait_valid[i] = recs[i].trait_valid != 0;
         /* 重排后 head=rev_n: persona_evo_revision(idx=0) 回看 revs[rev_n-1]
          * —— 与"存序=最新在前"配对即最新(revs 存序最旧在前, 上一行存入
          * 顺序按 idx 最新→最旧拷贝, 故 revs[0]=最新; 修正 head 使回看
@@ -448,30 +492,30 @@ psn_res_t persona_save(persona_svc_t *s)
         .active_idx = (int8_t)s->active,
         .last_epoch = s->active_epoch,
     };
-    static persona_rec_t recs[PSN_LIST_MAX];   /* 单 owner 串行(同上) */
+    static persona_rec3_t recs[PSN_LIST_MAX];  /* 单 owner 串行(同上) */
     memset(recs, 0, sizeof(recs));
     for (int i = 0; i < s->n; i++) {
         persona_base_t *b = &s->slot[i];
-        recs[i].id = b->persona_id;
-        recs[i].version = b->version;
-        recs[i].draft = b->draft ? 1 : 0;
-        memcpy(recs[i].name, b->display_name, sizeof(recs[i].name));
-        memcpy(recs[i].desc, b->description, sizeof(recs[i].desc));
-        memcpy(recs[i].voice, b->default_voice, sizeof(recs[i].voice));
-        recs[i].locked_n = (uint8_t)b->locked_n;
-        memcpy(recs[i].locked, b->locked, sizeof(recs[i].locked));
-        recs[i].mem_en = s->consent[i].memory_enabled ? 1 : 0;
-        recs[i].evo_en = s->consent[i].evolution_enabled ? 1 : 0;
-        recs[i].consent_epoch = s->consent[i].consent_epoch;
-        memcpy(recs[i].evo_value, s->evo[i].evo_value,
-               sizeof(recs[i].evo_value));
-        recs[i].evo_paused = s->evo[i].evolution_paused ? 1 : 0;
-        recs[i].rev_n = (uint8_t)s->evo[i].rev_n;
+        recs[i].base.id = b->persona_id;
+        recs[i].base.version = b->version;
+        recs[i].base.draft = b->draft ? 1 : 0;
+        memcpy(recs[i].base.name, b->display_name, sizeof(recs[i].base.name));
+        memcpy(recs[i].base.desc, b->description, sizeof(recs[i].base.desc));
+        memcpy(recs[i].base.voice, b->default_voice, sizeof(recs[i].base.voice));
+        recs[i].base.locked_n = (uint8_t)b->locked_n;
+        memcpy(recs[i].base.locked, b->locked, sizeof(recs[i].base.locked));
+        recs[i].base.mem_en = s->consent[i].memory_enabled ? 1 : 0;
+        recs[i].base.evo_en = s->consent[i].evolution_enabled ? 1 : 0;
+        recs[i].base.consent_epoch = s->consent[i].consent_epoch;
+        memcpy(recs[i].base.evo_value, s->evo[i].evo_value,
+               sizeof(recs[i].base.evo_value));
+        recs[i].base.evo_paused = s->evo[i].evolution_paused ? 1 : 0;
+        recs[i].base.rev_n = (uint8_t)s->evo[i].rev_n;
         for (int k = 0; k < s->evo[i].rev_n && k < PSN_REVISIONS_MAX; k++) {
             const psn_evo_rev_t *r = persona_evo_revision(s,
                                                           s->slot[i].persona_id,
                                                           k);
-            persona_rec_rev_t *d = &recs[i].revs[k];
+            persona_rec_rev_t *d = &recs[i].base.revs[k];
             memset(d, 0, sizeof(*d));
             d->revision = r->revision;
             d->persona_id = r->persona_id;
@@ -487,14 +531,17 @@ psn_res_t persona_save(persona_svc_t *s)
             d->evidence_n = r->evidence_n;
             memcpy(d->algo_ver, r->algo_ver, sizeof(d->algo_ver));
         }
+        for (int k = 0; k < PSN_TRAIT_MAX; k++)
+            recs[i].trait[k] = s->trait[i][k];
+        recs[i].trait_valid = s->trait_valid[i] ? 1 : 0;
     }
     /* 两段式: head=hdr(栈), body=recs(静态单 owner); 免 scratch 中转 */
-    static persona_rec_t recs_buf[PSN_LIST_MAX];
-    memcpy(recs_buf, recs, sizeof(persona_rec_t) * (size_t)s->n);
+    static persona_rec3_t recs_buf[PSN_LIST_MAX];
+    memcpy(recs_buf, recs, sizeof(persona_rec3_t) * (size_t)s->n);
     uint32_t gen = 0;
     store_status_t r = store_slot_commit_parts(&s->store_ctx, &h, sizeof(h),
                                                recs_buf,
-                                               sizeof(persona_rec_t) *
+                                               sizeof(persona_rec3_t) *
                                                    (size_t)s->n, &gen);
     return r == STORE_STATUS_OK ? PSN_RES_OK : PSN_RES_IO_ERROR;
 }

@@ -81,6 +81,7 @@ static const char *TAG = "soul";
 #define PEND_BARGE      0x04
 #define PEND_VOICE      0x08
 static volatile uint8_t s_pend;
+static bool s_initiative_tick;   /* 本拍自发发起(trait 观测) */
 /* round 附带文本(单槽, 新覆盖旧 —— 轮结束才写, 会话任务上下文) */
 static char s_round_user[192];
 static char s_round_reply[96];
@@ -155,6 +156,21 @@ static void act_submit_log(const char *cap, const char *param, size_t plen)
                  cact_status_name(rc.status),
                  rc.reason[0] ? "(" : "", rc.reason[0] ? rc.reason : "");
     }
+}
+
+/* trait 慢变量注入(S2.5b; act_gate 在 persona 加载/genesis 后调用) */
+void soul_trait_load(const float tr[TRAIT_DIM])
+{
+    float cur[TRAIT_DIM];
+    trait_get(cur);
+    if (memcmp(cur, tr, sizeof(cur)) == 0)
+        return;
+    if (!trait_set(tr)) {
+        ESP_LOGW(TAG, "trait load OUT_OF_BAND rejected");
+        return;
+    }
+    ESP_LOGI(TAG, "trait load C=%.2f W=%.2f E=%.2f A=%.2f R=%.2f",
+             tr[0], tr[1], tr[2], tr[3], tr[4]);
 }
 
 /* L1 底色选择(soul_face 扇区三件套, docs/24 §2.3; 挂在 mood_publish 拍) */
@@ -636,6 +652,7 @@ static void soul_task(void *arg)
             ki_think_gate(&tc, &g);
             if (g.trigger && !g.blocked_mask) {
                 soul_think_fire(g.reason_mask, false, 0.6f);
+                s_initiative_tick = true;   /* 自发发起(trait EMA 观测) */
             }
         }
 #endif
@@ -644,6 +661,40 @@ static void soul_task(void *arg)
         if (round_now && ru[0]) {
             soul_mem_record(ru, rr, ke_out.state.valence,
                             ke_out.state.arousal);
+        }
+
+        /* 10) trait 慢变量(S2.5b 双通道, docs/24 §3.3): 每拍残差观测
+         * (initiative=本拍深思行动成立), 日界结算 EMA+熔断 */
+        struct trait_obs tobs = {
+            .arousal = ke_out.state.arousal,
+            .salience = soul_bb_get(SOUL_BB_SALIENCE),
+            .urgency = ke_out.state.urgency,
+            .social_bond = ke_out.state.social_bond,
+            .valence = ke_out.state.valence,
+            .initiative = s_initiative_tick,
+        };
+        s_initiative_tick = false;
+        trait_stat_observe(&tobs);
+        if (s_ticks % 86400 == 0) {
+            float after[TRAIT_DIM];
+            trait_ema_settle();
+            trait_get(after);
+            bool moved = false;
+            for (int d = 0; d < TRAIT_DIM; d++) {
+                if (trait_last_ema(d) != 0.0f) moved = true;
+                if (trait_frozen(d))
+                    ESP_LOGW(TAG, "trait dim %d frozen 7d (7日净移熔断)", d);
+            }
+            if (moved) {
+                ESP_LOGI(TAG, "trait evolve C=%.3f W=%.3f E=%.3f A=%.3f "
+                         "R=%.3f (day %u)", after[0], after[1], after[2],
+                         after[3], after[4], trait_day_count());
+                /* 持久化(B-5): persona owner(act_gate)订阅落盘 */
+                cube_trait_evo_t evo;
+                for (int d = 0; d < TRAIT_DIM; d++)
+                    evo.trait[d] = after[d];
+                cube_event_publish(CUBE_EVT_TRAIT_EVO, &evo, sizeof(evo));
+            }
         }
     }
 }

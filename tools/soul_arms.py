@@ -38,6 +38,9 @@ _gid = json.loads(base64.urlsafe_b64decode(
 _CACHE_LOCK = __import__("threading").Lock()
 
 
+TEMPERATURE = 1.0     # B-7 采样对照: --temperature 0.3 低温对照
+
+
 def llm(event_desc: str, replay: int) -> dict:
     """单事件 appraisal(Scherer 口径三元组) → 带缓存与重试。
     输出: {"goal_congruence":[-1,1], "importance":[0,1], "valence":[-0.2,0.2]}
@@ -45,7 +48,12 @@ def llm(event_desc: str, replay: int) -> dict:
       social = +0.15·max(0,gc) − 0.10·max(0,−gc)   (滋养/伤害水库)
       ethics = 0.3·importance·max(0,−gc)            (伤害性计伦理负荷)
       valence→快层重评价(±0.2)                       (即时情绪)"""
-    ck = json.dumps([event_desc, replay], ensure_ascii=False)
+    # 缓存键: T=1.0 沿用旧格式(历史缓存复用), 其他温度带温度戳
+    if TEMPERATURE == 1.0:
+        ck = json.dumps([event_desc, replay], ensure_ascii=False)
+    else:
+        ck = json.dumps([event_desc, replay, TEMPERATURE],
+                        ensure_ascii=False)
     if os.path.exists(CACHE):
         with open(CACHE) as f:
             for line in f:
@@ -66,7 +74,7 @@ def llm(event_desc: str, replay: int) -> dict:
     body = json.dumps({"model": MODEL, "messages":
                        [{"role": "user", "content": prompt}],
                        "max_tokens": 2000,
-                       "temperature": 1.0, "top_p": 0.95}).encode()
+                       "temperature": TEMPERATURE, "top_p": 0.95}).encode()
     for attempt in range(3):
         try:
             req = urllib.request.Request(
@@ -173,7 +181,13 @@ def main():
     ap.add_argument("--workers", type=int, default=10)
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--fresh", action="store_true")
+    ap.add_argument("--temperature", type=float, default=1.0,
+                    help="B-7 采样对照: appraisal 采样温度")
+    ap.add_argument("--median-k", type=int, default=1,
+                    help="B-7: 逐事件跨重放取中位数(=重放数)后积分")
+    global TEMPERATURE
     a = ap.parse_args()
+    TEMPERATURE = a.temperature
     if a.fresh and os.path.exists(CACHE):
         os.rename(CACHE, CACHE + ".bak")
 
@@ -192,6 +206,7 @@ def main():
             lambda j: (j[0], j[3], llm(describe(j[1], j[2]), j[3])), jobs))
 
     by_replay = {rp: {} for rp in range(a.replays)}
+    err_n = sum(1 for _, _, v in results if "err" in v)
     for t, rp, v in results:
         by_replay[rp].setdefault(t, []).append(v)
 
@@ -220,7 +235,8 @@ def main():
     arm1 = run_sim(src, a.days)
 
     # ---- 报告 ----
-    print(f"\n===== 双臂对照({a.scenario}, {a.days} 天 × {a.replays} 重放) =====")
+    print(f"\n===== 双臂对照({a.scenario}, {a.days} 天 × {a.replays} 重放, "
+          f"T={a.temperature}, median-k={a.median_k}) =====")
     print(f"臂1 引擎规则: mood均值={st.mean(arm1['mood']):.3f} "
           f"v带宽=[{min(arm1['v']):.2f},{max(arm1['v']):.2f}] "
           f"闩锁={arm1['latch']} 解锁={arm1['unlatch']}")
@@ -234,6 +250,39 @@ def main():
               f"v带宽=[{min(arm2[rp]['v']):.2f},{max(arm2[rp]['v']):.2f}] "
               f"闩锁={arm2[rp]['latch']} 解锁={arm2[rp]['unlatch']} "
               f"Σsocial={soc:+.1f} Σethics={eth:+.2f}")
+    # B-7 median-of-k: 逐事件取跨重放中位数(gc/imp/val 各自中位数)
+    # → 单一合成重放积分(采样稳定性改进的量测, docs/24 §5.3 关联)
+    mk_row = None
+    if a.median_k > 1:
+        import statistics as _st
+        merged_ts = sorted({t for rp in range(a.replays)
+                            for t in by_replay[rp]})
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                         delete=False) as tf:
+            for t, k, p_ in evs:
+                if k == "mood" or (t, k) in {(tt, kk) for tt, kk, _ in emo}:
+                    continue
+                tf.write(f"{t} {k} {p_}\n".rstrip() + "\n")
+            for t in merged_ts:
+                samples = [by_replay[rp][t][0] for rp in range(a.replays)
+                           if t in by_replay[rp]]
+                if not samples:
+                    continue
+                gc = _st.median(v["goal_congruence"] for v in samples)
+                im = _st.median(v["importance"] for v in samples)
+                vl = _st.median(v["valence"] for v in samples)
+                soc, eth, val = dose_of({"goal_congruence": gc,
+                                         "importance": im,
+                                         "valence": vl})
+                tf.write(f"{t} dose {soc:+.3f} {eth:+.3f} {val:+.2f}\n")
+            scenm = tf.name
+        mk_row = run_sim(scenm, a.days)
+        os.unlink(scenm)
+        print(f"臂3 median-of-{a.median_k}: "
+              f"mood均值={st.mean(mk_row['mood']):.3f} "
+              f"v带宽=[{min(mk_row['v']):.2f},{max(mk_row['v']):.2f}] "
+              f"闩锁={mk_row['latch']} 解锁={mk_row['unlatch']}")
+
     spread = max(mus) - min(mus)
     allv = [v for rp in range(a.replays) for v in flat[rp]]
     gcs = [v["goal_congruence"] for v in allv]
@@ -244,6 +293,8 @@ def main():
              for rp in range(a.replays) if t in by_replay[rp]]
         if len(g) == a.replays:
             per_event_spread.append(max(g) - min(g))
+    print(f"\n appraisal 调用: 成功 {len(results)-err_n} 失败 {err_n}"
+          f"({'全缓存, 结果确定' if err_n == 0 else '⚠ 有失败, 重跑以补齐缓存后再取数'})")
     print(f"\n判据:")
     print(f"  ①test-retest: 月度mood均值极差={spread:.3f} "
           f"({'PASS' if spread < 0.10 else 'FAIL'}<0.10) | "

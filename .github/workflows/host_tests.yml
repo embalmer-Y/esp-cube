@@ -1,0 +1,30 @@
+# 宿主回归 CI(docs/19 §56 C-10)——零设备/零网络/零凭据(docs/18 T02 纪律)
+#
+# 跑 tools/host_tests.sh 全量: 灵魂层黄金锚(ke/kd/trait)、R3+C5 验收
+# (soul_sim 三场景月测)、各组件宿主测试(ASan+UBSan)、EFC 契约(素材
+# 出库时自动 SKIP)、分层依赖检查。mem_budget 无 map 时 SKIP(构建批
+# 须复检, docs/22 §7)。
+#
+# 密钥/WiFi 凭据不入库不下载——本 workflow 无 secrets 访问。
+name: host-tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          gcc --version | head -1
+          python3 --version
+
+      - name: 宿主回归全量
+        run: tools/host_tests.sh

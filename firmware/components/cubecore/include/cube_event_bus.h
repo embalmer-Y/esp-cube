@@ -50,6 +50,8 @@ typedef enum {
     /* 灵魂(app_soul) */
     CUBE_EVT_SOUL_MOOD,      /* 情绪快照(节流: anim_tag 变化或 60s) */
     CUBE_EVT_SOUL_ACT,       /* 灵魂 2.0 行动广播(深思/底色/瞬态) */
+    CUBE_EVT_TRAIT_EVO,      /* trait 慢变量演化(日界 EMA 步生效时),
+                                payload: cube_trait_evo_t(act_gate 落盘) */
     /* 存储(app_storage) */
     CUBE_EVT_SD_READY,       /* SD 卡挂载成功(记忆/素材切 SD 后端), payload: NULL */
 } cube_evt_id_t;
@@ -72,6 +74,12 @@ typedef struct {
     float social_bond;       /* [0,1] 互动强度积分 */
     bool  ethics_latched;    /* 安抚模式(只允许温柔语气) */
 } cube_soul_mood_t;
+
+/* trait 慢变量演化(CUBE_EVT_TRAIT_EVO payload; docs/24 §3.1:
+ * trait 存 persona 卡, soul 层演化→act_gate(persona owner)落盘) */
+typedef struct {
+    float trait[5];          /* C W E A R(docs/24 §3.1), 值域 [0.35,0.65] */
+} cube_trait_evo_t;
 
 /* 灵魂 2.0 行动(CUBE_EVT_SOUL_ACT payload; 全局广播空间出口:
  * 深思 LLM 意图(ki_intent)与表情底色/瞬态经此广播, 各执行器订阅

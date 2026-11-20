@@ -9,6 +9,9 @@
 #   C3 ethics 可达且可恢复: abuse 场景至少一次 0→1 闩锁, 且其后有 1→0 解锁
 #   C4 反应模式性格化(S2.5): 同一 neglect 事件流, 脆弱型(闩锁+mood 深)
 #       与自足型(不闩锁+mood 温和)轨迹必须显著分化(docs/24 §11.3)
+#   C5 演化面(S2.5b, docs/24 §3.3): ①life 月中性性格漂移 ≤0.05(普通生活
+#       不撼动底色) ②neglect 月温情↓且韧性↓(冷落有性格印记, 方向语义)
+#       ③三场景 30 天 trait 全程 band 内(钳位+熔断护栏)
 # 用法: tools/soul_accept.py [--days N]
 # 退出码 = 未达标判据数(0=全部达标)。当前为 v2 前基线(预期红),
 # host_tests.sh 按 KNOWN 判据数放行; 判据由绿转红即回归。
@@ -34,16 +37,18 @@ for i, a in enumerate(sys.argv):
         DAYS = int(sys.argv[i + 1])
 
 
-def run_sim(name: str, csv_path: str) -> None:
+def run_sim(name: str, csv_path: str, scenario: str = None) -> str:
     r = subprocess.run(
         ["bash", f"{HERE}/../sim/soul_sim/run.sh",
          "--ticks", str(DAYS * 86400), "--stride", "10",
-         "--scenario", f"{HERE}/../sim/soul_sim/scenarios/{name}_month.txt",
+         "--scenario", scenario or
+         f"{HERE}/../sim/soul_sim/scenarios/{name}_month.txt",
          "--csv", csv_path],
         capture_output=True, text=True)
     if r.returncode != 0:
         print(f"FAIL sim run: {name}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
         raise SystemExit(9)
+    return r.stdout
 
 
 def parse(csv_path: str):
@@ -67,14 +72,28 @@ def parse(csv_path: str):
     return dwell, latch_on, latch_off
 
 
+import re as _re
+
+
+def trait_final(stdout: str):
+    """从 sim 摘要解析 trait 终值(day N): C=.. W=.. E=.. A=.. R=.."""
+    m = _re.search(r"trait 终值\(day (\d+)\): C=([\d.]+) W=([\d.]+) "
+                   r"E=([\d.]+) A=([\d.]+) R=([\d.]+)", stdout)
+    return None if m is None else {
+        "day": int(m.group(1)), "C": float(m.group(2)), "W": float(m.group(3)),
+        "E": float(m.group(4)), "A": float(m.group(5)), "R": float(m.group(6))}
+
+
 def main():
     fails = 0
     dists = {}
+    traits = {}
     with tempfile.TemporaryDirectory(prefix="soul_acc_") as td:
         for name in SCEN:
             p = os.path.join(td, f"{name}.csv")
-            run_sim(name, p)
+            out = run_sim(name, p)
             dists[name] = parse(p)
+            traits[name] = trait_final(out)
 
     total = {n: sum(d[0].values()) for n, d in dists.items()}
     print(f"== R3 验收({DAYS} 天 × {len(SCEN)} 场景) ==")
@@ -142,6 +161,29 @@ def main():
           f"resilient(mood={rm:.2f},闩锁{rl:.0%}) "
           f"{'PASS' if ok else 'FAIL'}")
     if not ok:
+        fails += 1
+
+    # C5: 演化面(S2.5b 双通道; docs/24 §3.3+§3.5 30 天标定验收)
+    tl = traits.get("life")
+    ok5a = tl is not None and tl["day"] >= DAYS - 2 and \
+        all(abs(tl[k] - 0.5) <= 0.05 for k in "CWEAR")
+    print(f"C5a life    中性漂移 ≤0.05: "
+          f"C={tl['C']:.3f} W={tl['W']:.3f} E={tl['E']:.3f} "
+          f"A={tl['A']:.3f} R={tl['R']:.3f} {'PASS' if ok5a else 'FAIL'}")
+    if not ok5a:
+        fails += 1
+    tn = traits.get("neglect")
+    ok5b = tn is not None and tn["W"] < 0.45 and tn["R"] < 0.47
+    print(f"C5b neglect 性格印记: W={tn['W']:.3f}(<0.45) "
+          f"R={tn['R']:.3f}(<0.47) {'PASS' if ok5b else 'FAIL'}")
+    if not ok5b:
+        fails += 1
+    ok5c = all(t is not None and
+               all(0.35 - 1e-3 <= t[k] <= 0.65 + 1e-3 for k in "CWEAR")
+               for t in traits.values())
+    print(f"C5c band 安全: 三场景 30 天 trait 全在 [0.35,0.65] "
+          f"{'PASS' if ok5c else 'FAIL'}")
+    if not ok5c:
         fails += 1
 
     print(f"soul_accept: {'ALL PASS' if fails == 0 else f'{fails} 判据未达标'}")

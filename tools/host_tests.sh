@@ -52,9 +52,9 @@ fi
 echo "== [1c] R3 表达区分度验收(docs/24 R3/S1; soul_sim 三场景月测; 目标态) =="
 python3 -I tools/soul_accept.py
 rc=$?
-# v2 前基线 7 红(C1×3/C2×3/C3), S2 批(mood 层+表情扇区+ethics 解锁)逐项转绿;
-# 判据由绿转红即回归。
-R3_KNOWN=7
+# S2+S2.5b 批全部转绿(2026-11-20: 11 判据 C1a-C5c 全 PASS, §55.22);
+# 判据由绿转红即回归。此数>0 表示仍有挂账判据。
+R3_KNOWN=0
 if [ "$rc" -eq 0 ]; then
     echo "R3: 全达标(请将 R3_KNOWN 置 0)"
 elif [ "$rc" -le "$R3_KNOWN" ]; then
@@ -187,6 +187,9 @@ else /tmp/test_sessguard || FAIL=1; fi
 echo "== [13/14] 模型评估线束 selftest(docs/18 T33; mock 适配器) =="
 python3 -I tools/modeval.py selftest || FAIL=1
 
+echo "== [13b] soul_calib 校准层 selftest(docs/24 §5.3 D3; S2.5b) =="
+python3 -I tools/soul_calib.py selftest || FAIL=1
+
 echo "== [14/14] 会话生命周期状态机(docs/18 T28 宿主语义; ASan+UBSan) =="
 gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra -Wno-unused-parameter \
     -I firmware/components/sessguard/include \
@@ -228,7 +231,11 @@ if [ -x "$EFC_PY" ]; then
     if [ $? -ne 0 ]; then echo "BUILD FAIL: test_face_perf_stats"; EFC_FAIL=1;
     else /tmp/test_face_perf_stats || EFC_FAIL=1; fi
 else
-    echo "FAIL: EFC 编码器环境缺失: $EFC_PY"; EFC_FAIL=1
+    if ls firmware/components/app_ui/ui/assets/face/*.efc >/dev/null 2>&1; then
+        echo "FAIL: EFC 编码器环境缺失(素材在库须可验): $EFC_PY"; EFC_FAIL=1
+    else
+        echo "SKIP: EFC 编码器环境缺失且素材已出库(§55.20) — efc 契约测试无处可施"
+    fi
 fi
 if [ "$EFC_FAIL" -eq 0 ]; then echo "[18/18] EFC 部分: PASS"; else echo "[18/18] EFC 部分: FAIL"; FAIL=1; fi
 

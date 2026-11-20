@@ -291,6 +291,20 @@ static void psn_mem_scope_apply(void)
 #endif
 }
 
+/* trait 慢变量注入(S2.5b/B-5): 激活角色卡上的 trait → soul(无则中性) */
+static void psn_trait_apply(void)
+{
+#if CONFIG_ESP_CUBE_ENABLE_SOUL
+    uint32_t id = persona_active_id(&s_psn_svc);
+    if (id == 0) return;
+    float tr[PSN_TRAIT_MAX];
+    if (persona_trait_read(&s_psn_svc, id, tr)) {
+        soul_trait_load(tr);
+        ESP_LOGI(TAG, "trait from persona #%08lx", (unsigned long)id);
+    }
+#endif
+}
+
 persona_svc_t *act_gate_persona(void) { return &s_psn_svc; }
 
 /* 清除全部角色资料(T22 用户裁决: 测试阶段资料不保留)——注册表/角色记忆/
@@ -344,6 +358,26 @@ void act_gate_persona_clear(void)
     }
     psn_epoch_inject();
     psn_mem_scope_apply();
+    psn_trait_apply();
+}
+
+/* trait 演化落盘(S2.5b/B-5): soul 日界 EMA 步生效 → persona 卡 v3 */
+static void psn_trait_evo_cb(cube_evt_id_t id, const void *data, size_t len,
+                             void *ctx)
+{
+    (void)ctx;
+    if (id != CUBE_EVT_TRAIT_EVO || data == NULL || len < sizeof(cube_trait_evo_t))
+        return;
+    uint32_t id_act = persona_active_id(&s_psn_svc);
+    if (id_act == 0) return;
+    const cube_trait_evo_t *evo = (const cube_trait_evo_t *)data;
+    if (persona_trait_write(&s_psn_svc, id_act, evo->trait) != PSN_RES_OK)
+        return;
+    if (persona_save(&s_psn_svc) != PSN_RES_OK) {
+        ESP_LOGW(TAG, "trait evo save fail (kept in memory)");
+    } else {
+        ESP_LOGI(TAG, "trait evo persisted #%08lx", (unsigned long)id_act);
+    }
 }
 
 static bool s_psn_bound;                 /* SD 就绪后 bind+load 一次 */
@@ -393,6 +427,7 @@ static void persona_sd_try(void)
     }
     psn_epoch_inject();
     psn_mem_scope_apply();
+    psn_trait_apply();
     ESP_LOGI(TAG, "persona: %d role(s), active #%08lx epoch %u",
              s_psn_svc.n,
              (unsigned long)persona_active_id(&s_psn_svc),
@@ -487,6 +522,7 @@ void act_gate_init(void)
         ESP_LOGW(TAG, "persona store degraded (no psram scratch)");
     } else {
         cube_event_subscribe(persona_sd_evt_cb, NULL);
+        cube_event_subscribe(psn_trait_evo_cb, NULL);
         persona_sd_try();              /* SD 已就绪时立即装载(热重启) */
     }
     ESP_LOGI(TAG, "act gate up: %zu caps, autonomous=default-on",

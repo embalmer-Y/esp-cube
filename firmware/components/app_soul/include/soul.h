@@ -18,6 +18,8 @@
 #pragma once
 
 #include <stdbool.h>
+
+#include "soul_trait.h"
 #include <stdint.h>
 #include <esp_err.h>
 
@@ -47,6 +49,11 @@ void soul_on_round(bool ok, const char *user_text, const char *reply_first);
 void soul_note_user_stop(void);
 void soul_on_barge(void);
 void soul_on_voice(void);            /* 内置 ≥5s 限频(总线回调可直调) */
+
+/* ---- trait 慢变量注入(S2.5b persona 持久化; act_gate 调用) ----
+ * 建角色(genesis)/角色加载后由 persona owner 推入; 内部 trait_set
+ * (band 钳位+调制面重算)。越界维拒绝整包(false)。 */
+void soul_trait_load(const float tr[TRAIT_DIM]);   /* TRAIT_DIM=5 */
 
 /* ---- LLM 回复的 mood 标签协议 ---- */
 /* 从回复尾部剥掉 <mood d="±0.x"/> 标签; 返回 true=剥到并已受理重评价
