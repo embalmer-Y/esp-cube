@@ -564,7 +564,7 @@ void act_gate_user_stop_audio(const char *reason)
 {
     cact_user_stop(cact_default(), 1, reason);   /* 取消在途+锁存组1 */
 #if CONFIG_ESP_CUBE_ENABLE_SOUL
-    soul_note_user_stop();                       /* 停止归因→radio_start 退避 */
+    soul_note_user_stop();                       /* 停止归因→深思音频抑制窗(S3) */
 #endif
 }
 

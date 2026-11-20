@@ -1,10 +1,11 @@
 /*
  * soul_sim.c —— 情绪/快慢思考框架 PC 快 tick 模拟器(2026-11-19)
  *
- * 复用固件真源(零拷贝数值核): soul_bb/behavior/drive(kd)/emotion(ke)/
+ * 复用固件真源(零拷贝数值核): soul_bb/budget/drive(kd)/emotion(ke)/
  * ignition(点火闸) 五件套 —— 全纯 C 标准库(可解释可计算的实证)。
- * 本壳复刻 soul.c 1Hz tick 序(感知→事件→kd→mood→ke→bb→behavior→L4 闸
- * →底色最近邻), 快进 N tick 等价 N 秒墙钟, 纯计算毫秒级。
+ * 本壳复刻 soul.c 1Hz tick 序(感知→事件→kd→mood→ke→bb→深思闸→预算
+ * 行动占位→底色最近邻; S3 起 L2 行为表退役, docs/24 §7), 快进 N tick
+ * 等价 N 秒墙钟, 纯计算毫秒级。
  *
  * 事件脚本(每行): <秒> <cmd> [arg]
  *   net 0|1 / play 0|1 / ai 0|1 / voice / touch / barge
@@ -45,6 +46,7 @@ static uint32_t w_dose_seq;
 /* ---- 深思记账(复刻 soul_think.c 静态) ---- */
 static uint32_t s_last_think_min;
 static uint8_t  s_thought_today;
+static uint8_t  s_fired_today;
 static bool     s_last_silent;
 static float    s_last_silent_score;
 static uint32_t s_think_fires, s_think_blocked[4], s_think_reason[6];
@@ -308,6 +310,7 @@ int main(int argc, char **argv)
         if (s_last_ctx_min != 0 && now_min < s_last_ctx_min &&
             (s_last_ctx_min - now_min) > 12 * 60) {
             s_thought_today = 0;
+            s_fired_today = 0;        /* 与固件口径一致(soul_think.c) */
         }
         s_last_ctx_min = now_min;
         struct ki_think_ctx tc = {

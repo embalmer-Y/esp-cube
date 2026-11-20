@@ -11,7 +11,7 @@
  *       firmware/components/app_soul/src/soul_mem.c \
  *   && ASAN_OPTIONS=detect_leaks=0 /tmp/test_soul_mem
  *
- * 惯例同 test_soul_behavior.c: 零 IDF 依赖, 桩头在 test/host_stubs/。
+ * 惯例同 test_soul_bb_host.c: 零 IDF 依赖, 桩头在 test/host_stubs/。
  * "重启" 用 fork 模拟(soul_mem 无去初始化, 子进程获得全新静态态);
  * SD 用真实临时文件(跨 fork 存活); 分配失败按大小窗口注入。
  * 全部数据为合成文本, 无真实用户内容。

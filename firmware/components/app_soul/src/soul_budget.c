@@ -2,8 +2,8 @@
  * soul_budget.c — 深思行动预算分账实现(S3, docs/24 §4.5/§6; 见 soul_budget.h)
  *
  * 结构: 每类 {今日计数, 上次执行秒} + 音频时窗环(8 槽时间戳) + 账日。
- * 确定性: 零 RNG/零分配; 日翻转在每次 allow/charge/recency 入口检测
- * (now_s/86400 变化 → 清计数+时窗, E3 跨天恢复语义)。
+ * 确定性: 零 RNG/零分配; 日翻转在 allow/charge 入口检测(now_s/86400
+ * 变化 → 清计数+时窗; recency 是纯时间函数不依赖账日, 不检测)。
  */
 #include "soul_budget.h"
 

@@ -54,8 +54,9 @@ void sb_charge(int cat, uint32_t now_s);
  * 消费面: prompt v2 配额/新鲜度可见 + S6 多提议排序惩罚项。 */
 float sb_recency(int cat, uint32_t now_s);
 
-/* 配额可见快照(prompt v2/CLI): "今日说话 1/4 切歌 0/6 表情 2/6 |
- * 本小时主动音频余 2 | 说话冷却 12min" 形态; cat 越界忽略 */
+/* 配额可见快照(prompt v2/CLI): 仅分账日帽段
+ * "今日说话 1/4 切歌 0/6 表情 2/6"(时窗/冷却动态不在此——prompt 侧
+ * 以 sb_recency 新鲜度传达, 执法在 sb_allow); cat 越界忽略 */
 void sb_snapshot(char *buf, size_t cap);
 
 /* 遥测: 该类今日已执行次数(cat 越界返回 255) */

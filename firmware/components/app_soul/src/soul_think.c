@@ -154,27 +154,32 @@ static void act_broadcast(uint8_t kind, const char *content)
     }
 }
 
-static void act_execute(const struct ki_intent *it)
+/* 返回 true=行动真实出口执行(S3 审计 P1: 拒绝动词不得烧预算配额) */
+static bool act_execute(const struct ki_intent *it)
 {
     if (it->act == KI_SPEAK) {
         if (s_speak != NULL) {
             s_speak(it->content);
+            return true;
         }
-        return;
+        return false;
     }
     if (it->act == KI_ACT) {
         /* content 词表: "face:段名" / "music:next|random" */
         if (strncmp(it->content, "face:", 5) == 0 &&
             it->content[5] != '\0') {
             act_broadcast(1, it->content + 5);   /* 瞬态: 深思点名段 */
-        } else if (strncmp(it->content, "music:", 6) == 0 &&
-                   it->content[6] != '\0') {
-            act_broadcast(3, it->content + 6);
-        } else {
-            ESP_LOGW(TAG, "act verb 未知: %s", it->content);
+            return true;
         }
+        if (strncmp(it->content, "music:", 6) == 0 &&
+            it->content[6] != '\0') {
+            act_broadcast(3, it->content + 6);
+            return true;
+        }
+        ESP_LOGW(TAG, "act verb 未知: %s", it->content);
+        return false;
     }
-    /* KI_STAY_SILENT: 无行动(一等输出) */
+    return false;   /* KI_STAY_SILENT: 无行动(一等输出) */
 }
 
 /* ---- 深思 prompt v2(S3: silent 默认+配额可见+R6 行为来源;
@@ -232,13 +237,17 @@ static void think_prompt(char *buf, size_t n)
  * 词表("face:x"/"music:x")由 act_execute 解释 —— parse 侧零改动 */
 static void act_normalize(char *reply)
 {
+    /* S3 审计修复(P0): 旧实现 memcpy 12B 含 NUL 把闭引号位写成 '\0' 且
+     * memmove 恒 no-op —— 紧凑 JSON 被截成 {"act":"act", content/confidence
+     * 全丢 → parse 拒/静默, face/music 深思行动 100% 被吞。改为 11B 无
+     * NUL + 尾部左移 1B(替换串比原串短 1 字符)。 */
     static const char *names[] = { "\"act\":\"face\"", "\"act\":\"music\"" };
     for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
         char *p = strstr(reply, names[i]);
         if (p == NULL) continue;
         size_t oldn = strlen(names[i]);
-        memcpy(p, "\"act\":\"act\"", 12);
-        memmove(p + 12, p + oldn, strlen(p + oldn) + 1);
+        memmove(p + oldn - 1, p + oldn, strlen(p + oldn) + 1);
+        memcpy(p, "\"act\":\"act\"", oldn - 1);
     }
 }
 
@@ -301,8 +310,11 @@ static void think_task(void *arg)
 
         /* 出口硬门(只门动作不门思维; forced 落痕越否决) */
         {
-            soul_state_t st;
-            soul_state_get(&st);
+            soul_state_t st = { 0 };
+            if (!soul_state_get(&st)) {
+                /* 快照锁超时: 保守默认(会话空闲=可被打扰门拦/无闩锁) */
+                ESP_LOGW(TAG, "snapshot timeout, gate degraded");
+            }
             struct ki_fire_ctx fc = {
                 .user_speaking = !st.ai_idle,
                 .ethics_latched = st.ethics_latched,
@@ -322,8 +334,8 @@ static void think_task(void *arg)
                        ? SB_MUSIC : SB_FACE;
         bool budget_ok = sb_allow(bcat, now_s);
         if (bcat == SB_MUSIC) {
-            soul_state_t st2;
-            soul_state_get(&st2);
+            soul_state_t st2 = { 0 };
+            (void)soul_state_get(&st2);
             if (st2.audio_user_stopped) {
                 ESP_LOGW(TAG, "BUDGET music: user-stop window");
                 budget_ok = false;
@@ -332,11 +344,14 @@ static void think_task(void *arg)
         if (!budget_ok && !s_forced) {
             ESP_LOGW(TAG, "BUDGET cat=%d exhausted", bcat);
             ki_settle2(KI_SETTLE_GATE_BLOCKED);
+            s_last_silent = true;      /* S3 审计 P1: 不设则新意门失守,
+                                        * 预算拒后周期性空转 LLM */
             goto out;
         }
         if (dec.gates.gate_mask && !s_forced) {
             ESP_LOGW(TAG, "GATE fire_mask=%u", dec.gates.gate_mask);
             ki_settle2(KI_SETTLE_GATE_BLOCKED);
+            s_last_silent = true;      /* 同 P1: 门拒=本轮回沉默 */
             goto out;
         }
 
@@ -344,8 +359,9 @@ static void think_task(void *arg)
         ESP_LOGI(TAG, "EXEC act=%d %s (%.2f) %s",
                  (int)intent.act, intent.content, intent.confidence,
                  intent.reason);
-        act_execute(&intent);
-        sb_charge(bcat, now_s);        /* 分账记账(执行事实, 与结算无关) */
+        bool executed = act_execute(&intent);
+        if (executed)
+            sb_charge(bcat, now_s);    /* 记账只对真实出口(P1: 拒动词不烧配额) */
         if (intent.act != KI_SPEAK) {
             /* 非说话行动无"被回应"语义, 直接结算 */
             ki_settle2(KI_SETTLE_RESPONDED);

@@ -9,7 +9,7 @@
  *     瞬态表情(已有)/开机放歌(WiFi↑→music:play, AI-first: 电台是
  *     AI 的能力, 决策权从装配层移交灵魂);
  *   - L1 黑板: kd/ke/情境每拍供给(soul_bb), 单写者=soul tick;
- *   - L2 评分: (S3 退役) 行动只来自用户与 LLM 深思(R6; docs/24 §6),
+ *   - L2 行为表: S3 退役(docs/24 §6/§13), 行动只来自用户与 LLM 深思;
  *     行动出口=SOUL_ACT 广播(与深思/会话技能同一词汇表);
  *   - 直控学习: 灵魂动作窗口外的停播=用户手动 → radio_start 退避
  *     2h(礼貌红线: 不跟用户抢方向盘)。
@@ -359,13 +359,11 @@ static void perception_consume(void)
 {
     if (s_evt_net_up) {
         s_evt_net_up = false;
-        bool was_up = soul_bb_get(SOUL_BB_NET) > 0.5f;
         soul_bb_set(SOUL_BB_NET, 1.0f);
         soul_bb_salience(0.6f);
         /* S3(B-2/R6): 开机/重连反射已移除(docs/24 §6, docs/17 §5.5 合同)
          * —— 设备开机静默, 电台只由用户指令或 LLM 深思起。联网边沿仅
          * 显著性充值(深思素材), 不直接行动。 */
-        (void)was_up;
     }
     if (s_evt_net_down) {
         s_evt_net_down = false;
@@ -448,15 +446,10 @@ static void soul_task(void *arg)
     kd_reset();                        /* level 全 1(初始零误差) */
     ke_reset(NULL);
     TickType_t next = xTaskGetTickCount();
-    /* 开机静默 60s(Kaleido: WiFi 未稳/不打扰) —— 期间照常 tick 但不发
-     * 事件; 静默语义在本层没有主动出口(proactive 独立门控), 仅保拍 */
-    bool booted = false;
 
     while (1) {
         vTaskDelayUntil(&next, pdMS_TO_TICKS(SOUL_TICK_MS));
         s_ticks++;
-        if (s_ticks == 60) booted = true;
-        (void)booted;
 
         /* 1) 感知: 环境事件(网络/播放/存储/校时) → 黑板/反射 */
         perception_consume();
@@ -631,7 +624,7 @@ esp_err_t soul_start(void)
                           s_soul_stack, &s_soul_tcb) == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "soul up (1Hz, percep→kd→ke→bb→behavior)");
+    ESP_LOGI(TAG, "soul up (1Hz, percep→kd→ke→bb→budget/think)");
     return ESP_OK;
 }
 

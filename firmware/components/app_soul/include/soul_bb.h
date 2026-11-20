@@ -2,7 +2,7 @@
  * soul_bb.h —— L1 因子黑板(统一因子汇聚点, docs/14 §4)
  *
  * 全库唯一因子读写面: 情绪(ke)/动机(kd 缺口+预留)/情境/机器状态
- * (预留)全部落键值, 评分器(soul_behavior)/深思(soul_think)/CLI/
+ * (预留)全部落键值, 预算/深思(soul_budget, S3 起替代旧评分器)/深思(soul_think)/CLI/
  * prompt 渲染同源读取 —— 三融合点之一(docs/13 §3)。
  *
  * 纪律:
