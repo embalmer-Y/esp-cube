@@ -225,6 +225,7 @@ int main(int argc, char **argv)
         "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block,ethics,novelty\n"); }
 
     sb_reset();
+    sm_reset();
     soul_face_bg_reset();
     trait_reset();      /* S2.5: 每局回中性(场景内 trait 行可覆写) */
     kd_reset(); ke_reset(NULL);

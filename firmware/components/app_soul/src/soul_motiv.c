@@ -45,6 +45,9 @@ static const struct sm_cfg SM_CFG_DEFAULT = {
 };
 
 static struct sm_cfg s_cfg;
+static bool s_inited;             /* 防呆: 未 reset 即用 → 自愈
+                                   * (板上 soul_start 漏调 sm_reset 时
+                                   * s_cfg 全零=门全开, S5 板验实证) */
 
 /* kc: 问题台账(强 w0×exp(−Δt/τ); 缺席槽=调用方以 w≤absence_cap 开) */
 struct q_slot {
@@ -121,6 +124,7 @@ static float clampf(float x, float lo, float hi)
 
 void sm_reset(void)
 {
+    s_inited = true;
     s_cfg = SM_CFG_DEFAULT;
     memset(s_q, 0, sizeof(s_q));
     memset(s_kl_cur, 0, sizeof(s_kl_cur));
@@ -311,6 +315,8 @@ static void kb_derive(uint32_t now_s)
 
 void sm_tick(uint32_t now_s)
 {
+    if (!s_inited)
+        sm_reset();
     /* kc = Σ 槽强(蒸发) + 缺席缺口(>2h 无交互, 封顶槽) + KL 突发(τ=1h) */
     float kc = 0.0f;
     for (int i = 0; i < SM_QSLOTS; i++) {
@@ -403,7 +409,8 @@ void sm_ctx(bool quiet_hours, bool ai_active, bool playing)
 void sm_gate(const struct sm_gate_in *in, struct sm_gate_out *out)
 {
     memset(out, 0, sizeof(*out));
-
+    if (!s_inited)
+        sm_reset();
     /* 令牌桶: 日翻转重置债/习惯化 + KL 基线冻结; 滴灌日补
      * (12/1440 per min 至容量帽, docs/24 §4.2 "日补 12") */
     uint32_t d = in->now_min / 1440u;

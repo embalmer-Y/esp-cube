@@ -675,6 +675,9 @@ esp_err_t soul_start(void)
 
     soul_mem_boot();
     sb_reset();                    /* S3: 行动预算分账(R6 零生成, 只执法) */
+    sm_reset();                    /* S5: 四维动机+仲裁器+令牌桶复位
+                                      (缺调用=s_cfg 全零→门全开, 板上
+                                      THINK reason=1 score=0.35 实证) */
     soul_moodgate_reset();         /* S6: 回写三断法状态清零 */
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
