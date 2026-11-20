@@ -190,6 +190,35 @@ def _load_list(path):
     return d if isinstance(d, list) else d.get("samples", [])
 
 
+def fit(raw_file: str, out_file: str, bins: int = BINS) -> int:
+    """S6/D3 管线: soul_arms --dump-raw 的原始 appraisal → 逐维经验
+    分位边界(edges, 均匀分位) → soul_arms --calib-map 应用。
+    目标分布=引擎自身 delta 历史(B-6 接设备原始流后替换本文件的
+    均匀缺省; 当前 edges=ECDF 分位边界, transform 后即秩归一)。"""
+    import json
+    with open(raw_file) as f:
+        d = json.load(f)
+    raws = d.get("raw", d if isinstance(d, list) else [])
+    dims = {"goal_congruence": [], "importance": [], "valence": []}
+    for r in raws:
+        v = r.get("v", r)
+        for k in dims:
+            if k in v:
+                dims[k].append(float(v[k]))
+    edges = {}
+    for k, samples in dims.items():
+        if len(samples) < 2:
+            continue
+        srt = sorted(samples)
+        edges[k] = [srt[min(len(srt) - 1,
+                            int(q * len(srt)))] for q in
+                    (i / bins for i in range(1, bins))]
+    json.dump({"edges": edges, "n": len(raws)}, open(out_file, "w"),
+              ensure_ascii=False)
+    print(f"fit: {len(raws)} 条 → edges {list(edges.keys())} → {out_file}")
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) >= 2 and sys.argv[1] == "selftest":
         return selftest()
@@ -200,6 +229,8 @@ def main() -> int:
                "调查" if p < PSI_RECALIBRATE else "再校准")
         print(f"PSI={p:.3f} → {lvl}")
         return 0 if p < PSI_RECALIBRATE else 1
+    if len(sys.argv) >= 4 and sys.argv[1] == "fit":
+        return fit(sys.argv[2], sys.argv[3])
     print(__doc__)
     return 2
 

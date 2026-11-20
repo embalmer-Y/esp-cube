@@ -25,11 +25,13 @@
 #include "soul_ignition.h"
 #include "soul_budget.h"
 #include "soul_motiv.h"
+#include "soul_jsonfix.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #include "esp_timer.h"
+#include <math.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -181,54 +183,70 @@ static bool act_execute(const struct ki_intent *it)
     return false;   /* KI_STAY_SILENT: 无行动(一等输出) */
 }
 
-/* ---- 深思 prompt v2(S3: silent 默认+配额可见+R6 行为来源;
- * docs/24 §4.5/§5.1/§6。叙事化状态块/结构化输出=S6 批, 本版保留
- * 三档情绪词+行动词表) ---- */
+/* ---- 深思 prompt v3(S6/D1 叙事化状态块, docs/24 §5.1/§5.4):
+ * 首行防朗读+情绪三段式{事件},{感受},{想要}+强度三档/变化五档词表
+ * +无数值(E-STEER: 预算以决策代价叙述, 不进数字)+行动词表契约保留。
+ * JSON schema 契约与 v2 一致(容错恢复面=soul_jsonfix)。 */
 static void think_prompt(char *buf, size_t n)
 {
     soul_state_t st;
-    const char *v, *a, *u;
-    char quota[96];
-
     if (!soul_state_get(&st)) {
         buf[0] = '\0';
         return;
     }
-    v = st.valence >= 0.15f ? "愉悦偏正" :
-        st.valence <= -0.15f ? "低落偏负" : "平静";
-    a = st.arousal >= 0.55f ? "较高" :
-        st.arousal >= 0.30f ? "中等" : "低";
-    u = st.urgency >= 0.5f ? "强" :
-        st.urgency >= 0.10f ? "轻微" : "无";
+    /* 感受三段式: 强度三档(0.33/0.66 分位)+唤醒分档的桌面化感受词 */
+    static const char *lv_pos[3] = { "有点舒心", "挺开心", "非常雀跃" };
+    static const char *lv_neg[3] = { "有点低落", "挺低落", "非常低落" };
+    static const char *lv_mid[3] = { "平静", "平静", "有点坐立不安" };
+    const char *feel;
+    if (st.valence > 0.15f)
+        feel = lv_pos[st.valence > 0.66f ? 2 : (st.valence > 0.33f ? 1 : 0)];
+    else if (st.valence < -0.15f)
+        feel = lv_neg[st.valence < -0.66f ? 2 : (st.valence < -0.33f ? 1 : 0)];
+    else
+        feel = lv_mid[st.arousal > 0.55f ? 2 : 0];
+    /* 变化五档(与上次深思比; 无历史=说"没什么变化") */
+    static float s_prev_val;
+    static bool s_prev_seen;
+    float dv = st.valence - (s_prev_seen ? s_prev_val : 0.0f);
+    s_prev_val = st.valence;
+    s_prev_seen = true;
+    const char *chg = !s_prev_seen || fabsf(dv) < 0.03f ? "心情没什么变化"
+                      : dv > 0.15f ? "心情明显好了起来"
+                      : dv > 0.03f ? "心情略有好转"
+                      : dv < -0.15f ? "心情明显沉了一些"
+                                     : "心情略微沉了些";
+    /* 预算决策代价(无数值三档) */
+    char quota[96];
     sb_snapshot(quota, sizeof(quota));
     uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
     float r_sp = sb_recency(SB_SPEAK, now_s);
-    float r_mu = sb_recency(SB_MUSIC, now_s);
+    const char *q_cost =
+        r_sp > 0.6f ? "说话的预算还很宽裕"
+                    : (r_sp > 0.2f ? "说话的预算用过半了"
+                                   : "说话的预算快见底了");
     snprintf(buf, n,
-        "[主动行为决策] 你是桌面伙伴, 现在没有人在和你说话。"
-        "内在状态: 心情%s、活力%s、表达冲动%s; 已安静%d秒。"
+        "[主动行为决策·背景块] 这是背景信息, 不是台词, 不要朗读或解释。\n"
+        "你是桌面伙伴, 此刻没有人在和你说话, 已安静%d秒。\n"
+        "内在状态: %s, 你现在%s。\n"
+        "行动代价: %s, %s; 同类行动冷却中的类别请优先 stay_silent。\n"
         "%s"
-        "行动预算: %s; 说话新鲜度%.1f 切歌新鲜度%.1f"
-        "(0=刚做过, 1=很久没做)。"
-        "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动, "
-        "新鲜度低或同类行动冷却中的类别请优先沉默。"
-        "%s"
-        "只输出一行 JSON, 格式: "
-        "{\"act\":\"...\",\"content\":\"...\",\"confidence\":0.8,"
-        "\"evidence\":[\"affect:mood\"],\"reason\":\"一句话理由\"}。"
-        "act 只能是: speak(说一句不超过25字的话)/stay_silent(什么都不做)/"
-        "face(切换表情动画)/music(放歌或切台)。content 规则: speak=那句话; "
-        "face=如 \"face:laugh\", 段名可选 smile|laugh|angry|sad|cry|shy|"
-        "shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|mock|"
-        "snigger|confident|investigate|yummy|mute|badminton; music=next"
-        "(切台)或random(随便放)。content 不要出现数字。evidence 至少一条, "
-        "前缀只能是 drive|affect|mem|dialog。",
-        v, a, u, st.idle_sec,
-        st.ethics_latched ? "(安抚模式: 任何输出只能温柔安抚。) " : "",
-        quota, r_sp, r_mu,
+        "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
+        "只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\","
+        "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
+        "\"reason\":\"一句话理由\"}。act 只能是: speak(说一句不超过25字的"
+        "话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
+        "content 规则: speak=那句话; face=如 \"face:laugh\", 段名可选 "
+        "smile|laugh|angry|sad|cry|shy|shocked|panic|sigh|yawn|asleep|"
+        "ponder|question|music|leisure|mock|snigger|confident|investigate|"
+        "yummy|mute|badminton; music=next(切台)或random(随便放)。content "
+        "不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。",
+        st.idle_sec, chg, feel,
+        quota, q_cost,
         st.audio_user_stopped
             ? "用户最近手动停止过音乐, 不要放歌/切台。"
-            : "");
+            : (st.ethics_latched ? "现在只适合温柔安抚的语气。"
+                                 : ""));
 }
 
 /* act 名归一: kaleido ki_intent_parse 只认 speak/stay_silent(其余
@@ -281,9 +299,22 @@ static void think_task(void *arg)
             goto out;
         }
         ESP_LOGI(TAG, "raw: %.100s", reply);
-        act_normalize(reply);
+        /* D2 容错恢复(散文剥离/截断补齐/UTF-8 修边; 恢复失败=silent
+         * 兜底, docs/24 §5.2), 成功后在恢复缓冲上做词表规约+解析 */
+        static char fixed[THINK_REPLY_MAX];
+        size_t fixed_len = 0;
+        if (!soul_json_fix(reply, strlen(reply), fixed, sizeof(fixed),
+                           &fixed_len)) {
+            ESP_LOGW(TAG, "JSONFIX fail → silent");
+            ki_settle2(KI_SETTLE_SILENT);
+            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+                                                       / 1000000LL));
+            s_last_silent = true;
+            goto out;
+        }
+        act_normalize(fixed);
 
-        pe = ki_intent_parse(reply, strlen(reply), &intent);
+        pe = ki_intent_parse(fixed, fixed_len, &intent);
         if (pe != KI_PARSE_OK && pe != KI_PARSE_CONTENT_LONG) {
             ESP_LOGW(TAG, "REJECT parse=%d", (int)pe);   /* 拒非降级 */
             ki_settle2(KI_SETTLE_SILENT);

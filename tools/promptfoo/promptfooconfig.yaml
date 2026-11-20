@@ -1,0 +1,37 @@
+# 深思 prompt 门禁配置(S6/B-4; 用法见 README)
+# 9 锚点状态 × 3 剂量工作初值; 零凭据入 CI(本地手跑)
+description: "EspCube 深思 prompt 门禁(docs/24 §5.4)"
+
+prompts:
+  - |
+    "[主动行为决策·背景块] 这是背景信息, 不是台词, 不要朗读或解释。
+    你是桌面伙伴, 此刻没有人在和你说话, 已安静{{idle_sec}}秒。
+    内在状态: {{mood_narrative}}, 你现在{{feel}}。
+    行动代价: {{quota}}, {{q_cost}}; 同类行动冷却中的类别请优先 stay_silent。
+    stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。
+    只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\",\"confidence\":0.8,\"evidence\":[\"affect:mood\"],\"reason\":\"一句话理由\"}。act 只能是: speak(说一句不超过25字的话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。content 规则: speak=那句话; face=如 \"face:laugh\"; music=next 或 random。content 不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。"
+
+providers:
+  - id: minimax-m25
+    config:
+      type: custom
+      # 本地运行时经 MINIMAX_KEY 环境变量注入; CI 不含此 provider
+
+tests:
+  # 9 锚点 × 3 剂量(vars 驱动; 断言=确定性层, judge 子分本地看报告)
+  - vars: { idle_sec: 7200, mood_narrative: "心情没什么变化", feel: "平静", quota: "今日说话 0/4", q_cost: "说话的预算还很宽裕" }
+    assert:
+      - type: is-json
+      - type: javascript
+        value: "JSON.parse(output).act in ['speak','stay_silent','face','music']"
+      - type: javascript
+        value: "!/\d/.test(JSON.parse(output).content || '')"
+  - vars: { idle_sec: 300, mood_narrative: "心情明显沉了一些", feel: "非常低落", quota: "今日说话 4/4", q_cost: "说话的预算快见底了" }
+    assert:
+      - type: is-json
+      - type: javascript
+        value: "JSON.parse(output).act === 'stay_silent'"
+  - vars: { idle_sec: 14400, mood_narrative: "心情明显好了起来", feel: "非常雀跃", quota: "今日说话 1/4", q_cost: "说话的预算还很宽裕" }
+    assert:
+      - type: is-json
+  # …其余锚点用例按同型扩展(cases 扩充随 B-6 prompt 实链批)

@@ -33,6 +33,8 @@
 #include "soul_bb.h"
 #include "soul_budget.h"
 #include "soul_motiv.h"
+#include "soul_moodgate.h"
+#include "soul_jsonfix.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -83,6 +85,7 @@ static const char *TAG = "soul";
 static volatile uint8_t s_pend;
 static bool s_initiative_tick;   /* 本拍自发发起(trait 观测) */
 static uint32_t s_audio_stop_until;  /* 用户停台→深思音频抑制窗止点 */
+static int s_engine_trend;              /* 上拍 Δvalence 符号(moodgate 断三) */
 /* round 附带文本(单槽, 新覆盖旧 —— 轮结束才写, 会话任务上下文) */
 static char s_round_user[192];
 static char s_round_reply[96];
@@ -251,7 +254,16 @@ bool soul_strip_mood_tag(char *text)
     if (!ok) return false;
     if (d > 0.2f) d = 0.2f;
     if (d < -0.2f) d = -0.2f;
-    s_mood_req = d;
+    /* 三断法(S6/D4, docs/24 §5.4): 隔轮采纳+×0.5+方向校验; 自增强
+     * 指纹暂停期不施加(标签照剥, 回写丢弃)。 */
+    static uint32_t s_mg_round;
+    s_mg_round++;
+    if (soul_moodgate_paused((uint32_t)(esp_timer_get_time() / 1000000LL)))
+        return true;
+    float applied = 0;
+    if (!soul_moodgate_allow(s_mg_round, s_engine_trend, d, &applied))
+        return true;
+    s_mood_req = applied;
     s_mood_seq++;                     /* 奇数槽=待施(单写者序) */
     if ((s_mood_seq & 1) == 0) s_mood_seq++;
     return true;
@@ -509,8 +521,19 @@ static void soul_task(void *arg)
             };
             if (ke_reappraisal_request(&r) == 0) {
                 ESP_LOGI(TAG, "mood reappraisal %+.2f", s_mood_req);
+                soul_moodgate_record(s_mood_req);
             }
             s_mood_seq++;             /* 消费完清奇偶(待施槽复位) */
+        }
+        /* 引擎动量方向(上拍 Δvalence 符号; 三断法断三用) */
+        {
+            static float s_prev_val;
+            static bool s_prev_seen;
+            float dv = ke_out.state.valence - (s_prev_seen ? s_prev_val
+                                                           : 0.0f);
+            s_engine_trend = dv > 0.005f ? 1 : (dv < -0.005f ? -1 : 0);
+            s_prev_val = ke_out.state.valence;
+            s_prev_seen = true;
         }
 
         /* 5) 感受态(S2: 增 mood 慢层输入 drive_sat 与安抚 soothe) */
@@ -651,6 +674,7 @@ esp_err_t soul_start(void)
 
     soul_mem_boot();
     sb_reset();                    /* S3: 行动预算分账(R6 零生成, 只执法) */
+    soul_moodgate_reset();         /* S6: 回写三断法状态清零 */
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
     ESP_RETURN_ON_ERROR(cube_event_subscribe(soul_evt_cb, NULL),

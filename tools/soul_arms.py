@@ -108,12 +108,32 @@ def llm(event_desc: str, replay: int) -> dict:
             "err": "no-json"}
 
 
+_CALIB = None          # (fit 后的) {dim: [target 均匀分位边界]} 映射
+
+
+def _calib_transform(dim: str, x: float) -> float:
+    """D3 分位映射: 经验分位 → 目标分布分位(线性内插; 未加载映射=恒等)。
+    映射文件由 soul_calib.py fit 产出(只收原始观测, 防自食)。"""
+    if _CALIB is None:
+        return x
+    edges = _CALIB.get(dim)
+    if not edges:
+        return x
+    import bisect
+    i = bisect.bisect_left(edges, x)
+    return min(1.0, max(0.0, i / len(edges)))
+
+
 def dose_of(v: dict) -> tuple:
-    """appraisal 三元组 → (social, ethics, valence) 生理剂量"""
-    gc = v["goal_congruence"]
+    """appraisal 三元组 → (social, ethics, valence) 生理剂量。
+    --calib-map 时 gc/importance 经分位映射(校准后剂量)。"""
+    gc = _calib_transform("goal_congruence", v["goal_congruence"])
+    im = _calib_transform("importance", v["importance"])
     social = 0.15 * max(0.0, gc) - 0.10 * max(0.0, -gc)
-    ethics = 0.3 * v["importance"] * max(0.0, -gc)
-    return social, ethics, v["valence"]
+    ethics = 0.3 * im * max(0.0, -gc)
+    val = v["valence"] if _CALIB is None else \
+        _calib_transform("valence", (v["valence"] + 0.2) / 0.4) * 0.4 - 0.2
+    return social, ethics, val
 
 
 def describe(kind: str, payload: str) -> str:
@@ -183,11 +203,19 @@ def main():
     ap.add_argument("--fresh", action="store_true")
     ap.add_argument("--temperature", type=float, default=1.0,
                     help="B-7 采样对照: appraisal 采样温度")
+    ap.add_argument("--dump-raw", metavar="FILE",
+                    help="S6/D3: 导出逐事件原始 appraisal JSON(soul_calib fit 源)")
+    ap.add_argument("--calib-map", metavar="FILE",
+                    help="S6/D3: 应用 soul_calib fit 产出的分位映射(校准后剂量)")
     ap.add_argument("--median-k", type=int, default=1,
                     help="B-7: 逐事件跨重放取中位数(=重放数)后积分")
-    global TEMPERATURE
+    global TEMPERATURE, _CALIB
     a = ap.parse_args()
     TEMPERATURE = a.temperature
+    if a.calib_map:
+        with open(a.calib_map) as f:
+            _CALIB = json.load(f).get("edges", {})
+        print(f"calib map loaded: {list(_CALIB.keys())}")
     if a.fresh and os.path.exists(CACHE):
         os.rename(CACHE, CACHE + ".bak")
 
@@ -307,6 +335,12 @@ def main():
                "arm1": {k: arm1[k] for k in ("latch", "unlatch")},
                "arm2_mus": mus, "gcs": gcs[:300]},
               open(f"/tmp/soul_arms_{a.scenario}.json", "w"))
+    if a.dump_raw:
+        json.dump({"scenario": a.scenario,
+                   "raw": [{"t": t, "v": vs[0]} for t, vs in
+                           sorted(by_replay[0].items())]},
+                  open(a.dump_raw, "w"), ensure_ascii=False)
+        print(f"raw appraisals -> {a.dump_raw}")
 
 
 def sorted_by_t(d):
