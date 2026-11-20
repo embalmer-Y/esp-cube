@@ -70,6 +70,15 @@ static void golden_utf8_cut(void)
 	char out[64];
 	TEST_ASSERT_TRUE(fix(broken, out, sizeof(out)));
 	TEST_ASSERT_TRUE(strstr(out, "speak") != NULL);
+	/* 全输出无孤儿首字节(P1-1: 裸 E6/F0 不得存活) */
+	for (const char *q = out; *q; q++) {
+		if (((unsigned char)*q & 0xE0) == 0xC0) {   /* 2 字节首 */
+			TEST_ASSERT_TRUE(((unsigned char)q[1] & 0xC0) == 0x80);
+		} else if (((unsigned char)*q & 0xF0) == 0xE0) {  /* 3 字节首 */
+			TEST_ASSERT_TRUE(((unsigned char)q[1] & 0xC0) == 0x80);
+			TEST_ASSERT_TRUE(((unsigned char)q[2] & 0xC0) == 0x80);
+		}
+	}
 }
 
 /* 字符串内的括号/引号不欺骗栈 */

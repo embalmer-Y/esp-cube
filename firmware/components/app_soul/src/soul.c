@@ -525,16 +525,7 @@ static void soul_task(void *arg)
             }
             s_mood_seq++;             /* 消费完清奇偶(待施槽复位) */
         }
-        /* 引擎动量方向(上拍 Δvalence 符号; 三断法断三用) */
-        {
-            static float s_prev_val;
-            static bool s_prev_seen;
-            float dv = ke_out.state.valence - (s_prev_seen ? s_prev_val
-                                                           : 0.0f);
-            s_engine_trend = dv > 0.005f ? 1 : (dv < -0.005f ? -1 : 0);
-            s_prev_val = ke_out.state.valence;
-            s_prev_seen = true;
-        }
+        
 
         /* 5) 感受态(S2: 增 mood 慢层输入 drive_sat 与安抚 soothe) */
         struct ke_inputs kin = {
@@ -564,6 +555,16 @@ static void soul_task(void *arg)
         soul_think_day_flip((uint32_t)(s_ticks / 60));   /* S5: 配额日
             翻转每拍检测(旧 gate_ctx 职责; think_task 内仅触发时检查,
             触发间隔>24h 时会漏翻, 审计 P2-12) */
+/* 引擎动量方向(上拍 Δvalence 符号; 三断法断三用) */
+        {
+            static float s_prev_val;
+            static bool s_prev_seen;
+            float dv = ke_out.state.valence - (s_prev_seen ? s_prev_val
+                                                           : 0.0f);
+            s_engine_trend = dv > 0.005f ? 1 : (dv < -0.005f ? -1 : 0);
+            s_prev_val = ke_out.state.valence;
+            s_prev_seen = true;
+        }
         bb_feed(&kd_out, &ke_out);
         mood_publish(&s_snap, false);
         face_bg_select(&s_snap);        /* L1 底色(连续坐标+迟滞) */

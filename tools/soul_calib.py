@@ -202,9 +202,16 @@ def fit(raw_file: str, out_file: str, bins: int = BINS) -> int:
     dims = {"goal_congruence": [], "importance": [], "valence": []}
     for r in raws:
         v = r.get("v", r)
+        if "err" in v:
+            continue                     # 失败兜底值(全 0)不入 ECDF
         for k in dims:
             if k in v:
-                dims[k].append(float(v[k]))
+                x = float(v[k])
+                if k == "valence":
+                    # 原始域 [-0.2,0.2] → 归一化 [0,1](与 --calib-map
+                    # 应用端查询域一致, S6 审计 P1-3: 域错配曾压塌符号)
+                    x = (x + 0.2) / 0.4
+                dims[k].append(x)
     edges = {}
     for k, samples in dims.items():
         if len(samples) < 2:

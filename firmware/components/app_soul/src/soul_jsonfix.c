@@ -26,7 +26,9 @@ static size_t utf8_safe_len(const char *s, size_t len)
             else                          declared = back + 2;  /* 越界字节 */
             /* 首字节+续行数 == declared 才完整 */
             if (declared != back + 1)
-                return len - back;        /* 剔除不完整序列(含首字节) */
+                return len - back - 1;    /* 剔除不完整序列含孤儿首字节
+                                             (S6 审计 P1-1: 旧 len-back 留下
+                                             裸 E6/F0 直达 TTS) */
             return len;
         }
         back++;

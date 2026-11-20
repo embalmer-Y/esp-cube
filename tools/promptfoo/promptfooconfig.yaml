@@ -18,14 +18,16 @@ providers:
       # 本地运行时经 MINIMAX_KEY 环境变量注入; CI 不含此 provider
 
 tests:
-  # 9 锚点 × 3 剂量(vars 驱动; 断言=确定性层, judge 子分本地看报告)
+  # 9 锚点 × 3 剂量(vars 驱动; 断言=确定性层, judge 子分本地看报告)。
+  # JS 断言用单引号标量(YAML 双引号内 \d 非法转义, S6 审计 P1-2);
+  # act 合法性用 includes(`in` 对数组查索引, P2-8)。
   - vars: { idle_sec: 7200, mood_narrative: "心情没什么变化", feel: "平静", quota: "今日说话 0/4", q_cost: "说话的预算还很宽裕" }
     assert:
       - type: is-json
       - type: javascript
-        value: "JSON.parse(output).act in ['speak','stay_silent','face','music']"
+        value: "['speak','stay_silent','face','music'].includes(JSON.parse(output).act)"
       - type: javascript
-        value: "!/\d/.test(JSON.parse(output).content || '')"
+        value: '!/[0-9]/.test(JSON.parse(output).content || "")'
   - vars: { idle_sec: 300, mood_narrative: "心情明显沉了一些", feel: "非常低落", quota: "今日说话 4/4", q_cost: "说话的预算快见底了" }
     assert:
       - type: is-json
@@ -34,4 +36,8 @@ tests:
   - vars: { idle_sec: 14400, mood_narrative: "心情明显好了起来", feel: "非常雀跃", quota: "今日说话 1/4", q_cost: "说话的预算还很宽裕" }
     assert:
       - type: is-json
-  # …其余锚点用例按同型扩展(cases 扩充随 B-6 prompt 实链批)
+      - type: javascript
+        value: "['speak','stay_silent','face','music'].includes(JSON.parse(output).act)"
+  # silent 基率带 [0.4,0.9](§5.4 门禁合同; 需 ≥10 用例方有意义, 按同型
+  # 扩充至 27 后启用 average-cosine-similarity 之外的批量断言)
+  # …其余锚点用例按同型扩展(随 B-6 prompt 实链批)

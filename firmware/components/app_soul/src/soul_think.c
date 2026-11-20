@@ -208,10 +208,11 @@ static void think_prompt(char *buf, size_t n)
     /* 变化五档(与上次深思比; 无历史=说"没什么变化") */
     static float s_prev_val;
     static bool s_prev_seen;
+    bool first = !s_prev_seen;          /* 先取基线位再更新(P2-2 时序) */
     float dv = st.valence - (s_prev_seen ? s_prev_val : 0.0f);
     s_prev_val = st.valence;
     s_prev_seen = true;
-    const char *chg = !s_prev_seen || fabsf(dv) < 0.03f ? "心情没什么变化"
+    const char *chg = first || fabsf(dv) < 0.03f ? "心情没什么变化"
                       : dv > 0.15f ? "心情明显好了起来"
                       : dv > 0.03f ? "心情略有好转"
                       : dv < -0.15f ? "心情明显沉了一些"
@@ -230,7 +231,7 @@ static void think_prompt(char *buf, size_t n)
         "你是桌面伙伴, 此刻没有人在和你说话, 已安静%d秒。\n"
         "内在状态: %s, 你现在%s。\n"
         "行动代价: %s, %s; 同类行动冷却中的类别请优先 stay_silent。\n"
-        "%s"
+        "%s%s"
         "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
         "只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\","
         "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
@@ -245,8 +246,8 @@ static void think_prompt(char *buf, size_t n)
         quota, q_cost,
         st.audio_user_stopped
             ? "用户最近手动停止过音乐, 不要放歌/切台。"
-            : (st.ethics_latched ? "现在只适合温柔安抚的语气。"
-                                 : ""));
+            : "",
+        st.ethics_latched ? "现在只适合温柔安抚的语气。" : "");
 }
 
 /* act 名归一: kaleido ki_intent_parse 只认 speak/stay_silent(其余
@@ -313,6 +314,7 @@ static void think_task(void *arg)
             goto out;
         }
         act_normalize(fixed);
+        fixed_len = strlen(fixed);   /* normalize 缩 1B, 刷新(P2-6) */
 
         pe = ki_intent_parse(fixed, fixed_len, &intent);
         if (pe != KI_PARSE_OK && pe != KI_PARSE_CONTENT_LONG) {
