@@ -26,7 +26,7 @@
 #include <stdint.h>
 
 #include "soul_bb.h"
-#include "soul_behavior.h"
+#include "soul_budget.h"
 #include "soul_drive.h"
 #include "soul_emotion.h"
 #include "soul_face.h"
@@ -54,31 +54,17 @@ static uint32_t s_think_fires, s_think_blocked[4], s_think_reason[6];
 static char cur_face[24] = "leisure";
 static uint32_t face_dwell[SOUL_FACE_N];
 
-/* ---- 行为打桩(条件表复刻 soul.c, exec=记录) ---- */
-static uint32_t bhv_fires[8];
-static void on_radio_start(void) { bhv_fires[0]++; soul_bb_set(SOUL_BB_PLAYING, 1); w_play = true; }
-static void on_radio_stop(void)  { bhv_fires[1]++; soul_bb_set(SOUL_BB_PLAYING, 0); w_play = false; }
-static void on_self_face(void)   { bhv_fires[2]++; }
+/* ---- 深思行动占位(S3: 行为面改深思模拟, docs/24 §7; 旧 L2 行为表
+ * 随 R6 退役 —— 行动只来自深思, sim 以最强驱力缺口选类, 预算硬门
+ * 同款执法; 真实行动语义=板上 LLM, 占位仅保预算/结算通路有真值) ---- */
+static uint32_t s_act_fires[SB_CNT];
+static uint32_t s_budget_blocks;
 
-static void behaviors_register_sim(void)
+static int act_pick(const struct kd_output *kd)
 {
-    static const soul_cons_t c_start[] = {
-        {SOUL_BB_M_STIM, SOUL_C_RISE, 1.0f}, {SOUL_BB_PLAYING, SOUL_C_FALL, 1.0f},
-        {SOUL_BB_QUIET, SOUL_C_FALL, 1.0f}, {SOUL_BB_AI_ACTIVE, SOUL_C_FALL, 1.0f},
-    };
-    static const soul_cons_t c_stop[] = {
-        {SOUL_BB_QUIET, SOUL_C_RISE, 1.0f}, {SOUL_BB_PLAYING, SOUL_C_RISE, 1.0f},
-    };
-    static const soul_cons_t c_face[] = {
-        {SOUL_BB_IDLE, SOUL_C_RISE, 1.2f}, {SOUL_BB_M_SOCIAL, SOUL_C_RISE, 1.0f},
-        {SOUL_BB_AI_ACTIVE, SOUL_C_FALL, 1.0f},
-    };
-    soul_behavior_register(&(soul_bhv_t){ .name = "radio_start", .cons = c_start,
-        .cons_n = 4, .threshold = 0.35f, .w = 1.0f, .cooldown_s = 1800, .exec = on_radio_start });
-    soul_behavior_register(&(soul_bhv_t){ .name = "radio_stop", .cons = c_stop,
-        .cons_n = 2, .threshold = 0.80f, .w = 1.0f, .cooldown_s = 3600, .exec = on_radio_stop });
-    soul_behavior_register(&(soul_bhv_t){ .name = "self_face", .cons = c_face,
-        .cons_n = 3, .threshold = 0.50f, .w = 1.0f, .cooldown_s = 480, .exec = on_self_face });
+    if (kd->error[KD_SOCIAL] >= kd->error[KD_STIM])
+        return kd->error[KD_SOCIAL] > 0.10f ? SB_SPEAK : SB_FACE;
+    return kd->error[KD_STIM] > 0.10f ? SB_MUSIC : SB_FACE;
 }
 
 static void face_bg_select(const struct ke_state *ke, uint32_t t, uint32_t idle_s)
@@ -234,10 +220,9 @@ int main(int argc, char **argv)
     if (csv) { cf = fopen(csv, "w"); fprintf(cf, "t,v,a,mood,urgency,bond,persist,"
         "m_social,m_stim,salience,idle,quiet,net,play,face,think_fire,think_block,ethics,novelty\n"); }
 
-    soul_behavior_reset();
+    sb_reset();
     soul_face_bg_reset();
     trait_reset();      /* S2.5: 每局回中性(场景内 trait 行可覆写) */
-    behaviors_register_sim();
     kd_reset(); ke_reset(NULL);
     w_net = true; soul_bb_set(SOUL_BB_NET, 1);
     uint32_t last_active = 0;
@@ -317,8 +302,6 @@ int main(int argc, char **argv)
         if (quiet_hrs) quiet_secs++;
         soul_bb_tick((uint32_t)t);
 
-        soul_behavior_tick((uint32_t)t);
-
         /* L4 思维闸(记账复刻 soul_think.c, 含 2026-11-19 日翻转清零修复) */
         uint32_t now_min = (uint32_t)((t / 60) % 1440);
         static uint32_t s_last_ctx_min;
@@ -351,8 +334,17 @@ int main(int argc, char **argv)
                 for (int b = 0; b < 6; b++) if (g.reason_mask & (1 << b)) s_think_reason[b]++;
                 s_last_think_min = tc.now_min;
                 s_thought_today++;
-                s_last_silent = true;         /* 模拟: LLM 多为沉默(板上口径) */
+                s_last_silent = true;         /* 模拟: LLM 结算多为沉默 */
                 s_last_silent_score = 0.5f;
+                /* 行动面占位(S3): 最强驱力缺口选类 → 预算硬门执法。
+                 * 占位行动即 sim 的"深思行动"替身(真实语义=板上 LLM)。 */
+                int cat = act_pick(&kd_out);
+                if (sb_allow(cat, (uint32_t)t)) {
+                    sb_charge(cat, (uint32_t)t);
+                    s_act_fires[cat]++;
+                } else {
+                    s_budget_blocks++;
+                }
             }
         }
 
@@ -410,8 +402,8 @@ int main(int argc, char **argv)
         s_think_reason[0], s_think_reason[1], s_think_reason[2],
         s_think_reason[3], s_think_reason[4], s_think_reason[5]);
     printf("情绪: valence [%.3f, %.3f] | arousal max %.3f\n", v_min, v_max, a_max);
-    printf("行为: radio_start=%u radio_stop=%u self_face=%u\n",
-        bhv_fires[0], bhv_fires[1], bhv_fires[2]);
+    printf("深思行动(预算分账): speak=%u music=%u face=%u 预算拦=%u\n",
+        s_act_fires[0], s_act_fires[1], s_act_fires[2], s_budget_blocks);
     printf("勿扰时段占比: %.1f%% | 底色终态: %s\n",
         100.0f * quiet_secs / ticks, cur_face);
     {

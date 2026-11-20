@@ -23,6 +23,7 @@
 #include "soul.h"
 #include "cube_act.h"
 #include "soul_ignition.h"
+#include "soul_budget.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -176,11 +177,14 @@ static void act_execute(const struct ki_intent *it)
     /* KI_STAY_SILENT: 无行动(一等输出) */
 }
 
-/* ---- 深思 prompt(EspCube persona + 内在状态 + 多行动词表) ---- */
+/* ---- 深思 prompt v2(S3: silent 默认+配额可见+R6 行为来源;
+ * docs/24 §4.5/§5.1/§6。叙事化状态块/结构化输出=S6 批, 本版保留
+ * 三档情绪词+行动词表) ---- */
 static void think_prompt(char *buf, size_t n)
 {
     soul_state_t st;
     const char *v, *a, *u;
+    char quota[96];
 
     if (!soul_state_get(&st)) {
         buf[0] = '\0';
@@ -192,13 +196,20 @@ static void think_prompt(char *buf, size_t n)
         st.arousal >= 0.30f ? "中等" : "低";
     u = st.urgency >= 0.5f ? "强" :
         st.urgency >= 0.10f ? "轻微" : "无";
+    sb_snapshot(quota, sizeof(quota));
+    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+    float r_sp = sb_recency(SB_SPEAK, now_s);
+    float r_mu = sb_recency(SB_MUSIC, now_s);
     snprintf(buf, n,
         "[主动行为决策] 你是桌面伙伴, 现在没有人在和你说话。"
         "内在状态: 心情%s、活力%s、表达冲动%s; 已安静%d秒。"
         "%s"
-        "请决定此刻做什么。你不必等到情绪强烈才行动 —— 安静很久后"
-        "主动换一个表情(face)或放首歌(music)也是好的陪伴方式; 但没有"
-        "充分理由时必须 stay_silent。只输出一行 JSON, 格式: "
+        "行动预算: %s; 说话新鲜度%.1f 切歌新鲜度%.1f"
+        "(0=刚做过, 1=很久没做)。"
+        "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动, "
+        "新鲜度低或同类行动冷却中的类别请优先沉默。"
+        "%s"
+        "只输出一行 JSON, 格式: "
         "{\"act\":\"...\",\"content\":\"...\",\"confidence\":0.8,"
         "\"evidence\":[\"affect:mood\"],\"reason\":\"一句话理由\"}。"
         "act 只能是: speak(说一句不超过25字的话)/stay_silent(什么都不做)/"
@@ -206,11 +217,14 @@ static void think_prompt(char *buf, size_t n)
         "face=如 \"face:laugh\", 段名可选 smile|laugh|angry|sad|cry|shy|"
         "shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|mock|"
         "snigger|confident|investigate|yummy|mute|badminton; music=next"
-        "(切台)或random(随便放)。没有充分理由必须 stay_silent(content "
-        "留空)。content 不要出现数字。evidence 至少一条, 前缀只能是 "
-        "drive|affect|mem|dialog。",
+        "(切台)或random(随便放)。content 不要出现数字。evidence 至少一条, "
+        "前缀只能是 drive|affect|mem|dialog。",
         v, a, u, st.idle_sec,
-        st.ethics_latched ? "(安抚模式: 任何输出只能温柔安抚。) " : "");
+        st.ethics_latched ? "(安抚模式: 任何输出只能温柔安抚。) " : "",
+        quota, r_sp, r_mu,
+        st.audio_user_stopped
+            ? "用户最近手动停止过音乐, 不要放歌/切台。"
+            : "");
 }
 
 /* act 名归一: kaleido ki_intent_parse 只认 speak/stay_silent(其余
@@ -299,6 +313,27 @@ static void think_task(void *arg)
             };
             ki_intent_fire(&intent, &fc, ki_config_default(), &dec);
         }
+        /* 分账预算硬门(S3, docs/24 §4.5/§6: 约束类, 对 LLM 行动同样
+         * 执法; 只门动作不门思维)。user-stop 抑制窗内拒 music。 */
+        uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
+        int bcat = intent.act == KI_SPEAK ? SB_SPEAK :
+                   (intent.act == KI_ACT &&
+                    strncmp(intent.content, "music:", 6) == 0)
+                       ? SB_MUSIC : SB_FACE;
+        bool budget_ok = sb_allow(bcat, now_s);
+        if (bcat == SB_MUSIC) {
+            soul_state_t st2;
+            soul_state_get(&st2);
+            if (st2.audio_user_stopped) {
+                ESP_LOGW(TAG, "BUDGET music: user-stop window");
+                budget_ok = false;
+            }
+        }
+        if (!budget_ok && !s_forced) {
+            ESP_LOGW(TAG, "BUDGET cat=%d exhausted", bcat);
+            ki_settle2(KI_SETTLE_GATE_BLOCKED);
+            goto out;
+        }
         if (dec.gates.gate_mask && !s_forced) {
             ESP_LOGW(TAG, "GATE fire_mask=%u", dec.gates.gate_mask);
             ki_settle2(KI_SETTLE_GATE_BLOCKED);
@@ -310,6 +345,7 @@ static void think_task(void *arg)
                  (int)intent.act, intent.content, intent.confidence,
                  intent.reason);
         act_execute(&intent);
+        sb_charge(bcat, now_s);        /* 分账记账(执行事实, 与结算无关) */
         if (intent.act != KI_SPEAK) {
             /* 非说话行动无"被回应"语义, 直接结算 */
             ki_settle2(KI_SETTLE_RESPONDED);

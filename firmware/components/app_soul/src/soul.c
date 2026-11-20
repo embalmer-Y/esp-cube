@@ -9,7 +9,7 @@
  *     瞬态表情(已有)/开机放歌(WiFi↑→music:play, AI-first: 电台是
  *     AI 的能力, 决策权从装配层移交灵魂);
  *   - L1 黑板: kd/ke/情境每拍供给(soul_bb), 单写者=soul tick;
- *   - L2 评分: soul_behavior_tick(无聊放歌/勿扰自停/独处微表情),
+ *   - L2 评分: (S3 退役) 行动只来自用户与 LLM 深思(R6; docs/24 §6),
  *     行动出口=SOUL_ACT 广播(与深思/会话技能同一词汇表);
  *   - 直控学习: 灵魂动作窗口外的停播=用户手动 → radio_start 退避
  *     2h(礼貌红线: 不跟用户抢方向盘)。
@@ -32,7 +32,7 @@
 #include "soul_face.h"
 #include "soul_trait.h"
 #include "soul_bb.h"
-#include "soul_behavior.h"
+#include "soul_budget.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -82,6 +82,7 @@ static const char *TAG = "soul";
 #define PEND_VOICE      0x08
 static volatile uint8_t s_pend;
 static bool s_initiative_tick;   /* 本拍自发发起(trait 观测) */
+static uint32_t s_audio_stop_until;  /* 用户停台→深思音频抑制窗止点 */
 /* round 附带文本(单槽, 新覆盖旧 —— 轮结束才写, 会话任务上下文) */
 static char s_round_user[192];
 static char s_round_reply[96];
@@ -128,34 +129,6 @@ static void face_act_publish(uint8_t kind, const char *clip)
     cube_soul_act_t a = { .kind = kind };
     strlcpy(a.content, clip, sizeof(a.content));
     cube_event_publish(CUBE_EVT_SOUL_ACT, &a, sizeof(a));
-}
-
-/* ---- 统一动作门提交(docs/18 T13 首段): 行为胜出不再直发 SOUL_ACT,
- * 改经 cube_act(策略/资源/停止锁存/回执) → 装配执行器走原下游链。
- * 拒绝/失败回执记 WARN; 回执 started=已交付执行器(受理级, T35 收口)。 */
-static void act_submit_log(const char *cap, const char *param, size_t plen)
-{
-    cact_req_t r;
-    memset(&r, 0, sizeof(r));
-    r.origin = CACT_ORIGIN_AUTONOMOUS_LOCAL;
-    strlcpy(r.capability, cap, sizeof(r.capability));
-    if (param != NULL && plen > 0 && plen <= CACT_PARAMS_MAX) {
-        memcpy(r.params, param, plen);
-        r.params_len = plen;
-    }
-    uint32_t id = 0;
-    cact_res_t res = cact_submit(cact_default(), &r, &id);
-    if (res != CACT_RES_OK) {
-        ESP_LOGW(TAG, "act %s rejected: %d", cap, res);
-        return;
-    }
-    cact_pump(cact_default());
-    cact_receipt_t rc;
-    if (cact_receipt_last(cact_default(), id, &rc) == CACT_RES_OK) {
-        ESP_LOGI(TAG, "act %s -> #%u %s%s%s", cap, id,
-                 cact_status_name(rc.status),
-                 rc.reason[0] ? "(" : "", rc.reason[0] ? rc.reason : "");
-    }
 }
 
 /* trait 慢变量注入(S2.5b; act_gate 在 persona 加载/genesis 后调用) */
@@ -313,6 +286,7 @@ bool soul_state_get(soul_state_t *out)
         out->drive_level[i] = s_snap.drive.level[i];
     }
     out->ai_idle = (s_ai_state == AI_IDLE);
+    out->audio_user_stopped = s_ticks < s_audio_stop_until;
     out->idle_sec = (int)(s_ticks - s_last_active_tick);
     xSemaphoreGive(s_lock);
     return true;
@@ -388,15 +362,10 @@ static void perception_consume(void)
         bool was_up = soul_bb_get(SOUL_BB_NET) > 0.5f;
         soul_bb_set(SOUL_BB_NET, 1.0f);
         soul_bb_salience(0.6f);
-#if CONFIG_ESP_CUBE_SOUL_BOOT_RADIO
-        /* 开机反射(AI-first): 联网即自娱放歌 —— 原装配层演示行为
-         * 移交灵魂; 用户手动停台退避期内不复播(尊重直控) */
-        if (!was_up && soul_bb_get(SOUL_BB_PLAYING) < 0.5f &&
-            !soul_behavior_deferred("radio_start")) {
-            ESP_LOGI(TAG, "L0 reflex: boot radio play");
-            act_submit_log("radio.play", NULL, 0);
-        }
-#endif
+        /* S3(B-2/R6): 开机/重连反射已移除(docs/24 §6, docs/17 §5.5 合同)
+         * —— 设备开机静默, 电台只由用户指令或 LLM 深思起。联网边沿仅
+         * 显著性充值(深思素材), 不直接行动。 */
+        (void)was_up;
     }
     if (s_evt_net_down) {
         s_evt_net_down = false;
@@ -428,11 +397,14 @@ static void perception_consume(void)
 
 /* 用户显式停止归因(T13 续): 停止入口(CLI/触摸/语音)调用 —— 替代旧
  * "灵魂动作窗口 + 时间猜测"归因(docs/15 P0-3/4 批评的误归因根因):
- * 自然结束/电台断流不再被误判为用户拒绝; 锁存由入口 cact_user_stop 负责 */
+ * 自然结束/电台断流不再被误判为用户拒绝。
+ * S3(B-2): 旧 radio_start 退避随 L2 表退役, 换为音频抑制窗——窗口内
+ * 深思 music 行动被硬门拒绝(docs/17 §5.5 用户停止合同; 跨重启锁存
+ * 挂账, 见 docs/24 §13 偏差)。 */
 void soul_note_user_stop(void)
 {
-    soul_behavior_defer("radio_start", SOUL_USERSTOP_DEFER);
-    ESP_LOGI(TAG, "user stop noted -> radio_start deferred %us",
+    s_audio_stop_until = s_ticks + SOUL_USERSTOP_DEFER;
+    ESP_LOGI(TAG, "user stop noted -> audio suppressed %us",
              SOUL_USERSTOP_DEFER);
 }
 
@@ -464,66 +436,6 @@ static void bb_feed(const struct kd_output *kd, const struct ke_output *ke)
     soul_bb_set(SOUL_BB_QUIET, quiet ? 1 : 0);
 
     soul_bb_tick((uint32_t)s_ticks);
-}
-
-/* ---- L2/L3 行为(注册表+执行器; 行动出口=SOUL_ACT 词汇表) ---- */
-static void exec_radio_start(void)
-{
-    ESP_LOGI(TAG, "bh radio_start (boredom)");
-    act_submit_log("radio.play", NULL, 0);
-}
-
-static void exec_radio_stop(void)
-{
-    ESP_LOGI(TAG, "bh radio_stop (quiet hours)");
-    soul_behavior_defer("radio_start", 600);  /* 防同夜反复起播 */
-    act_submit_log("music.stop", NULL, 0);
-}
-
-static void exec_self_face(void)
-{
-    /* 独处自娱微表情(存在感): 轮换挑段, 不引入 RNG(单测可复现) */
-    static const char *picks[] = { "yawn", "ponder", "music" };
-    static unsigned pi;
-    const char *clip = picks[pi++ % 3];
-    ESP_LOGI(TAG, "bh self_face (%s)", clip);
-    char blob[24];
-    size_t n = strlcpy(blob, clip, sizeof(blob)) + 1;  /* 含 NUL */
-    act_submit_log("face.show", blob, n);
-}
-
-static void behaviors_register(void)
-{
-    static const soul_cons_t c_radio_start[] = {
-        { SOUL_BB_M_STIM,     SOUL_C_RISE, 1.0f },
-        { SOUL_BB_PLAYING,    SOUL_C_FALL, 1.0f },
-        { SOUL_BB_QUIET,      SOUL_C_FALL, 1.0f },
-        { SOUL_BB_AI_ACTIVE,  SOUL_C_FALL, 1.0f },
-    };
-    static const soul_cons_t c_radio_stop[] = {
-        { SOUL_BB_QUIET,      SOUL_C_RISE, 1.0f },
-        { SOUL_BB_PLAYING,    SOUL_C_RISE, 1.0f },
-    };
-    static const soul_cons_t c_self_face[] = {
-        { SOUL_BB_IDLE,       SOUL_C_RISE, 1.2f },
-        { SOUL_BB_M_SOCIAL,   SOUL_C_RISE, 1.0f },
-        { SOUL_BB_AI_ACTIVE,  SOUL_C_FALL, 1.0f },
-    };
-    soul_behavior_register(&(soul_bhv_t){
-        .name = "radio_start", .cons = c_radio_start,
-        .cons_n = 4, .threshold = 0.35f, .w = 1.0f,
-        .cooldown_s = 1800, .exec = exec_radio_start,
-    });
-    soul_behavior_register(&(soul_bhv_t){
-        .name = "radio_stop", .cons = c_radio_stop,
-        .cons_n = 2, .threshold = 0.80f, .w = 1.0f,
-        .cooldown_s = 3600, .exec = exec_radio_stop,
-    });
-    soul_behavior_register(&(soul_bhv_t){
-        .name = "self_face", .cons = c_self_face,
-        .cons_n = 3, .threshold = 0.50f, .w = 1.0f,
-        .cooldown_s = 480, .exec = exec_self_face,
-    });
 }
 
 /* ---- 1Hz 灵魂任务(单写者: kd/ke/黑板唯一调用权) ---- */
@@ -633,9 +545,6 @@ static void soul_task(void *arg)
         mood_publish(&s_snap, false);
         face_bg_select(&s_snap);        /* L1 底色(连续坐标+迟滞) */
 
-        /* 7) L2 行为评分器(本地自主; 与深思共享词汇表不共享决策) */
-        soul_behavior_tick((uint32_t)s_ticks);
-
 #if CONFIG_ESP_CUBE_SOUL_PROACTIVE
         /* 8) L4 思维闸: J(黑板显著性/判据)+E(ke)+V(kd 误差) → 深思 */
         {
@@ -706,7 +615,7 @@ esp_err_t soul_start(void)
     inited = true;
 
     soul_mem_boot();
-    behaviors_register();
+    sb_reset();                    /* S3: 行动预算分账(R6 零生成, 只执法) */
     s_lock = xSemaphoreCreateMutex();
     if (s_lock == NULL) return ESP_ERR_NO_MEM;
     ESP_RETURN_ON_ERROR(cube_event_subscribe(soul_evt_cb, NULL),

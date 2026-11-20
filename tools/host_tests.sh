@@ -9,14 +9,13 @@ cd "$(dirname "$0")/.."
 FAIL=0
 export ASAN_OPTIONS=detect_leaks=0   # soul_mem 按固件语义常驻不释放
 
-echo "== [1/14] 黑板+行为评分器黄金回归(docs/14 §9) =="
+echo "== [1/14] 黑板黄金回归(docs/14 §9; L2 评分器 S3 已退役, docs/24 §6/§13) =="
 gcc -DSOUL_BB_HOST_TEST -I firmware/components/app_soul/include \
-    -o /tmp/test_soul_bh \
-    firmware/components/app_soul/test/test_soul_behavior.c \
-    firmware/components/app_soul/src/soul_bb.c \
-    firmware/components/app_soul/src/soul_behavior.c -lm
-if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_bh"; FAIL=1;
-else /tmp/test_soul_bh || FAIL=1; fi
+    -o /tmp/test_soul_bb \
+    firmware/components/app_soul/test/test_soul_bb_host.c \
+    firmware/components/app_soul/src/soul_bb.c -lm
+if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_bb"; FAIL=1;
+else /tmp/test_soul_bb || FAIL=1; fi
 
 echo "== [1b] ke/kd 情绪/驱力黄金回归(docs/24 S1; Unity 垫片; 锚=合同) =="
 gcc -std=c11 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE \
@@ -27,13 +26,16 @@ gcc -std=c11 -g -O1 -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE \
     firmware/components/app_soul/test/test_soul_emotion.c \
     firmware/components/app_soul/test/test_soul_drive.c \
     firmware/components/app_soul/test/test_soul_trait.c \
+    firmware/components/app_soul/test/test_soul_budget.c \
     firmware/components/app_soul/src/soul_emotion.c \
     firmware/components/app_soul/src/soul_drive.c \
-    firmware/components/app_soul/src/soul_trait.c -lm
+    firmware/components/app_soul/src/soul_trait.c \
+    firmware/components/app_soul/src/soul_budget.c -lm
 if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_ke_kd"; FAIL=1;
 else
     /tmp/test_soul_ke_kd drive || FAIL=1
     /tmp/test_soul_ke_kd trait || FAIL=1
+    /tmp/test_soul_ke_kd budget || FAIL=1
     # S2 已重锚(docs/24 §2 三层栈新契约, 16 测试全绿)——此数归零;
     # 锚=合同: ke/kd 任何语义变更后失败数变化(无论增减)须显式更新此数。
     EMOT_KNOWN_FAIL=0

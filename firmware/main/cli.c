@@ -61,7 +61,6 @@
 #endif
 #if CONFIG_ESP_CUBE_ENABLE_SOUL
 #include "soul_bb.h"
-#include "soul_behavior.h"
 #endif
 
 static const char *TAG = "cli";
@@ -602,14 +601,9 @@ static void handle_line(char *line)
         static char bbuf[720];
         soul_bb_dump(bbuf, sizeof(bbuf));
         printf("  bb: %s\n", bbuf);
-    } else if (strcmp(line, "bh") == 0) {
-        /* L2 行为注册表(最近一轮分数/阈值) */
-        static char hbuf[512];
-        soul_behavior_dump(hbuf, sizeof(hbuf));
-        printf("  bh:\n%s\n", hbuf);
     } else if (strcmp(line, "bbset") == 0) {
         /* 黑板台调覆写: bbset <键名|序号> <值> [ttl秒](缺省 300;
-         * 如 bbset quiet 1 600 → 验证 radio_stop 勿扰自停) */
+         * 如 bbset quiet 1 600 → 验证勿扰因子读数) */
         char key[24];
         float val;
         int ttl = 300;

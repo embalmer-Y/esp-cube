@@ -74,19 +74,10 @@ static void assist_announce_bridge(const char *text)
 #endif
 }
 
-/* WiFi 就绪 → 启动播放列表 —— 音响时代开机行为, 仅 SOUL 未启用目标
- * 保留(S31 回退演示路径)。SOUL=y 时开机播台 = 灵魂 L0 反射(docs/14
- * §6: 电台是 AI 的能力, 决策权归灵魂), 装配层不再插手。
- * (一次性任务: app_player_start 内含停止等待, 不可在事件循环任务里
- * 同步调用 —— 会阻塞所有事件分发) */
-#if !CONFIG_ESP_CUBE_ENABLE_SOUL
-static void player_start_task(void *arg)
-{
-    (void)arg;
-    app_player_start(NULL);         /* 无参 = 播放列表轮播 */
-    vTaskDeleteWithCaps(NULL);      /* 栈在 PSRAM(WithCaps 创建须配对删除) */
-}
-#endif
+/* WiFi 就绪 → 启动播放列表(音响时代开机行为)——S3/B-2 已移除: S31 旧
+ * 自启演示路径随开机反射一并退役(docs/17 §5.5 合同: 首次启动/重连仅
+ * 发布事件, 播台只由用户指令或 LLM 深思产生; app_player_start 保留给
+ * CLI/深思 radio.play 能力链)。 */
 
 /* ---- 演示事件观察者(仅策略与日志; 跨模块功能由各模块自订阅,
  *      如唤醒→AI 会话由 ai_session 自订阅 CUBE_EVT_WAKE_DETECTED;
@@ -96,15 +87,7 @@ static void demo_evt_cb(cube_evt_id_t id, const void *data, size_t len, void *ct
     (void)data; (void)len; (void)ctx;
     if (id == CUBE_EVT_WIFI_CONNECTED) {
         ESP_LOGI(TAG, "EVT: WiFi connected");
-#if !CONFIG_ESP_CUBE_ENABLE_SOUL
-        /* 瞬态任务栈走 PSRAM(docs/22 §3B): 一次性启动器, 与 player 同类
-         * 纯网络负载(PSRAM 栈 2026-11-10 起板上验证), 不占内部预算 */
-        BaseType_t r = xTaskCreateWithCaps(player_start_task, "pstart", 4096,
-                                           NULL, 8, NULL, MALLOC_CAP_SPIRAM);
-        if (r != pdPASS) {
-            ESP_LOGE(TAG, "player start task create failed");
-        }
-#endif
+        /* S3/B-2: 联网不再触发任何播放(docs/17 §5.5); 事件仅日志 */
     }
 }
 

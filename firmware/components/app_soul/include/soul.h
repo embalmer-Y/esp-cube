@@ -74,6 +74,8 @@ typedef struct {
     char  anim_tag[16];
     bool  ethics_latched;
     bool  ai_idle;                   /* 会话空闲 */
+    bool  audio_user_stopped;        /* 用户停台抑制窗内(S3: 深思 music
+                                      * 行动硬门, docs/17 §5.5) */
     int   idle_sec;                  /* 距上次非空闲拍秒数 */
 } soul_state_t;
 bool soul_state_get(soul_state_t *out);

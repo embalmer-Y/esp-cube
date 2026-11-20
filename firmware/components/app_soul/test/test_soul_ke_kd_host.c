@@ -23,11 +23,12 @@ void tearDown(void) {}
 void emotion_tests_main(void);
 void drive_tests_main(void);
 void trait_tests_main(void);
+void budget_tests_main(void);
 
 int main(int argc, char **argv)
 {
     if (argc != 2) {
-        fprintf(stderr, "usage: %s emotion|drive|trait\n", argv[0]);
+        fprintf(stderr, "usage: %s emotion|drive|trait|budget\n", argv[0]);
         return 99;
     }
     UNITY_BEGIN();
@@ -37,6 +38,8 @@ int main(int argc, char **argv)
         drive_tests_main();
     else if (strcmp(argv[1], "trait") == 0)
         trait_tests_main();
+    else if (strcmp(argv[1], "budget") == 0)
+        budget_tests_main();
     else {
         fprintf(stderr, "unknown suite: %s\n", argv[1]);
         return 99;
