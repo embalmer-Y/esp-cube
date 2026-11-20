@@ -267,7 +267,7 @@ esp_err_t ui_port_init(void)
         ESP_LOGE(TAG, "evt subscribe: %s", esp_err_to_name(err));
         return err;
     }
-    cube_event_subscribe(face_sd_evt_cb, NULL);   /* SD 就绪自动换脸 */
+    cube_event_subscribe(face_sd_evt_cb, NULL);   /* SD 就绪换脸(仅 SOUL=n 演示) */
     /* 1s 时钟拍(时间/倒计时; M4 助理主页) */
     esp_timer_handle_t tick;
     const esp_timer_create_args_t ta = {
@@ -628,14 +628,17 @@ static void face_load_task(void *arg)
 }
 #endif
 
-/* SD 就绪 → 自动加载 face/idle.efc(存在则替换内嵌演示素材) */
+/* SD 就绪 → 演示换脸(SOUL=n 演示模式: 热载 face/leisure.efc, 表内名,
+ * 卡上无 face/ 素材则 keep-current)。A-2 收窄: 旧 face/idle.efc 开机覆盖
+ * 槽为 23 段表外名(素材无处存在, 每启动必 BAD_FILE 噪声)且与 B-8 表情
+ * 双权威冲突——SOUL=y 时表情唯一权威=soul ACT 路径, 本演示退役。 */
 static void face_sd_evt_cb(cube_evt_id_t id, const void *data, size_t len,
                            void *ctx)
 {
     (void)data; (void)len; (void)ctx;
-#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
+#if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM && !CONFIG_ESP_CUBE_ENABLE_SOUL
     if (id != CUBE_EVT_SD_READY) return;
-    char *rel = strdup("idle");
+    char *rel = strdup("leisure");
     if (rel != NULL) {
         if (xTaskCreateWithCaps(face_load_task, "faceload", 16384, rel, 5,
                                 NULL, MALLOC_CAP_SPIRAM) != pdPASS) {

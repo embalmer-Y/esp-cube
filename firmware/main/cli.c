@@ -557,7 +557,7 @@ static void handle_line(char *line)
         /* 表情素材热切: face <名> = /sdcard/face/<名>.efc(M4+ 素材库) */
 #if CONFIG_ESP_CUBE_ENABLE_FACE_ANIM
         if (arg == NULL || arg[0] == 0) {
-            printf("  用法: face <名>(SD face/ 下不含 .efc 后缀, 如 face idle)\n");
+            printf("  用法: face <名>(SD face/ 下不含 .efc 后缀, 如 face laugh)\n");
         } else {
             /* T13: 台调换脸经统一门 face.show(执行器仍走 SOUL_ACT 下游) */
             uint8_t blob[24];

@@ -1,7 +1,8 @@
 # ESP-IDF 构建产物与组件缓存(可再生成)
 firmware/build*/
 firmware/managed_components/
-firmware/dependencies.lock
+# dependencies.lock 已入库(C-11): 版本+component_hash 锁定可复现构建;
+# 单 target 字段随最近构建目标在 esp32p4/esp32s31 间翻写=预期噪声
 # 本地配置: 含真实 WiFi 凭据, 不入库(经 menuconfig 填写)
 # (分目标本地文件逐个列名; sdkconfig.defaults* 是入库的配置骨架, 勿加通配)
 firmware/sdkconfig
