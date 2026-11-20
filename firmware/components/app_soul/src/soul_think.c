@@ -26,9 +26,11 @@
 #include "soul_budget.h"
 #include "soul_motiv.h"
 #include "soul_jsonfix.h"
+#include "soul_bb.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_timer.h"
 #include <math.h>
@@ -155,6 +157,104 @@ static void act_broadcast(uint8_t kind, const char *content)
     }
 }
 
+/* ---- 能力注册表(§55.29 B-6 prompt 审阅修订, 用户字段规格:
+ * ① 命令 id ② 命令描述(给 LLM 参考工具用途) ③ 参数个数 ④ 参数表) ----
+ * 行动词表单一真源: think_prompt 的 act 枚举句/参数规则句、
+ * act_normalize 归一、act_execute 分发、分账映射全部表驱动,
+ * 新增能力=加一行。输出契约(用户裁决): 单参数命令 content=参数值
+ * (无前缀); 归一层把命令 id 折进 content("<id>:<值>")走 kaleido
+ * KI_ACT 通道(parse 侧零改动); 多参数时代再升级 params 对象。 */
+struct cap_param {
+    const char *name;         /* 参数名(params 对象时代启用)        */
+    const char *desc;         /* 取值说明(含一个 %s 时由 vocab 拼)  */
+    const char *const *vocab; /* 取值词表(NULL=desc 即全文)         */
+};
+
+struct cap_cmd {
+    const char *id;           /* ① 命令 id(JSON act 枚举名)         */
+    const char *desc;         /* ② 命令描述(LLM 参考工具用途)       */
+    uint8_t    n_params;      /* ③ 参数个数                         */
+    const struct cap_param *params; /* ④ 参数表(NULL=无参数)        */
+    uint8_t    kind;          /* 执行: SOUL_ACT 广播 kind(0=kaleido) */
+    uint8_t    bcat;          /* 执行: 分账类别 enum sb_cat         */
+};
+
+static const char *const s_face_vocab[] = {
+    "smile", "laugh", "angry", "sad", "cry", "shy", "shocked", "panic",
+    "sigh", "yawn", "asleep", "ponder", "question", "music", "leisure",
+    "mock", "snigger", "confident", "investigate", "yummy", "mute",
+    "badminton",
+};
+
+static const struct cap_param s_p_speak[] = {
+    { "text", "那句话", NULL },
+};
+static const struct cap_param s_p_face[] = {
+    { "segment", "段名(%s)", s_face_vocab },
+};
+static const struct cap_param s_p_music[] = {
+    { "verb", "next(切台)或 random(随便放)", NULL },
+};
+
+static const struct cap_cmd s_caps[] = {
+    { "speak",       "说一句话",     1, s_p_speak, 0, SB_SPEAK },
+    { "stay_silent", "什么都不做",   0, NULL,      0, 0 },
+    { "face",        "切换表情动画", 1, s_p_face,  1, SB_FACE },
+    { "music",       "放歌或切台",   1, s_p_music, 3, SB_MUSIC },
+};
+#define CAP_N (sizeof(s_caps) / sizeof(s_caps[0]))
+
+/* act 枚举句: "speak(说一句话)/stay_silent(什么都不做)/…" */
+static void caps_act_line(char *out, size_t n)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < CAP_N && o + 1 < n; i++)
+        o += (size_t)snprintf(out + o, n - o, "%s%s(%s)",
+                              i ? "/" : "", s_caps[i].id, s_caps[i].desc);
+}
+
+/* 参数规则句: "speak=那句话; face=段名(smile|…); music=next(切台)…" */
+static void caps_rule_line(char *out, size_t n)
+{
+    char voc[176];
+    size_t o = 0;
+    bool first = true;
+    for (size_t i = 0; i < CAP_N && o + 1 < n; i++) {
+        const struct cap_cmd *c = &s_caps[i];
+        if (c->n_params == 0 || c->params == NULL)
+            continue;                  /* stay_silent 无参数规则 */
+        o += (size_t)snprintf(out + o, n - o, "%s%s=",
+                              first ? "" : "; ", c->id);
+        first = false;
+        for (uint8_t k = 0; k < c->n_params && o + 1 < n; k++) {
+            const struct cap_param *p = &c->params[k];
+            if (p->vocab != NULL) {
+                size_t v = 0;
+                for (size_t w = 0; p->vocab[w] != NULL && v + 1 < sizeof(voc); w++)
+                    v += (size_t)snprintf(voc + v, sizeof(voc) - v,
+                                          "%s%s", w ? "|" : "",
+                                          p->vocab[w]);
+                o += (size_t)snprintf(out + o, n - o, p->desc, voc);
+            } else {
+                o += (size_t)snprintf(out + o, n - o, "%s", p->desc);
+            }
+        }
+    }
+}
+
+/* content 前缀 "<命令id>:" → 注册表行(kind!=0); 未知=NULL */
+static const struct cap_cmd *cap_of_content(const char *content)
+{
+    for (size_t i = 0; i < CAP_N; i++) {
+        if (s_caps[i].kind == 0)
+            continue;
+        size_t pl = strlen(s_caps[i].id);
+        if (strncmp(content, s_caps[i].id, pl) == 0 && content[pl] == ':')
+            return &s_caps[i];
+    }
+    return NULL;
+}
+
 /* 返回 true=行动真实出口执行(S3 审计 P1: 拒绝动词不得烧预算配额) */
 static bool act_execute(const struct ki_intent *it)
 {
@@ -166,15 +266,10 @@ static bool act_execute(const struct ki_intent *it)
         return false;
     }
     if (it->act == KI_ACT) {
-        /* content 词表: "face:段名" / "music:next|random" */
-        if (strncmp(it->content, "face:", 5) == 0 &&
-            it->content[5] != '\0') {
-            act_broadcast(1, it->content + 5);   /* 瞬态: 深思点名段 */
-            return true;
-        }
-        if (strncmp(it->content, "music:", 6) == 0 &&
-            it->content[6] != '\0') {
-            act_broadcast(3, it->content + 6);
+        /* content 已由 act_normalize 折成 "<命令id>:<参数值>" */
+        const struct cap_cmd *c = cap_of_content(it->content);
+        if (c != NULL && it->content[strlen(c->id) + 1] != '\0') {
+            act_broadcast(c->kind, it->content + strlen(c->id) + 1);
             return true;
         }
         ESP_LOGW(TAG, "act verb 未知: %s", it->content);
@@ -183,9 +278,10 @@ static bool act_execute(const struct ki_intent *it)
     return false;   /* KI_STAY_SILENT: 无行动(一等输出) */
 }
 
-/* ---- 深思 prompt v3(S6/D1 叙事化状态块, docs/24 §5.1/§5.4):
- * 首行防朗读+情绪三段式{事件},{感受},{想要}+强度三档/变化五档词表
- * +无数值(E-STEER: 预算以决策代价叙述, 不进数字)+行动词表契约保留。
+/* ---- 深思 prompt v3.3(S6/D1+§55.29 两轮审阅修订, docs/24 §5.1/§5.4):
+ * 背景块六维=人格一句/时空+时段/环境/情绪三段式/记忆闪回(用户选型),
+ * 预算叙事移除(多说少说模型自决, sb 记账不执法); 行动词表/参数规则
+ * 由能力注册表生成; content=纯参数值(命令 id 由归一层折入分发)。
  * JSON schema 契约与 v2 一致(容错恢复面=soul_jsonfix)。 */
 static void think_prompt(char *buf, size_t n)
 {
@@ -217,56 +313,103 @@ static void think_prompt(char *buf, size_t n)
                       : dv > 0.03f ? "心情略有好转"
                       : dv < -0.15f ? "心情明显沉了一些"
                                      : "心情略微沉了些";
-    /* 预算决策代价(无数值三档) */
-    char quota[96];
-    sb_snapshot(quota, sizeof(quota));
-    uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-    float r_sp = sb_recency(SB_SPEAK, now_s);
-    const char *q_cost =
-        r_sp > 0.6f ? "说话的预算还很宽裕"
-                    : (r_sp > 0.2f ? "说话的预算用过半了"
-                                   : "说话的预算快见底了");
+    /* 背景块六维(§55.29 用户选型: 人格/时空+时段/环境/情绪/记忆闪回;
+     * 预算叙事已移除——多说少说由模型自决)。act 枚举句/参数规则句由
+     * 能力注册表生成(不写死于模板) */
+    char acts[128], rules[336];
+    caps_act_line(acts, sizeof(acts));
+    caps_rule_line(rules, sizeof(rules));
+    /* ① 人格一句(空=桌面伙伴兜底) */
+    const char *who = st.persona_desc[0] ? st.persona_desc : "桌面伙伴";
+    /* ② 时段(SNTP 未同步=省略; 不给数值只给词) */
+    char tod[24] = "";
+    time_t wall = time(NULL);
+    if (wall > 1700000000LL) {        /* 已过 2023-11: 视为已校时 */
+        struct tm tmv;
+        localtime_r(&wall, &tmv);
+        const char *w =
+            tmv.tm_hour < 5 ? "深夜" : tmv.tm_hour < 8 ? "清晨" :
+            tmv.tm_hour < 11 ? "上午" : tmv.tm_hour < 13 ? "中午" :
+            tmv.tm_hour < 17 ? "下午" : tmv.tm_hour < 19 ? "傍晚" :
+            tmv.tm_hour < 23 ? "晚上" : "深夜";
+        snprintf(tod, sizeof(tod), ", 现在是%s", w);
+    }
+    /* ③ 环境(黑板 playing 键) */
+    const char *env = soul_bb_get(SOUL_BB_PLAYING) > 0.5f
+                          ? "房间里正在放音乐" : "房间里很安静";
+    /* ⑥ 记忆块 top-3(§55.29 调研定案: 多条加权召回, 非单条;
+     * 空库=省略整块) */
+    char mem[160];
+    const char *mem_line =
+        soul_mem_recall(mem, sizeof(mem), st.valence) > 0 ? mem : NULL;
     snprintf(buf, n,
         "[主动行为决策·背景块] 这是背景信息, 不是台词, 不要朗读或解释。\n"
-        "你是桌面伙伴, 此刻没有人在和你说话, 已安静%d秒。\n"
+        "你是%s。\n"
+        "此刻没有人在和你说话, 已安静%d秒%s。\n"
+        "%s。\n"
         "内在状态: %s, 你现在%s。\n"
-        "行动代价: %s, %s; 同类行动冷却中的类别请优先 stay_silent。\n"
+        "%s"
         "%s%s"
         "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
         "只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\","
         "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
-        "\"reason\":\"一句话理由\"}。act 只能是: speak(说一句不超过25字的"
-        "话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
-        "content 规则: speak=那句话; face=如 \"face:laugh\", 段名可选 "
-        "smile|laugh|angry|sad|cry|shy|shocked|panic|sigh|yawn|asleep|"
-        "ponder|question|music|leisure|mock|snigger|confident|investigate|"
-        "yummy|mute|badminton; music=如 \"music:next\"(切台)或 \"music:random\""
-        "(随便放)。content "
+        "\"reason\":\"一句话理由\"}。act 只能是: %s。"
+        "content 规则: %s。content "
         "不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。",
-        st.idle_sec, chg, feel,
-        quota, q_cost,
+        who,
+        st.idle_sec, tod,
+        env,
+        chg, feel,
+        mem_line ? mem_line : "",
         st.audio_user_stopped
             ? "用户最近手动停止过音乐, 不要放歌/切台。"
             : "",
-        st.ethics_latched ? "现在只适合温柔安抚的语气。" : "");
+        st.ethics_latched ? "现在只适合温柔安抚的语气。" : "",
+        acts, rules);
 }
 
-/* act 名归一: kaleido ki_intent_parse 只认 speak/stay_silent(其余
- * act 是词表位); EspCube 扩展的 face/music 归一到 KI_ACT, content
- * 词表("face:x"/"music:x")由 act_execute 解释 —— parse 侧零改动 */
-static void act_normalize(char *reply)
+/* act 名归一(§55.29 注册表驱动): kaleido ki_intent_parse 只认
+ * speak/stay_silent(其余 act 是词表位); 注册表能力(id kind!=0)归一为
+ * "act", 同时把命令 id 折进 content 值前缀("laugh"→"face:laugh")作为
+ * 分发标记——输出契约保持纯参数值, parse 侧零改动。
+ * S3 审计 P0 教训沿用: 替换串短 1B 手术 + 显式长度, 不 memcpy NUL。 */
+static void act_normalize(char *reply, size_t cap)
 {
-    /* S3 审计修复(P0): 旧实现 memcpy 12B 含 NUL 把闭引号位写成 '\0' 且
-     * memmove 恒 no-op —— 紧凑 JSON 被截成 {"act":"act", content/confidence
-     * 全丢 → parse 拒/静默, face/music 深思行动 100% 被吞。改为 11B 无
-     * NUL + 尾部左移 1B(替换串比原串短 1 字符)。 */
-    static const char *names[] = { "\"act\":\"face\"", "\"act\":\"music\"" };
-    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        char *p = strstr(reply, names[i]);
-        if (p == NULL) continue;
-        size_t oldn = strlen(names[i]);
-        memmove(p + oldn - 1, p + oldn, strlen(p + oldn) + 1);
-        memcpy(p, "\"act\":\"act\"", oldn - 1);
+    for (size_t i = 0; i < CAP_N; i++) {
+        if (s_caps[i].kind == 0)
+            continue;                  /* speak/stay_silent kaleido 原生 */
+        char pat[24];
+        int pn = snprintf(pat, sizeof(pat), "\"act\":\"%s\"", s_caps[i].id);
+        if (pn <= 0 || (size_t)pn >= sizeof(pat))
+            continue;                  /* id 过长: 该能力归一禁用(护栏) */
+        char *p = strstr(reply, pat);
+        if (p == NULL)
+            continue;
+        /* ① act 值 → "act"(等长差收缝; 独立复现验证: 5 字符 id 如
+         * music 用旧式 memcpy(oldn-1) 会连 NUL 复制截断 JSON——
+         * S3 P0 同病灶, 手术必须按替换串真实长度) */
+        size_t oldn = (size_t)pn;
+        static const char rep[] = "\"act\":\"act\"";
+        const size_t rl = sizeof(rep) - 1;
+        if (oldn < rl)
+            continue;      /* id 短于 4 字符: 手术不适用, 该能力拒收 */
+        memmove(p + rl, p + oldn, strlen(p + oldn) + 1);
+        memcpy(p, rep, rl);
+        /* ② content 参数值前折进 "<id>:"(单对象输出, 一次即止) */
+        char *q = strstr(reply, "\"content\":\"");
+        if (q == NULL)
+            break;
+        char *val = q + strlen("\"content\":\"");
+        size_t idl = strlen(s_caps[i].id);
+        if (strncmp(val, s_caps[i].id, idl) == 0 && val[idl] == ':')
+            break;                     /* 模型已带前缀(旧习): 不重复折 */
+        if (strlen(reply) + idl + 1 >= cap)
+            break;                     /* 缓冲余量不足: 放弃折入(
+                                          分发失败→拒→silent, 安全侧) */
+        memmove(val + idl + 1, val, strlen(val) + 1);
+        memcpy(val, s_caps[i].id, idl);
+        val[idl] = ':';
+        break;
     }
 }
 
@@ -314,8 +457,8 @@ static void think_task(void *arg)
             s_last_silent = true;
             goto out;
         }
-        act_normalize(fixed);
-        fixed_len = strlen(fixed);   /* normalize 缩 1B, 刷新(P2-6) */
+        act_normalize(fixed, sizeof(fixed));
+        fixed_len = strlen(fixed);   /* normalize 改写, 刷新(P2-6) */
 
         pe = ki_intent_parse(fixed, fixed_len, &intent);
         if (pe != KI_PARSE_OK && pe != KI_PARSE_CONTENT_LONG) {
@@ -364,28 +507,25 @@ static void think_task(void *arg)
             };
             ki_intent_fire(&intent, &fc, ki_config_default(), &dec);
         }
-        /* 分账预算硬门(S3, docs/24 §4.5/§6: 约束类, 对 LLM 行动同样
-         * 执法; 只门动作不门思维)。user-stop 抑制窗内拒 music。 */
+        /* 分账遥测(S3→§55.29 用户裁决: 记账不执法——是否多说少说由
+         * 模型自决, 产品不面向大众, sb 仅作观察数据, 不再拦截)。
+         * user-stop 抑制窗内仍拒 music: 尊重用户显式动作, 非频率限制。 */
         uint32_t now_s = (uint32_t)(esp_timer_get_time() / 1000000LL);
-        int bcat = intent.act == KI_SPEAK ? SB_SPEAK :
-                   (intent.act == KI_ACT &&
-                    strncmp(intent.content, "music:", 6) == 0)
-                       ? SB_MUSIC : SB_FACE;
-        bool budget_ok = sb_allow(bcat, now_s);
+        int bcat = intent.act == KI_SPEAK ? SB_SPEAK : SB_FACE;
+        if (intent.act == KI_ACT) {
+            const struct cap_cmd *c = cap_of_content(intent.content);
+            if (c != NULL)
+                bcat = c->bcat;      /* 注册表分账映射(§55.29) */
+        }
         if (bcat == SB_MUSIC) {
             soul_state_t st2 = { 0 };
             (void)soul_state_get(&st2);
-            if (st2.audio_user_stopped) {
-                ESP_LOGW(TAG, "BUDGET music: user-stop window");
-                budget_ok = false;
+            if (st2.audio_user_stopped && !s_forced) {
+                ESP_LOGW(TAG, "music: user-stop window");
+                ki_settle2(KI_SETTLE_GATE_BLOCKED);
+                s_last_silent = true;
+                goto out;
             }
-        }
-        if (!budget_ok && !s_forced) {
-            ESP_LOGW(TAG, "BUDGET cat=%d exhausted", bcat);
-            ki_settle2(KI_SETTLE_GATE_BLOCKED);
-            s_last_silent = true;      /* S3 审计 P1: 不设则新意门失守,
-                                        * 预算拒后周期性空转 LLM */
-            goto out;
         }
         if (dec.gates.gate_mask && !s_forced) {
             ESP_LOGW(TAG, "GATE fire_mask=%u", dec.gates.gate_mask);

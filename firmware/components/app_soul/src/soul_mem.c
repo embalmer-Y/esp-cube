@@ -476,6 +476,72 @@ const char *soul_mem_prompt_block(void)
     return s_block;
 }
 
+int soul_mem_recall(char *out, size_t n, float valence)
+{
+    /* 深思记忆块(§55.29 调研定案 top-3): 与对话路 rebuild_block_locked
+     * 同族评分, 无 query → match 权重转移给情绪一致性(心境一致回忆:
+     * 记忆 affect 符号与当下 valence 同号加分; 心理学 Bower 心境一致
+     * 效应, Generative Agents relevance 项的无 query 替代)。纯读打分
+     * 不强化不写盘(reinforce 只属真实检索路径)。 */
+    if (out == NULL || n == 0 || s_lock == NULL || s_disabled) return 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    int64_t now = (int64_t)time(NULL);
+    int idx[3] = { -1, -1, -1 };
+    float best[3] = { -1.0f, -1.0f, -1.0f };
+    for (uint32_t i = 0; i < s_count; i++) {
+        if (s_items[i].user[0] == '\0') continue;
+        float rec = 1.0f;
+        int64_t age = now - s_items[i].t;
+        if (age > 7 * 86400) rec = 0.2f;
+        else if (age > 3 * 86400) rec = 0.5f;
+        else if (age > 86400) rec = 0.8f;
+        float m_av = (float)s_items[i].affect_v / 127.0f;
+        float cong;
+        if (valence > 0.15f || valence < -0.15f) {
+            /* 当下有明显情绪: 同号=1.0, 反号=0.2(仍可召回, 只降权) */
+            cong = (m_av > 0.05f) == (valence > 0.0f) ? 1.0f : 0.2f;
+        } else {
+            cong = 0.5f;             /* 当下平静: 情绪项中性 */
+        }
+        float sc = 0.45f * rec + 0.35f * s_items[i].strength +
+                   0.20f * cong;
+        for (int k = 0; k < 3; k++) {
+            if (sc > best[k]) {
+                for (int j = 2; j > k; j--) {
+                    best[j] = best[j - 1];
+                    idx[j] = idx[j - 1];
+                }
+                best[k] = sc;
+                idx[k] = (int)i;
+                break;
+            }
+        }
+    }
+    int put = 0;
+    size_t off = 0;
+    if (idx[0] >= 0) {
+        off += (size_t)snprintf(out + off, n - off, "你最近记得:\n");
+        for (int k = 0; k < 3 && idx[k] >= 0; k++) {
+            /* 每条截短 ~28B 后 UTF-8 安全边界回退(D2 纪律) */
+            char line[32];
+            size_t len = strlen(s_items[idx[k]].user);
+            if (len >= sizeof(line)) len = sizeof(line) - 1;
+            memcpy(line, s_items[idx[k]].user, len);
+            while (len > 0 && (line[len] & 0xC0) == 0x80) len--;
+            line[len] = '\0';
+            int w = snprintf(out + off, n - off, "- %s\n", line);
+            if (w < 0 || (size_t)w >= n - off) break;   /* 缓冲满即止 */
+            off += (size_t)w;
+            put++;
+        }
+        if (put == 0) out[0] = '\0';
+    } else {
+        out[0] = '\0';
+    }
+    xSemaphoreGive(s_lock);
+    return put;
+}
+
 
 /* 按当前 query 检索精排(T21 续): 会话收到用户文本后调用——top-3 按
  * 码点 bigram 命中重排并强化命中项(docs/15 M2/M3 修复); query 空则

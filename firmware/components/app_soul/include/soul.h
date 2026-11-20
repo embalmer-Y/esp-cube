@@ -80,14 +80,27 @@ typedef struct {
     bool  audio_user_stopped;        /* 用户停台抑制窗内(S3: 深思 music
                                       * 行动硬门, docs/17 §5.5) */
     int   idle_sec;                  /* 距上次非空闲拍秒数 */
+    char  persona_desc[112];         /* 人格叙事一句(§55.29 背景块;
+                                      * 空=无角色, prompt 回退"桌面伙伴") */
 } soul_state_t;
 bool soul_state_get(soul_state_t *out);
+
+/* 人格叙事注入(§55.29: act_gate 在 persona 加载/genesis/切换时调,
+ * "名字, 描述"组合行 ≤108 字符; NULL/空=清除回退) */
+void soul_persona_desc(const char *line);
 
 /* 内在状态 prompt 段(内部静态缓冲, 调用方立刻拼走; session 任务上下文) */
 const char *soul_prompt_suffix(void);
 
 /* 记忆块 prompt 段(soul_mem; 空库返回空态文案防幻觉) */
 const char *soul_mem_prompt_block(void);
+
+/* 深思记忆块(§55.29 调研定案: top-3 多条, 行业共识=Generative Agents
+ * /Letta/Mem0/对话路 soul_mem 同为多条件加权 top-k, 单条不合理):
+ * score=0.45·新近+0.35·强度+0.2·情绪一致性(心境一致回忆, query 项
+ * 权重转移), 渲染 "你最近记得:\n- …\n- …" 到 out, 返回条数(0=空库
+ * /锁失败, 调用方省略整块) */
+int soul_mem_recall(char *out, size_t n, float valence);
 
 /* 记录一条记忆(轮末由 soul/ai_session 调; 批次 44 收进头文件——
  * 此前 cli.c/soul.c 各自手写 extern, 签名漂移隐患) */

@@ -296,11 +296,26 @@ static void psn_trait_apply(void)
 {
 #if CONFIG_ESP_CUBE_ENABLE_SOUL
     uint32_t id = persona_active_id(&s_psn_svc);
-    if (id == 0) return;
+    if (id == 0) {
+        soul_persona_desc(NULL);      /* 无角色: 背景块回退"桌面伙伴" */
+        return;
+    }
     float tr[PSN_TRAIT_MAX];
     if (persona_trait_read(&s_psn_svc, id, tr)) {
         soul_trait_load(tr);
         ESP_LOGI(TAG, "trait from persona #%08lx", (unsigned long)id);
+    }
+    /* 人格叙事一句(§55.29 深思背景块): "名字, 描述"组合(192 ≥
+     * 23+2+127+1 上界, -Werror=format-truncation 不可达) */
+    const persona_base_t *b = persona_active(&s_psn_svc);
+    if (b != NULL) {
+        char line[192];
+        if (b->description[0] != '\0')
+            snprintf(line, sizeof(line), "%s, %s",
+                     b->display_name, b->description);
+        else
+            snprintf(line, sizeof(line), "%s", b->display_name);
+        soul_persona_desc(line);
     }
 #endif
 }

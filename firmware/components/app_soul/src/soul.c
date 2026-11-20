@@ -283,6 +283,25 @@ void soul_tts_hint(soul_tts_hint_t *out)
     }
 }
 
+/* 人格叙事注入(§55.29: 深思背景块"你是谁"; act_gate 调) */
+static char s_persona_desc[112];
+
+void soul_persona_desc(const char *line)
+{
+    if (line == NULL || line[0] == '\0') {
+        s_persona_desc[0] = '\0';
+        return;
+    }
+    size_t len = strlen(line);
+    if (len >= sizeof(s_persona_desc))
+        len = sizeof(s_persona_desc) - 1;
+    memcpy(s_persona_desc, line, len);
+    /* UTF-8 安全边界回退(截断不落半个汉字, D2 同款纪律) */
+    while (len > 0 && (s_persona_desc[len] & 0xC0) == 0x80)
+        len--;
+    s_persona_desc[len] = '\0';
+}
+
 bool soul_state_get(soul_state_t *out)
 {
     if (out == NULL) return false;
@@ -299,6 +318,7 @@ bool soul_state_get(soul_state_t *out)
     out->ai_idle = (s_ai_state == AI_IDLE);
     out->audio_user_stopped = s_ticks < s_audio_stop_until;
     out->idle_sec = (int)(s_ticks - s_last_active_tick);
+    strlcpy(out->persona_desc, s_persona_desc, sizeof(out->persona_desc));
     xSemaphoreGive(s_lock);
     return true;
 }

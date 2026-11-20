@@ -61,7 +61,6 @@ static uint32_t face_dwell[SOUL_FACE_N];
  * 随 R6 退役 —— 行动只来自深思, sim 以最强驱力缺口选类, 预算硬门
  * 同款执法; 真实行动语义=板上 LLM, 占位仅保预算/结算通路有真值) ---- */
 static uint32_t s_act_fires[SB_CNT];
-static uint32_t s_budget_blocks;
 
 static int act_pick(const struct kd_output *kd)
 {
@@ -348,14 +347,11 @@ int main(int argc, char **argv)
                 s_thought_today++;
                 s_last_silent = true;         /* 模拟: LLM 结算多为沉默 */
                 s_last_silent_score = 0.5f;
-                /* 行动面占位(S3): 最强驱力缺口选类 → 预算硬门执法 */
+                /* 行动面占位(S3→§55.29 用户裁决: 记账不执法——
+                 * 模型自决说话多少, sb 仅遥测; 与 soul_think.c 同口径) */
                 int cat = act_pick(&kd_out);
-                if (sb_allow(cat, (uint32_t)t)) {
-                    sb_charge(cat, (uint32_t)t);
-                    s_act_fires[cat]++;
-                } else {
-                    s_budget_blocks++;
-                }
+                sb_charge(cat, (uint32_t)t);
+                s_act_fires[cat]++;
             }
         }
 
@@ -413,8 +409,8 @@ int main(int argc, char **argv)
         s_think_reason[0], s_think_reason[1], s_think_reason[2],
         s_think_reason[3], s_think_reason[4]);
     printf("情绪: valence [%.3f, %.3f] | arousal max %.3f\n", v_min, v_max, a_max);
-    printf("深思行动(预算分账): speak=%u music=%u face=%u 预算拦=%u\n",
-        s_act_fires[0], s_act_fires[1], s_act_fires[2], s_budget_blocks);
+    printf("深思行动(遥测分账, §55.29 记账不执法): speak=%u music=%u face=%u\n",
+        s_act_fires[0], s_act_fires[1], s_act_fires[2]);
     printf("勿扰时段占比: %.1f%% | 底色终态: %s\n",
         100.0f * quiet_secs / ticks, cur_face);
     {

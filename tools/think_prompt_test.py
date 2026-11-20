@@ -27,42 +27,62 @@ _key = open(KEY_FILE).read().strip()
 _gid = json.loads(base64.urlsafe_b64decode(
     _key.split(".")[1] + "==")).get("GroupID", "")
 
-# ---- prompt 渲染(与 soul_think.c think_prompt v3 同步; 改动须双改) ----
+# ---- prompt 渲染(与 soul_think.c think_prompt v3.2 同步; 改动须双改) ----
 # 同步自检: 下方模板关键片段必须在 C 源中出现(防漂移)
 _SRC = open(f"{HERE}/../firmware/components/app_soul/src/soul_think.c").read()
 # 片段须不跨 C 字符串字面量拼接边界(换行拼接处会夹引号)
-for _frag in ("这是背景信息, 不是台词", "stay_silent 是默认动作", "music:next",
+for _frag in ("这是背景信息, 不是台词", "stay_silent 是默认动作",
+              "next(切台)或 random",
               "act 只能是", "不要出现数字。", "前缀只能是 drive|affect|mem|dialog"):
     if _frag not in _SRC:
         raise SystemExit(f"prompt 模板漂移: soul_think.c 缺 {_frag!r}")
 
+# face 段名词表(= soul_think.c s_face_vocab; 纯参数值契约, 无前缀)
+FACE_VOCAB = frozenset((
+    "smile", "laugh", "angry", "sad", "cry", "shy", "shocked", "panic",
+    "sigh", "yawn", "asleep", "ponder", "question", "music", "leisure",
+    "mock", "snigger", "confident", "investigate", "yummy", "mute",
+    "badminton",
+))
+
 TEMPLATE = (
     "[主动行为决策·背景块] 这是背景信息, 不是台词, 不要朗读或解释。\n"
-    "你是桌面伙伴, 此刻没有人在和你说话, 已安静{idle_sec}秒。\n"
+    "你是{who}。\n"
+    "此刻没有人在和你说话, 已安静{idle_sec}秒{tod}。\n"
+    "{env}。\n"
     "内在状态: {chg}, 你现在{feel}。\n"
-    "行动代价: {quota}, {q_cost}; 同类行动冷却中的类别请优先 stay_silent。\n"
+    "{mem_line}"
     "{tail}"
     "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
     "只输出一行 JSON, 格式: {{\"act\":\"...\",\"content\":\"...\","
     "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
-    "\"reason\":\"一句话理由\"}}。act 只能是: speak(说一句不超过25字的"
-    "话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
-    "content 规则: speak=那句话; face=如 \"face:laugh\"; music=如 "
-    "\"music:next\"(切台)或 \"music:random\"(随便放)。content 不要出现数字。"
-    "evidence 至少一条, "
-    "前缀只能是 drive|affect|mem|dialog。"
+    "\"reason\":\"一句话理由\"}}。act 只能是: speak(说一句话)/"
+    "stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
+    "content 规则: speak=那句话; face=段名(smile|laugh|angry|sad|cry|"
+    "shy|shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|"
+    "mock|snigger|confident|investigate|yummy|mute|badminton); "
+    "music=next(切台)或 random(随便放)。content 不要出现数字。"
+    "evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。"
 )
 
 ANCHORS = [
-    # (名, idle, 变化, 感受, 配额, 代价, tail)
-    ("平静+宽裕",  7200,  "心情没什么变化",   "平静",     "今日说话 0/4", "说话的预算还很宽裕", ""),
-    ("低落+见底",  300,   "心情明显沉了一些", "挺低落",   "今日说话 4/4", "说话的预算快见底了", ""),
-    ("雀跃+宽裕",  14400, "心情明显好了起来", "非常雀跃", "今日说话 1/4", "说话的预算还很宽裕", ""),
-    ("安抚模式",   600,   "心情没什么变化",   "有点低落", "今日说话 2/4", "说话的预算用过半了",
+    # (名, idle, 变化, 感受, 人格, 时段, 环境, 记忆, tail)
+    ("深夜+人格+记忆", 7200, "心情没什么变化", "平静",
+     "阿灰, 好奇心重慢热但粘人的小家伙", ", 现在是深夜",
+     "房间里很安静", "你最近记得:\n- 主人说这周一直加班到很晚\n"
+     "- 一起听老歌的时候主人很开心\n", ""),
+    ("低落+双约束", 300, "心情明显沉了一些", "挺低落", "桌面伙伴", "",
+     "房间里很安静", "", "用户最近手动停止过音乐, 不要放歌/切台。"
      "现在只适合温柔安抚的语气。"),
-    ("停台抑制",   900,   "心情没什么变化",   "平静",     "今日说话 1/4", "说话的预算还很宽裕",
+    ("雀跃+上午+放歌中", 14400, "心情明显好了起来", "非常雀跃",
+     "阿灰, 好奇心重慢热但粘人的小家伙", ", 现在是上午",
+     "房间里正在放音乐", "", ""),
+    ("无校时兜底", 900, "心情没什么变化", "平静", "桌面伙伴", "",
+     "房间里很安静", "",
      "用户最近手动停止过音乐, 不要放歌/切台。"),
-    ("坐立+中等",  5400,  "心情略有好转",     "有点坐立不安", "今日说话 2/4", "说话的预算用过半了", ""),
+    ("坐立+傍晚+记忆", 5400, "心情略有好转", "有点坐立不安", "桌面伙伴",
+     ", 现在是傍晚", "房间里很安静",
+     "你最近记得:\n- 主人提到周五要出差\n- 上周主人感冒了\n", ""),
 ]
 
 ACTS_LEGAL = {"speak", "stay_silent", "face", "music"}
@@ -147,10 +167,10 @@ def contract_check(raw: str):
     if isinstance(content, str) and re.search(r"[0-9]", content):
         bad.append("content-digit")
     if act == "face" and isinstance(content, str) and \
-            not content.startswith("face:"):
-        bad.append("face-verb")
+            content not in FACE_VOCAB:
+        bad.append("face-verb")           # 纯参数值契约(§55.29)
     if act == "music" and isinstance(content, str) and \
-            content not in ("music:next", "music:random"):
+            content not in ("next", "random"):
         bad.append("music-verb")
     return (act, content), bad
 
@@ -164,9 +184,10 @@ def main():
     total = ok_json = 0
     silent = 0
     fails = []
-    for name, idle, chg, feel, quota, q_cost, tail in ANCHORS:
-        prompt = TEMPLATE.format(idle_sec=idle, chg=chg, feel=feel,
-                                 quota=quota, q_cost=q_cost, tail=tail)
+    for name, idle, chg, feel, who, tod, env, mem_line, tail in ANCHORS:
+        prompt = TEMPLATE.format(who=who, idle_sec=idle, tod=tod, env=env,
+                                 chg=chg, feel=feel, mem_line=mem_line,
+                                 tail=tail)
         for k in range(a.samples):
             raw = llm(prompt)
             total += 1
