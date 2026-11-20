@@ -15,15 +15,12 @@ MIT 许可代码提取/移植而来。**MIT 义务：保留出处与版权声明
   深思轮壳（soul_think）
 - 义务履行：上述文件头部均保留移植出处注记；本文件集中声明
 
-## 2. mp3_helix（RealNetworks Public Source License, RPSL）
+## 2. minimp3（CC0 公有领域）
 
-`firmware/components/mp3_helix/` 为 vendored MP3 解码器，**RPSL 许可**，
-`LICENSE.txt` 随目录保留。
-
-⚠️ **已知事项（2026-11-20 审计）**：FSF 将 RPSL 列为与 GPL/AGPL **不兼容**
-（自由但互斥）。本项目主体采用 AGPL-3.0。处置选项与追踪见
-docs/19 §55.19；在处置前，分发本仓库固件二进制时 mp3_helix 部分始终以
-RPSL 单独适用（其目录自成许可单元，改动须遵循 RPSL 条款）。
+`firmware/components/minimp3/` 为 vendored MP3 解码器（lieff/minimp3，CC0），
+**2026-11-20 替换 RPSL mp3_helix**（用户裁决，docs/19 §55.20）：FSF 列 RPSL
+与 AGPL 不兼容，已整体移除并从全部 git 历史剥除；现实现为 minimp3 +
+helix 兼容垫片（符号前缀 `espcube_mp3dec_*` 避撞 esp_audio_codec 内嵌副本）。
 
 ## 3. 表情素材（.efc）来源与状态
 
@@ -31,9 +28,9 @@ RPSL 单独适用（其目录自成许可单元，改动须遵循 RPSL 条款）
 `espressif2022/esp_emote_assets`（截至 2026-11-20 **无 LICENSE 文件**）及
 用户提供的参考素材（`media/`）经 `tools/efc` 管线转制。
 
-⚠️ **已知事项（2026-11-20 审计）**：上游无许可标注的素材再分发存在版权
-不确定性。处置追踪见 docs/19 §55.19（候选：素材移出仓库+拉取脚本 /
-替换自制素材 / 等上游补许可）。
+**已处置（2026-11-20，用户裁决"素材不上云"）**：.efc 素材不入库
+（目录级 gitignore，仅 MANIFEST.json 入库），本地获取见
+`tools/fetch_face_assets.sh`，CMake 条件嵌入（无素材构建照绿）。
 
 ## 4. 托管依赖清单（构建期拉取，不入库）
 

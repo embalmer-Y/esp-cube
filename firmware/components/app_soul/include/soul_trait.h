@@ -46,14 +46,14 @@ typedef struct {
     float novelty_gain_mod; /* [0.7,1.3]×   novelty 增益(好奇)      */
     /* --- ethics: 触发面性格化(§11.3; 闩锁后输出行为不调制) --- */
     float frag;             /* 脆弱度 [0,1] = 0.6*(1-R)+0.4*W       */
-    float eth_gate;         /* 深度门 [0.10,0.55]: frag=1 纯冷落可闩 */
+    float eth_gate;         /* 深度门 [0.08,0.55]: frag=1 纯冷落可闩 */
     float eth_dose_mod;     /* [0.6,1.5]×  事件剂量(脆弱者伤更深)   */
     float eth_load_t;       /* [1.6,3.2]   负荷阈                   */
     float eth_heal_tau_mod; /* [0.5,1.67]× 自愈 τ(脆弱者难自愈)     */
     float eth_soothe_mod;   /* [0.75,1.25]× 安抚效率(温情易哄好)    */
     /* --- kd: 节奏性格化 --- */
     float social_met_mod;   /* [0.5,1.5]×  社交代谢(温情=黏人)      */
-    float stim_self_recover;/* [0,5e-4]/s  自娱回充(活力=自足)      */
+    float stim_self_recover;/* [0,8e-5]/s  自娱回充(活力=自足; §11.3 初值实施回调) */
 } trait_tune_t;
 
 /* 复位到底座 0.5 全中性(等效 S2 行为)。 */

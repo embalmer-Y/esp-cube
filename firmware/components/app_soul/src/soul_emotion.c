@@ -135,16 +135,17 @@ static struct ke_tune s_tune = {
 
 void ke_tune_set(const struct ke_tune *t)
 {
-	if (t == NULL) {
-		s_tune = (struct ke_tune){
-			.arousal_base = KE_AROUSAL_BASE,
-			.urg_on = KE_URG_ON,
-			.eth_gate = KE_ETH_V_GATE,
-			.eth_load_t = KE_ETHICS_LOAD_T,
-		};
-		return;
-	}
-	s_tune = *t;
+	/* 审计修复(2026-11-20): NULL 语义=恢复中性默认——指定初始化器只填
+	 * 4 字段会把其余乘子清零(TAU_DEC*0 除零/NaN), 与头注契约不符 */
+	static const struct ke_tune neutral = {
+		.arousal_base = KE_AROUSAL_BASE,
+		.valence_off = 0.0f, .tau_dec_mod = 1.0f, .bond_up_mod = 1.0f,
+		.urg_on = KE_URG_ON, .novelty_gain_mod = 1.0f,
+		.eth_gate = KE_ETH_V_GATE, .eth_dose_mod = 1.0f,
+		.eth_load_t = KE_ETHICS_LOAD_T, .eth_heal_tau_mod = 1.0f,
+		.eth_soothe_mod = 1.0f,
+	};
+	s_tune = (t == NULL) ? neutral : *t;
 }
 
 /* ---- 引擎状态（文件级，ke_reset 可全清：S6）---- */

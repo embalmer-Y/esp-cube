@@ -24,16 +24,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include "nvs.h"
 #include "esp_log.h"
 
 #include "sdkconfig.h"
 
 #if CONFIG_ESP_CUBE_ENABLE_SOUL
 
-#define MEM_NS      "soulmem"
-#define MEM_KEY_NXT "nextseq"
-#define MEM_KEY_PFX "e"           /* eXXXXXXXX */
 #define MEM_MAX     60       /* NVS 后端容量(SD 后端 512, 跨年对话不丢) */
 #define MEM_MAX_SD  512
 #define MEM_FILE    "mem/episodes.jsonl"

@@ -186,14 +186,14 @@ menu "EspCube Configuration"
             (记忆回退 NVS, 素材回退 flash 内置)。
 
     config ESP_CUBE_ENABLE_SOUL
-        bool "灵魂内核(驱力+九维情绪+记忆, 移植 Kaleido)"
+        bool "灵魂内核(驱力+三层栈情绪(trait→mood→emotion)+SD 记忆, 移植 Kaleido)"
         default y
         depends on ESP_CUBE_ENABLE_AI
         help
             1Hz 确定性情感动力学: 三驱力内稳态(social/stim/rest) →
-            九维感受态(valence/arousal/...) → 每轮 LLM prompt 注入
+            感受态(valence/mood/arousal/...) → 每轮 LLM prompt 注入
             内在状态 + mood 标签回写 + TTS 语速/音高调制 + UI 情绪
-            事件; 附轻量情节记忆(NVS, top-3 注入)。关闭则全部旁路。
+            事件; 附轻量情节记忆(SD 持久化, 缺卡不写 A-01)。关闭则全部旁路。
 
     config ESP_CUBE_SOUL_PROACTIVE
         bool "主动交互(点火: 闲置时主动搭话)"

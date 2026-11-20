@@ -148,7 +148,7 @@ void app_main(void)
 
     /* ---- 1.6 SD 卡存储(M3+ 记忆系统强制底座; 无卡降级不阻塞) ---- */
     if (app_storage_init() != ESP_OK) {
-        ESP_LOGW(TAG, "storage degraded: mem->NVS, assets->flash");
+        ESP_LOGW(TAG, "storage degraded: mem disabled(no card), assets->builtin");
     }
 
     /* ---- 2. 音频链路(核心) ---- */

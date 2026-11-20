@@ -18,7 +18,7 @@ dependencies:
   espressif/esp_audio_codec: "^2.6.0"
   # WebSocket 客户端(M2: xiaozhi 协议 / GLM-Realtime)
   espressif/esp_websocket_client: "^1.4.0"
-  # MP3 解码已 vendor 至 components/mp3_helix(-O3 编译), 不再用 registry 组件
+  # MP3 解码已 vendor 至 components/minimp3(CC0, helix 兼容垫片, §55.20), 不再用 registry 组件
   # HLS 直播/点播协议栈(国内电台主流): m3u8 解析/分段调度/AES-128 解密
   espressif/esp_hls_stream: "^1.0.4"
   # esp-sr: 离线唤醒(S31: wn10_hilexin_int16; P4: Kaleido voice-loop-p4

@@ -272,7 +272,7 @@ typedef struct {
     bool resample_needed;
     bool is_mp3;            /* MP3: minimp3(CC0)解码路径 */
     bool is_raw;            /* RAW PCM 直通(无解码) */
-    HMP3Decoder mp3;        /* libhelix 解码器句柄 */
+    HMP3Decoder mp3;        /* minimp3(CC0)解码器句柄(helix 兼容垫片) */
     int  frame_cnt;
     size_t total_decoded;   /* 解码器累计输出字节 */
 } decoder_t;

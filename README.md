@@ -8,8 +8,9 @@ ESP32-P4C5(鱼鹰 OSPTEK 开发板, 双核 RISC-V 400MHz + ESP32-C5 WiFi6 协处
 
 - **灵魂层 v2 定案与实施(docs/24, 本日主线)**: 全流程重走(精读 docs/11-23→需求 12 项裁决→四路二轮调研→技术选型 15 项)后定案——**行为来源大原则**(本地零行为生成规则, 行为只来自用户/LLM 深思; 取消开机自播)、**情绪三层栈 trait→mood→emotion**(D2 终案)、**项目目的重申入册**(docs/16 最高原则: 个人项目/有血有肉/最少干预/演化不可干预只能重建角色)、**四层自由度架构提案**(反应全自由/触发=LLM 评价+提前权+硬底线/参数=genesis 面试/持有留本地, 待用户确认)。实施 S1(黄金测试入 CI+R3 验收判据化)+S2(ke v2+mood 慢层+ethics 解锁+soul_face 扇区共享模块+kd 重标定): soul_accept C2 全绿(TV .41/.81/.86)+C3 闩锁×1 解锁×1+emotion 16 锚全绿(EMOT_KNOWN_FAIL 9→0)。
 - **8h 浸泡收官(§55.16)**: 零崩溃/960 ping 全通/dma 恒 40,960; **浸泡后双问题事件**: ①SD 表情文件全程不可读(卡在位挂载成功但 BAD_FILE 跨重启, 候选=FAT 损坏或 EPSCV2 拒读, **待拔卡裁定**; 屏幕现为内置兜底脸) ②黑屏事件=在册"低概率黑屏"首次完整行为学捕获(UI 活/零日志/rst 恢复)。
-- **待用户确认/裁决**: 四层自由度架构+genesis+双臂实验(docs/24 §11.6-11.7); C1 语义修正(docs/24 §10.3①, 修正版已按"极端对待持续印记=正确行为"实施); SD 拔卡检查; 烧录批时机(配额修复+S2 已构建, 或等 S2.5 性格化合批)。
-- **下一批**: S2.5 trait 层前置(反应模式性格化+genesis 面试+appraisal 协议)→S3 行为层重构→S5 六维动机→S6 注入/校准(docs/24 §7)。
+- **已定案(2026-11-20)**: 四层自由度架构✅确认(触发层暂保守形态); C1 双向验收✅; 双臂实验✅(MiniMax M2.5)。
+- **开源(2026-11-20)**: AGPL-3.0; minimp3(CC0) 替换 RPSL mp3_helix; 表情素材出库(上游无许可, fetch_face_assets.sh 本地获取); 全历史净化+安全扫描零凭据; **已推送 github.com/embalmer-Y/esp-cube**。
+- **下一批**: S2.5b(trait 演化+genesis+校准层)→S3 行为层重构→S5 六维动机→S6 注入/校准(开放问题全清单见 docs/19 §56)。
 - **历史冲刺(11-18~19)**: P1 网络稳定批关账(A1a: dma 40,960/internal 67K)/B2 开机电台板验/P3a 配网全链真机/appsim 模拟器/soul_sim 快 tick 模拟器(§55.11-14)。
 - **验证**: host_tests 全量 ALL PASS(含 ke/kd 16+9 锚与 R3 门); 双目标构建+层检+mem_budget 全绿; 8h 板上浸泡零崩溃。
 
@@ -17,8 +18,8 @@ ESP32-P4C5(鱼鹰 OSPTEK 开发板, 双核 RISC-V 400MHz + ESP32-C5 WiFi6 协处
 
 本项目（除下述例外）以 **GNU AGPL-3.0** 发布（[LICENSE](LICENSE)）——使用、
 修改或通过网络提供服务均须以同协议开源。例外与第三方义务见
-[vendor-licenses.md](vendor-licenses.md)：**mp3_helix**（RPSL，自成许可单元）、
-**表情素材**（乐鑫 esp_emote_assets 转制，上游许可待标注——处置追踪中）。
+[vendor-licenses.md](vendor-licenses.md)：MP3 解码为 **minimp3**（CC0）；
+**表情素材不入库**（上游无许可，本地获取见 `tools/fetch_face_assets.sh`）。
 
 ## 文档索引(编号即阅读序)
 
@@ -34,10 +35,10 @@ ESP32-P4C5(鱼鹰 OSPTEK 开发板, 双核 RISC-V 400MHz + ESP32-C5 WiFi6 协处
 ## 仓库结构(约定见 [docs/06 §0](docs/06_分层架构与代码规范.md))
 
 ```
-firmware/     ESP-IDF 工程: main/(L5 装配) + components/(24 分层组件+vendored mp3_helix)
+firmware/     ESP-IDF 工程: main/(L5 装配) + components/(24 分层组件+vendored minimp3)
 sim/          宿主 LVGL 模拟器(shim/src + run.sh; 与固件 ui/ 同源编译)
 tools/        宿主工具: 层检/宿主测试/板验客户端/看护脚本/素材生成
-docs/         编号文档(01-21)
+docs/         编号文档(01-24)
 media/        参考素材(只读)
 testaudio/    测试音频(gitignored)
 ```

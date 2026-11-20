@@ -107,7 +107,7 @@ static void assist_refresh(void)
 
 /* ---- 1s 时钟拍(int 字段天然原子; esp_timer 任务上下文) ---- */
 /* ---- 灵魂 2.0 face 执行器状态(底色记忆 + 请求记账 + 瞬态回拉) ---- */
-static char s_face_bg[24] = "neutral";        /* 当前底色段名(neutral=内嵌) */
+static char s_face_bg[24] = "smile_static";  /* 当前底色段名(默认=内置兜底段; 审计修复: neutral 非有效段名) */
 static volatile char s_face_req[24];          /* 待加载段(tick 消费) */
 static volatile bool s_face_req_pending;
 static volatile int64_t s_face_revert_ms;     /* >0 = 瞬态回拉时刻 */
