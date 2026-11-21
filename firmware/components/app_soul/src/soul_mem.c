@@ -76,6 +76,11 @@ static int s_count;
 static int s_anomalies;                 /* 旧格式歧义行(含 \t)隔离计数 */
 static SemaphoreHandle_t s_lock;
 static uint32_t s_next_seq = 1;
+/* B-6b 反思触发面: 已反思水位线(≤wm 的条目视为已反思); Σimp 按需
+ * 派生(逐条 10+|affect_v|×40/127, 512 条 1Hz 遍历可忽略)。wm 仅
+ * RAM——重启后重开反思窗(apply 侧 24h 冷却+证据门防跑飞, v1 偏差
+ * 已入册 docs/24 §12.2-1)。 */
+static uint32_t s_reflect_wm;
 static char s_block[MEM_BLOCK];   /* prompt 块(重建于写入/启动) */
 
 /* 写入前净化: \t/\n/\r 等 C0 控制字符以空格替代, 保证 TSV 行永不被
@@ -476,6 +481,81 @@ const char *soul_mem_prompt_block(void)
     return s_block;
 }
 
+/* ---- B-6b 反思触发面 ---- */
+
+static uint32_t mem_imp(const mem_item_t *m)
+{
+    /* 重要性启发式(v1, LLM appraisal 快通道挂后续批): 基线 10 +
+     * 情绪幅值 0..40 → 10..50 */
+    int32_t av = m->affect_v < 0 ? -m->affect_v : m->affect_v;
+    return 10 + (uint32_t)av * 40 / 127;
+}
+
+/* 未反思 Σimp(按需派生; >40k 封顶防溢出) */
+uint32_t soul_mem_imp_pending(void)
+{
+    if (s_lock == NULL) return 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    uint32_t sum = 0;
+    for (uint32_t i = 0; i < s_count; i++) {
+        if (s_items[i].seq > s_reflect_wm) {
+            sum += mem_imp(&s_items[i]);
+            if (sum > 40000) { sum = 40000; break; }
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return sum;
+}
+
+/* 反思消费: 水位线推到当前最大 seq */
+void soul_mem_imp_mark(void)
+{
+    if (s_lock == NULL) return;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return;
+    s_reflect_wm = s_next_seq - 1;
+    xSemaphoreGive(s_lock);
+}
+
+/* 反思取材: 最近 max_n 条((相对时间) 用户说: …; 单行 UTF-8 安全截短),
+ * 返回条数; 空库/锁忙=0 */
+int soul_mem_recent(char *out, size_t cap, int max_n)
+{
+    if (out == NULL || cap == 0 || s_lock == NULL || s_disabled)
+        return 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(100)) != pdTRUE) return 0;
+    int put = 0;
+    size_t off = 0;
+    uint32_t base = s_count > (uint32_t)max_n
+                        ? s_count - (uint32_t)max_n : 0;
+    for (uint32_t i = base; i < s_count && put < max_n; i++) {
+        if (s_items[i].user[0] == '\0') continue;
+        char rel[16];
+        rel_time(s_items[i].t, rel, sizeof(rel));
+        char line[80];
+        int w = snprintf(line, sizeof(line), "- (%s) 主人说: %s\n", rel,
+                         s_items[i].user);
+        if (w < 0 || (size_t)w >= sizeof(line)) {
+            /* 截断: UTF-8 安全回退后重排 */
+            snprintf(line, sizeof(line), "- (%s) 主人说: ", rel);
+            size_t ul = strlen(line);
+            size_t avail = sizeof(line) - ul - 1;
+            size_t sl = strlen(s_items[i].user);
+            if (sl > avail) sl = avail;
+            memcpy(line + ul, s_items[i].user, sl);
+            while (sl > 0 && (line[ul + sl] & 0xC0) == 0x80) sl--;
+            line[ul + sl] = '\0';
+            strcat(line, "\n");
+        }
+        if (off + strlen(line) + 1 > cap) break;
+        memcpy(out + off, line, strlen(line));
+        off += strlen(line);
+        out[off] = '\0';
+        put++;
+    }
+    xSemaphoreGive(s_lock);
+    return put;
+}
+
 int soul_mem_recall(char *out, size_t n, float valence)
 {
     /* 深思记忆块(§55.29 调研定案 top-3): 与对话路 rebuild_block_locked
@@ -574,6 +654,7 @@ void soul_mem_scope_bind(const char *persona_key, bool consent_mem)
              "v1/personas/%s/memory/deleted.log", persona_key);
     s_count = 0;                          /* 清旧作用域 RAM 镜像 */
     s_next_seq = 1;
+    s_reflect_wm = 0;                     /* B-6b: 新作用域=全窗重开 */
     s_anomalies = 0;
     s_deleted_n = 0;
     s_sd = false;

@@ -523,6 +523,35 @@ static void scenario_query_retrieval(void)
 }
 
 /* S11(T23): 删除防复活 —— 台账先行, 残留/回滚/重启均不复活 */
+/* S13: B-6b 反思触发面(imp 启发式派生+mark 水位+recent 取材) */
+static void scenario_reflect_imp(void)
+{
+    storage_use("rimp");
+    soul_mem_boot();
+    soul_mem_scope_bind(SCOPE_KEY, true);
+    CHECK(soul_mem_imp_pending() == 0, "empty -> 0 pending");
+    soul_mem_record("平静的一句", "嗯", 0.0f, 0.0f);   /* imp=10 */
+    soul_mem_record("开心的一天", "真好", 0.9f, 0.5f); /* imp=45 */
+    CHECK(soul_mem_imp_pending() == 55, "pending = 10+45");
+    soul_mem_imp_mark();
+    CHECK(soul_mem_imp_pending() == 0, "mark -> 0");
+    /* 重启: wm 仅 RAM → 全量重开(v1 偏差, docs/24 §12.2-1) */
+    pid_t pid = fork();
+    if (pid == 0) {
+        s_fail = 0;
+        soul_mem_boot();
+        soul_mem_scope_bind(SCOPE_KEY, true);
+        CHECK(soul_mem_imp_pending() == 55, "reboot reopens window");
+        char buf[512];
+        int n = soul_mem_recent(buf, sizeof(buf), 15);
+        CHECK(n >= 2, "recent rows");
+        CHECK(strstr(buf, "主人说") != NULL, "recent format");
+        CHECK(strstr(buf, "开心的一天") != NULL, "recent content");
+        _exit(s_fail ? 1 : 0);
+    }
+    CHECK(wait_child_ok(pid), "reflect reboot checks");
+}
+
 static void scenario_scope_delete(void)
 {
     storage_use("del");
@@ -594,6 +623,7 @@ int main(int argc, char **argv)
         { "scope_iso",    scenario_scope_isolation },
         { "scope_delete", scenario_scope_delete },
         { "query_ret",    scenario_query_retrieval },
+        { "reflect_imp",  scenario_reflect_imp },
         { "sanitize",     scenario_sanitize },
     };
     /* 调试: 指定场景名则内联直跑(不派发 fork), 崩溃现场直接可见 */

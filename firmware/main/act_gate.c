@@ -391,7 +391,10 @@ static void psn_trait_evo_cb(cube_evt_id_t id, const void *data, size_t len,
     if (persona_save(&s_psn_svc) != PSN_RES_OK) {
         ESP_LOGW(TAG, "trait evo save fail (kept in memory)");
     } else {
-        ESP_LOGI(TAG, "trait evo persisted #%08lx", (unsigned long)id_act);
+        ESP_LOGI(TAG, "trait evo persisted #%08lx (%s) dC%+.3f dW%+.3f "
+                 "dE%+.3f dA%+.3f dR%+.3f", (unsigned long)id_act,
+                 evo->reason, evo->applied[0], evo->applied[1],
+                 evo->applied[2], evo->applied[3], evo->applied[4]);
     }
 }
 

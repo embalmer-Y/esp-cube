@@ -29,6 +29,7 @@
 #include "sessstate.h"
 #include "cube_act.h"
 #include "esp_timer.h"
+#include "nvs.h"
 
 #include <string.h>
 #include <math.h>
@@ -385,8 +386,22 @@ int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap)
         if (s_prof.llm_url[0]) url = s_prof.llm_url;
         if (s_prof.llm_model[0]) model = s_prof.llm_model;
     }
-    /* 模式梯: 静态缓存, 自当前档起试, 失败即降(降后缓存) */
+    /* 模式梯: NVS 持久缓存(一次探测永久生效; 探测失败档位只在
+ * 成功后写回, 防止瞬态故障把模式钉死在 plain), 自当前档起试 */
     static enum deliberate_mode mode = DM_SCHEMA;
+    static bool mode_loaded;
+    if (!mode_loaded) {
+        mode_loaded = true;
+        nvs_handle_t h;
+        uint8_t v = 0;
+        if (nvs_open("ai", NVS_READONLY, &h) == ESP_OK) {
+            if (nvs_get_u8(h, "dmode", &v) == ESP_OK &&
+                v < (uint8_t)DM_CNT)
+                mode = (enum deliberate_mode)v;
+            nvs_close(h);
+        }
+        ESP_LOGI(TAG, "deliberate mode boot=%d", (int)mode);
+    }
     for (int attempt = 0; attempt < DM_CNT; attempt++) {
         struct deliberate_ctx c = { .buf = reply, .off = 0, .cap = cap };
         if (mode >= DM_PLAIN) {
@@ -426,9 +441,17 @@ int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap)
         };
         int rc = ks_llm_chat_v2(&cfg, deliberate_cb, NULL, &c);
         cJSON_Delete(msgs);
-        if (rc == 0 && reply[0])
+        if (rc == 0 && reply[0]) {
+            nvs_handle_t h;
+            if (nvs_open("ai", NVS_READWRITE, &h) == ESP_OK) {
+                nvs_set_u8(h, "dmode", (uint8_t)mode);
+                nvs_commit(h);
+                nvs_close(h);
+            }
             return 0;
-        /* 降档(HTTP 4xx/空 content; content 空坑=thinking+schema 已知) */
+        }
+        /* 降档(HTTP 4xx/空 content; content 空坑=thinking+schema 已知)。
+         * 降档暂存 RAM; 成功后落 NVS(下次 boot 直达可用档) */
         mode = (enum deliberate_mode)(mode + 1);
         ESP_LOGW(TAG, "deliberate mode -> %d (rc=%d empty=%d)",
                  (int)mode, rc, reply[0] == '\0');

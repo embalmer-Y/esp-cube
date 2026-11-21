@@ -130,6 +130,10 @@ float sm_speak_net(void);
  * IGNORED 结算即清仓(R2 被忽即清仓, docs/24 §4.1) */
 void sm_intent_arm(float s, uint32_t now_s);
 
+/* B-6b 反思触发面: KL 惊奇累计(Σ s_kl×100; ≥40 过门, docs/24 §3.5) */
+float sm_surprise_pending(void);
+void sm_surprise_reset(void);
+
 /* 本拍环境供给(1Hz, 先于 sm_tick; quiet/会话/播放=礼貌闸输入源) */
 void sm_ctx(bool quiet_hours, bool ai_active, bool playing);
 

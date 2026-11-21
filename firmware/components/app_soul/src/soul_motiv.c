@@ -67,6 +67,8 @@ static bool     s_have_interact;
 static float    s_skl;              /* 最近一次间隔 KL[0,1]      */
 static float    s_kl_burst;         /* 惊奇事件充能当前值        */
 static float    s_kl_burst0;        /* 充能初值(自 t0 全量衰减)  */
+static float    s_surprise_acc;     /* B-6b: 反思触发惊奇累计(Σ s_kl×100;
+                                     * ≥40 触发反思, docs/24 §3.5) */
 static uint32_t s_kl_burst_t0;
 
 /* ku: 遗留意图槽 {s, h 被忽次数} + 事件余辉 */
@@ -135,6 +137,7 @@ void sm_reset(void)
     s_kl_burst = 0.0f;
     s_kl_burst_t0 = 0;
     memset(&s_ku, 0, sizeof(s_ku));
+    s_surprise_acc = 0.0f;
     s_ku_cache = 0.0f;
     s_kf = 0.5f;
     memset(&s_kb_in, 0, sizeof(s_kb_in));
@@ -231,6 +234,10 @@ void sm_event(enum sm_evt e, uint32_t now_s)
                     s_kl_burst = 0.5f;
                 s_kl_burst0 = s_kl_burst;
                 s_kl_burst_t0 = now_s;
+                /* B-6b: 反思触发面记账(一次 0.4+ 惊奇事件即过 40 门) */
+                s_surprise_acc += s_skl * 100.0f;
+                if (s_surprise_acc > 10000.0f)
+                    s_surprise_acc = 10000.0f;
             }
         }
         s_last_interact_s = now_s;
@@ -261,6 +268,11 @@ void sm_settle(enum sm_settle s, uint32_t now_s)
         break;
     }
 }
+
+/* B-6b: 反思触发面(Σimp 走 soul_mem; surprise 在此记账) */
+float sm_surprise_pending(void) { return s_surprise_acc; }
+
+void sm_surprise_reset(void) { s_surprise_acc = 0.0f; }
 
 void sm_intent_arm(float s, uint32_t now_s)
 {

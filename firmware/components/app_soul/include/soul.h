@@ -102,6 +102,12 @@ const char *soul_mem_prompt_block(void);
  * /锁失败, 调用方省略整块) */
 int soul_mem_recall(char *out, size_t n, float valence);
 
+/* ---- B-6b 反思触发面(docs/24 §3.5: Σimp≥60 ∨ surprise≥40) ---- */
+uint32_t soul_mem_imp_pending(void);   /* 未反思 Σimp(启发式 10..50/条) */
+void soul_mem_imp_mark(void);          /* 反思消费: 水位线推到当前 */
+int soul_mem_recent(char *out, size_t cap, int max_n);  /* 最近记忆行 */
+
+
 /* 记录一条记忆(轮末由 soul/ai_session 调; 批次 44 收进头文件——
  * 此前 cli.c/soul.c 各自手写 extern, 签名漂移隐患) */
 void soul_mem_record(const char *user, const char *reply,

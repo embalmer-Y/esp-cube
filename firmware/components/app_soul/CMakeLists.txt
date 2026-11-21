@@ -9,5 +9,5 @@ idf_component_register(
          "src/soul_bb.c" "src/soul_budget.c" "src/soul_motiv.c" "src/soul_face.c" "src/soul_jsonfix.c" "src/soul_moodgate.c"
          "src/soul_trait.c"
     INCLUDE_DIRS "include"
-    PRIV_REQUIRES cubecore cube_act app_storage esp_timer
+    PRIV_REQUIRES cubecore cube_act app_storage esp_timer espressif__cjson
 )

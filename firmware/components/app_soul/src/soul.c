@@ -83,7 +83,8 @@ static const char *TAG = "soul";
 #define PEND_BARGE      0x04
 #define PEND_VOICE      0x08
 static volatile uint8_t s_pend;
-static bool s_initiative_tick;   /* 本拍自发发起(trait 观测) */
+static bool s_initiative_tick;
+static uint32_t s_reflect_cd_until;     /* B-6b: 反思冷却截止(tick) */   /* 本拍自发发起(trait 观测) */
 static uint32_t s_audio_stop_until;  /* 用户停台→深思音频抑制窗止点 */
 static int s_engine_trend;              /* 上拍 Δvalence 符号(moodgate 断三) */
 /* round 附带文本(单槽, 新覆盖旧 —— 轮结束才写, 会话任务上下文) */
@@ -122,6 +123,7 @@ static uint64_t s_last_active_tick;        /* 最近非 IDLE 拍(idle 计时) */
 extern bool soul_think_fire(uint8_t reason, bool forced, float score);
 #if CONFIG_ESP_CUBE_SOUL_PROACTIVE
 extern void soul_think_round_answered(void);   /* B-6a: kc 问句闭合 */
+extern bool soul_think_reflect_fire(void);     /* B-6b: 反思轮触发 */
 #endif
 
 /* ---- 灵魂 2.0: 表情三层决策(Phase1 实装; S2 升级 docs/24 §2.3) ----
@@ -675,6 +677,21 @@ static void soul_task(void *arg)
                             ke_out.state.arousal);
         }
 
+
+        /* 9.5) B-6b 反思触发(docs/24 §3.5): Σimp≥60 ∨ surprise≥40,
+         * 24h 冷却; fire 忙则下拍重试(不计冷却) */
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+        if ((int32_t)(s_ticks - s_reflect_cd_until) >= 0 &&
+            (soul_mem_imp_pending() >= 60 ||
+             sm_surprise_pending() >= 40.0f)) {
+            if (soul_think_reflect_fire()) {
+                s_reflect_cd_until = s_ticks + 86400;
+                ESP_LOGI(TAG, "REFLECT fired (imp=%lu sur=%.0f)",
+                         (unsigned long)soul_mem_imp_pending(),
+                         sm_surprise_pending());
+            }
+        }
+#endif
         /* 10) trait 慢变量(S2.5b 双通道, docs/24 §3.3): 每拍残差观测
          * (initiative=本拍深思行动成立), 日界结算 EMA+熔断 */
         struct trait_obs tobs = {
@@ -703,8 +720,13 @@ static void soul_task(void *arg)
                          after[3], after[4], trait_day_count());
                 /* 持久化(B-5): persona owner(act_gate)订阅落盘 */
                 cube_trait_evo_t evo;
-                for (int d = 0; d < TRAIT_DIM; d++)
+                for (int d = 0; d < TRAIT_DIM; d++) {
                     evo.trait[d] = after[d];
+                    evo.applied[d] = trait_last_ema(d);
+                }
+                snprintf(evo.reason, sizeof(evo.reason),
+                         "EMA day %lu",
+                         (unsigned long)trait_day_count());
                 cube_event_publish(CUBE_EVT_TRAIT_EVO, &evo, sizeof(evo));
             }
         }

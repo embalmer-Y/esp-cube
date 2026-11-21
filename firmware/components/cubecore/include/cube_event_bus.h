@@ -81,6 +81,8 @@ typedef struct {
  * trait 存 persona 卡, soul 层演化→act_gate(persona owner)落盘) */
 typedef struct {
     float trait[5];          /* C W E A R(docs/24 §3.1), 值域 [0.35,0.65] */
+    float applied[5];        /* B-6b: 本次实际变化量(EMA 日步或反思钳后) */
+    char  reason[56];        /* B-6b: 叙事锚("EMA day N"/"反思: <洞察>") */
 } cube_trait_evo_t;
 
 /* 灵魂 2.0 行动(CUBE_EVT_SOUL_ACT payload; 全局广播空间出口:

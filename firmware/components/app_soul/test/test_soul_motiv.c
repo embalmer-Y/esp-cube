@@ -293,6 +293,18 @@ static void golden_speak_net(void)
 	TEST_ASSERT_TRUE(net >= -1.0f && net <= 1.5f);
 }
 
+/* B-6b: 反思触发面——KL 惊奇事件累计(×100)+复位 */
+static void golden_surprise(void)
+{
+	sm_reset();
+	TEST_ASSERT_TRUE(feq(sm_surprise_pending(), 0.0f));
+	sm_event(SM_EVT_TOUCH, 100);
+	sm_event(SM_EVT_TOUCH, 5000);   /* 大跳变间隔 → KL 惊奇事件 */
+	TEST_ASSERT_TRUE(sm_surprise_pending() > 0.0f);
+	sm_surprise_reset();
+	TEST_ASSERT_TRUE(feq(sm_surprise_pending(), 0.0f));
+}
+
 void motiv_tests_main(void)
 {
 	UNITY_BEGIN();
@@ -304,5 +316,6 @@ void motiv_tests_main(void)
 	RUN_TEST(golden_gate_channels);
 	RUN_TEST(golden_p_gate);
 	RUN_TEST(golden_speak_net);
+	RUN_TEST(golden_surprise);
 	UNITY_END();
 }

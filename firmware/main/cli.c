@@ -590,6 +590,16 @@ static void handle_line(char *line)
         /* 素材/配置传输通道: wget <url> [相对路径](缺省 face/下载名.efc);
          * PC 侧 python3 -m http.server 配合, http 明文(局域网) */
         cmd_wget(arg);
+    } else if (strcmp(line, "reflect") == 0) {
+        /* B-6b 台调: 强制反思轮(绕过 Σimp/surprise 触发面; apply 侧
+         * 五门+24h 冷却照常) */
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+        extern bool soul_think_reflect_fire(void);
+        printf("  reflect: %s\n", soul_think_reflect_fire()
+               ? "已触发(结果见 soulthink 日志)" : "忙");
+#else
+        printf("  reflect: SOUL_PROACTIVE 未开\n");
+#endif
     } else if (strcmp(line, "think") == 0) {
         /* 灵魂 2.0 台调: 强制触发深思轮(绕过思维闸, 出口门照常) */
 #if CONFIG_ESP_CUBE_SOUL_PROACTIVE

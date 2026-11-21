@@ -27,6 +27,7 @@
 #include "soul_motiv.h"
 #include "soul_jsonfix.h"
 #include "soul_bb.h"
+#include "cJSON.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -59,6 +60,7 @@ static esp_err_t (*s_speak)(const char *text);
 static volatile bool s_busy;
 static volatile bool s_voice_seen;
 static uint8_t s_q_opened;      /* B-6a: 深思问句已开槽位图(kc 台账) */
+static volatile bool s_reflect_req;  /* B-6b: 反思轮请求 */
 static uint8_t  s_reason;
 static bool     s_forced;
 static float    s_trig_score;
@@ -441,6 +443,8 @@ void soul_think_round_answered(void)
     }
 }
 
+static void think_reflect_run(void);   /* B-6b: 定义在 fire 区 */
+
 /* ---- 深思任务(常驻, notify 门控, 单飞) ---- */
 static void think_task(void *arg)
 {
@@ -450,6 +454,12 @@ static void think_task(void *arg)
     (void)arg;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (s_reflect_req) {           /* B-6b: 反思轮优先(独立流程) */
+            s_reflect_req = false;
+            think_reflect_run();
+            s_busy = false;
+            continue;
+        }
         struct ki_intent intent;
         struct ki_decision dec;
         enum ki_parse_err pe;
@@ -647,6 +657,125 @@ esp_err_t soul_think_start(void)
     return ESP_OK;
 }
 
+/* ---- B-6b 反思轮(慢通道, docs/24 §3.5/§11.6 参数层) ----
+ * 触发(soul tick: Σimp≥60 ∨ surprise≥40 + 24h 冷却) → 本轮:
+ * ≤15 条记忆 → LLM 洞察(≤5)+五维微调 → trait_reflect_apply 五门
+ * 执法 → CUBE_EVT_TRAIT_EVO 广播(act_gate 落 persona 卡)。
+ * 解析成功即消费触发面(mark+reset; LLM 失败保留待冷却后重试)。 */
+static void think_reflect_run(void)
+{
+    static char pbuf[2600];
+    static char reply[THINK_REPLY_MAX];
+    static char fixed[THINK_REPLY_MAX];
+
+    soul_state_t st;
+    const char *who = soul_state_get(&st) && st.persona_desc[0]
+                          ? st.persona_desc : "桌面伙伴";
+    char mems[1200];
+    int n = soul_mem_recent(mems, sizeof(mems), 15);
+    if (n <= 0) {
+        ESP_LOGW(TAG, "REFLECT: no memories, skip");
+        return;
+    }
+    snprintf(pbuf, sizeof(pbuf),
+        "[性格反思·背景块] 这是背景信息, 不是台词, 不要朗读或解释。\n"
+        "你是%s。\n"
+        "最近你们一起经历了这些(按时间):\n"
+        "%s"
+        "请安静回顾这段相处, 只输出一行 JSON, 格式: "
+        "{\"insights\":[\"一句话洞察\",最多5条],\"trait\":{\"C\":0.0,"
+        "\"W\":0.0,\"E\":0.0,\"A\":0.0,\"R\":0.0},\"conf\":0.7,"
+        "\"evidence_n\":2}。trait=你对自己性格的五维微调建议: C=好奇 "
+        "W=温情 E=活力 A=主见 R=韧性; 每维 -0.05~0.05, 没有经历依据的"
+        "维度必须给 0。insights=这段经历让你对用户或自己的新认识(一句话"
+        "一条, 最多5条)。evidence_n=支撑洞察的记忆条数。conf=确信度 0~1。",
+        who, mems);
+
+    reply[0] = 0;
+    if (s_brain == NULL ||
+        s_brain(pbuf, reply, sizeof(reply)) != 0 || !reply[0]) {
+        ESP_LOGW(TAG, "REFLECT: LLMFAIL (触发面保留)");
+        return;                        /* 失败不消费, 冷却后重试 */
+    }
+    size_t flen = 0;
+    if (!soul_json_fix(reply, strlen(reply), fixed, sizeof(fixed),
+                       &flen)) {
+        ESP_LOGW(TAG, "REFLECT: jsonfix fail (触发面保留)");
+        return;
+    }
+    cJSON *root = cJSON_Parse(fixed);
+    if (root == NULL) {
+        ESP_LOGW(TAG, "REFLECT: parse fail (触发面保留)");
+        return;
+    }
+    struct trait_reflect r;
+    memset(&r, 0, sizeof(r));
+    r.ref_depth = 1;
+    static const char *const keys[TRAIT_DIM] = { "C", "W", "E", "A", "R" };
+    const cJSON *tr = cJSON_GetObjectItem(root, "trait");
+    for (int d = 0; d < TRAIT_DIM && tr != NULL; d++) {
+        const cJSON *it = cJSON_GetObjectItem(tr, keys[d]);
+        if (it != NULL && cJSON_IsNumber(it))
+            r.delta[d] = (float)it->valuedouble;
+    }
+    const cJSON *cf = cJSON_GetObjectItem(root, "conf");
+    if (cf != NULL && cJSON_IsNumber(cf))
+        r.conf = (float)cf->valuedouble;
+    r.conf = r.conf < 0.0f ? 0.0f : (r.conf > 1.0f ? 1.0f : r.conf);
+    const cJSON *ev = cJSON_GetObjectItem(root, "evidence_n");
+    if (ev != NULL && cJSON_IsNumber(ev) && ev->valuedouble > 0)
+        r.evidence_n = (uint8_t)(ev->valuedouble > 15 ? 15
+                                                      : ev->valuedouble);
+    /* 洞察留痕(v1: 控制台; psn_evo_rev_t 正式落库挂透明性批) */
+    char i0[56] = "";
+    const cJSON *ins = cJSON_GetObjectItem(root, "insights");
+    int ins_n = 0;
+    if (cJSON_IsArray(ins)) {
+        const cJSON *it = NULL;
+        cJSON_ArrayForEach(it, ins) {
+            if (!cJSON_IsString(it) || it->valuestring == NULL) continue;
+            if (ins_n == 0)
+                strlcpy(i0, it->valuestring, sizeof(i0));
+            ESP_LOGI(TAG, "REFLECT insight[%d]: %.90s", ins_n,
+                     it->valuestring);
+            if (++ins_n >= 5) break;
+        }
+    }
+    cJSON_Delete(root);
+
+    float before[TRAIT_DIM], after[TRAIT_DIM];
+    trait_get(before);
+    bool moved = trait_reflect_apply(&r);
+    soul_mem_imp_mark();               /* 消费触发面(反思已发生) */
+    sm_surprise_reset();
+    if (!moved) {
+        ESP_LOGI(TAG, "REFLECT no move (门拒: conf=%.2f evid=%u)",
+                 r.conf, r.evidence_n);
+        return;
+    }
+    trait_get(after);
+    cube_trait_evo_t evo;
+    for (int d = 0; d < TRAIT_DIM; d++) {
+        evo.trait[d] = after[d];
+        evo.applied[d] = after[d] - before[d];
+    }
+    snprintf(evo.reason, sizeof(evo.reason), "反思: %.40s", i0);
+    cube_event_publish(CUBE_EVT_TRAIT_EVO, &evo, sizeof(evo));
+    ESP_LOGI(TAG, "REFLECT applied C%+.3f W%+.3f E%+.3f A%+.3f R%+.3f",
+             evo.applied[0], evo.applied[1], evo.applied[2],
+             evo.applied[3], evo.applied[4]);
+}
+
+/* soul tick 反思触发入口(B-6b; 忙则丢弃, tick 下拍重试) */
+bool soul_think_reflect_fire(void)
+{
+    if (s_busy || s_handle == NULL) return false;
+    s_reflect_req = true;
+    s_busy = true;
+    xTaskNotifyGive(s_handle);
+    return true;
+}
+
 /* soul tick 触发入口(gate 过后调; 忙则丢弃 —— 思维不排队) */
 bool soul_think_fire(uint8_t reason_mask, bool forced, float score)
 {
@@ -670,5 +799,6 @@ void soul_think_day_flip(uint32_t now_min) { (void)now_min; }
 esp_err_t soul_think_start(void) { return ESP_OK; }
 bool soul_think_fire(uint8_t r, bool f, float s)
 { (void)r; (void)f; (void)s; return false; }
+bool soul_think_reflect_fire(void) { return false; }
 
 #endif
