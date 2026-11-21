@@ -153,8 +153,15 @@ static char s_pin[PAIR_PIN_LEN + 1];
 static credstore_t s_creds;
 static bool s_creds_ready;
 static void pair_port_init(void);   /* 定义在配对服务段(creds_ensure 前向) */
-static char *s_llm_key_cache;          /* PSRAM; 凭据轮换代次失效 */
-static uint32_t s_llm_key_ver;
+/* B-6a 语音复验: 多供应商密钥路由——LLM 与语音(ASR/TTS/RT)可属不同
+ * 供应商, 单一 llm.api_key 会把跨供应商 JWT 喂给语音端点(板上实证:
+ * DashScope wss 握手成功但 upgrade 被 401 拒)。按用途分 credstore 键:
+ * llm.api_key / voice.api_key, 各自版本缓存。 */
+static struct {
+    char *cache;                       /* PSRAM; 凭据轮换代次失效 */
+    uint32_t ver;
+} s_key_cache[2];
+static const char *const s_key_names[2] = { "llm.api_key", "voice.api_key" };
 
 static bool creds_ensure(void)
 {
@@ -171,10 +178,10 @@ static bool creds_ensure(void)
     return s_creds_ready;
 }
 
-static void llm_key_invalidate(void)
+static void key_invalidate(int ix)
 {
-    free(s_llm_key_cache);
-    s_llm_key_cache = NULL;
+    free(s_key_cache[ix].cache);
+    s_key_cache[ix].cache = NULL;
 }
 
 static char *s_settings_cache;         /* T30: settings JSON 缓存(PSRAM) */
@@ -204,32 +211,45 @@ const char *pair_server_profile_settings(void)
     return s_settings_cache;
 }
 
-/* ai_session 注入的解析器: credstore "llm.api_key" 优先; 返回串由
- * 本缓存持有(会话存续期有效; 轮换经 invalidate 刷新) */
-const char *pair_server_llm_key(void)
+/* 通用凭据解析器(ix: 0=LLM 1=voice; 未配置返回 NULL → Kconfig 兜底) */
+static const char *cred_key_resolved(int ix)
 {
     if (!creds_ensure()) return NULL;
-    int ver = credstore_version(&s_creds, "llm.api_key");
+    int ver = credstore_version(&s_creds, s_key_names[ix]);
     if (ver < 0) {
-        llm_key_invalidate();
+        key_invalidate(ix);
         return NULL;                       /* 未配置 → Kconfig 兜底 */
     }
-    if (s_llm_key_cache != NULL && s_llm_key_ver == (uint32_t)ver) {
-        return s_llm_key_cache;
+    if (s_key_cache[ix].cache != NULL &&
+        s_key_cache[ix].ver == (uint32_t)ver) {
+        return s_key_cache[ix].cache;
     }
     char *buf = heap_caps_malloc(CRED_VALUE_MAX, MALLOC_CAP_SPIRAM |
                                  MALLOC_CAP_8BIT);
     if (buf == NULL) return NULL;
     size_t n = 0;
-    if (credstore_get(&s_creds, "llm.api_key", buf, CRED_VALUE_MAX, &n)
+    if (credstore_get(&s_creds, s_key_names[ix], buf, CRED_VALUE_MAX, &n)
         != CRED_RES_OK) {
         free(buf);
         return NULL;
     }
-    free(s_llm_key_cache);
-    s_llm_key_cache = buf;
-    s_llm_key_ver = (uint32_t)ver;
-    return s_llm_key_cache;
+    free(s_key_cache[ix].cache);
+    s_key_cache[ix].cache = buf;
+    s_key_cache[ix].ver = (uint32_t)ver;
+    return s_key_cache[ix].cache;
+}
+
+/* ai_session 注入的解析器: credstore 键优先; 返回串由本缓存持有
+ * (会话存续期有效; 轮换经 invalidate 刷新) */
+const char *pair_server_llm_key(void)
+{
+    return cred_key_resolved(0);
+}
+
+/* B-6a: 语音域密钥(ASR/TTS/RT 独立于 LLM; 未配置 → Kconfig 兜底) */
+const char *pair_server_voice_key(void)
+{
+    return cred_key_resolved(1);
 }
 
 static uint64_t now_ms(void *ud)

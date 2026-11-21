@@ -32,6 +32,8 @@ bool pair_server_running(void);
 /* T17: LLM 密钥 provider(ai_session 注入; credstore "llm.api_key"
  * 优先, 未配置返回 NULL → Kconfig 兜底); 串由本组件缓存持有 */
 const char *pair_server_llm_key(void);
+/* B-6a: 语音域密钥(ASR/TTS/RT; 与 LLM 可属不同供应商) */
+const char *pair_server_voice_key(void);
 
 /* T30: settings blob JSON 文本(llmprofile 来源; 未配置返回 NULL) */
 const char *pair_server_profile_settings(void);

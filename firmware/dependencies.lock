@@ -105,26 +105,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.6.2
-  espressif/esp_efc_codec:
-    component_hash: bdc1dbad6d848773bad7e57b603e1b04cb46137ea15a3bad3c18095563b30ef9
-    dependencies:
-    - matches:
-      - if: $CONFIG{ESP_EFC_LVGL_WIDGET} == True
-      name: lvgl/lvgl
-      registry_url: https://components.espressif.com
-      require: public
-      version: '>=9,<10'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32
-    - esp32s3
-    - esp32p4
-    - esp32c3
-    - esp32c6
-    - esp32s31
-    version: 1.1.0
   espressif/esp_extractor:
     component_hash: d2e99ae3e45f2d3b0b35d5615e0ef32d5b813daed6f79253aab94b6e76445086
     dependencies: []
@@ -151,29 +131,6 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.0.4
-  espressif/esp_hosted:
-    component_hash: c88052665d8df3c7185cb5e34327d77674599006bbbbe4bfdb43c44f9a2a73a3
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=5.5'
-    source:
-      registry_url: https://components.espressif.com/
-      type: service
-    targets:
-    - esp32
-    - esp32c2
-    - esp32s2
-    - esp32s3
-    - esp32c3
-    - esp32c5
-    - esp32c6
-    - esp32c61
-    - esp32h2
-    - esp32h4
-    - esp32h21
-    - esp32p4
-    version: 3.0.10
   espressif/esp_lcd_co5300:
     component_hash: 1a5cbaa0069c3c72c238e5a1eb32ec9dd390ec1c7c46b24bf44b9037f2fe6c56
     dependencies:
@@ -335,9 +292,7 @@ direct_dependencies:
 - espressif/esp-sr
 - espressif/esp_audio_codec
 - espressif/esp_codec_dev
-- espressif/esp_efc_codec
 - espressif/esp_hls_stream
-- espressif/esp_hosted
 - espressif/esp_lcd_co5300
 - espressif/esp_lcd_touch
 - espressif/esp_lvgl_port
@@ -345,5 +300,5 @@ direct_dependencies:
 - espressif/network_provisioning
 - idf
 manifest_hash: 626332dd72104448ee5fb701e83baba9d6e0752772d292e5d4109ed751c6f6b5
-target: esp32p4
+target: esp32s31
 version: 3.0.0

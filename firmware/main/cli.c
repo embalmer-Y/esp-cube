@@ -738,6 +738,12 @@ static void handle_line(char *line)
     } else if (strcmp(line, "pairstop") == 0) {
         pair_server_stop();
         printf("  pair server stopped\n");
+    } else if (strncmp(line, "say ", 4) == 0) {
+        /* B-6a TTS 诊断: say <文本> 直走 announce 带外播报(验证
+         * TTS wss+音频出; 与深思 speak 同通道) */
+        extern esp_err_t ai_session_announce(const char *text);
+        printf("  say: %s\n",
+               ai_session_announce(line + 4) == ESP_OK ? "已受理" : "失败");
     } else if (strncmp(line, "tlserr", 6) == 0) {
         /* B-6a TLS 排障: mbedtls 错误码人话解码(tlserr 87 -> -0x0087) */
         int code = arg != NULL ? (int)strtol(arg, NULL, 16) : 0;

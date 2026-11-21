@@ -133,6 +133,19 @@ static volatile bool s_st_pending;             /* 注入待武装(见 EVT_WAKE) 
  * 未注入/无凭据 → Kconfig 编译期值(byok 现状) */
 static const char *(*s_key_fn)(void);
 void ai_session_set_api_key_provider(const char *(*fn)(void)) { s_key_fn = fn; }
+
+/* B-6a: 语音域密钥(ASR/TTS/RT)。LLM 与语音可属不同供应商——单键会
+ * 把跨供应商 JWT 喂给语音端点(板上实证 401 拒 upgrade, §55.30)。 */
+static const char *(*s_voice_key_fn)(void);
+void ai_session_set_voice_key_provider(const char *(*fn)(void))
+{
+    s_voice_key_fn = fn;
+}
+static const char *voice_key_resolve(void)
+{
+    const char *k = s_voice_key_fn != NULL ? s_voice_key_fn() : NULL;
+    return (k != NULL && k[0] != '\0') ? k : CONFIG_ESP_CUBE_AI_API_KEY;
+}
 static const char *key_resolve(void)
 {
     const char *k = s_key_fn != NULL ? s_key_fn() : NULL;
@@ -514,7 +527,7 @@ static bool on_llm_sent(void *user, const char *sentence, bool final)
     /* TTS 懒开: 唤醒路径下 ASR 已收线, 此刻开 TTS 免双 TLS 并发
      * (esp-aes DMA 描述符争抢, 2026-11-11 板上实测互撞超时) */
     if (!s_tts_opened) {
-        s_tts_cfg.api_key = key_resolve();   /* T17: 凭据优先 */
+        s_tts_cfg.api_key = voice_key_resolve();  /* T17+B-6a: 语音键 */
         if (profile_resolve()) {             /* T30: profile 覆盖 TTS */
             if (s_prof.tts_model[0]) s_tts_cfg.model = s_prof.tts_model;
             if (s_prof.tts_voice[0]) {
@@ -678,7 +691,7 @@ static void rt_ensure(void)
     if (ks_rt_ok()) return;
     ks_rt_close();
     if (s_rt_ring == NULL) return;
-    s_rt_cfg.api_key = key_resolve();        /* T17: 凭据优先(L5 注入) */
+    s_rt_cfg.api_key = voice_key_resolve();  /* T17+B-6a: 语音键 */
     if (ks_rt_open(&s_rt_cfg, &s_rt_ev) == 0) {
         ESP_LOGI(TAG, "rt fast-line up (%s)", CONFIG_ESP_CUBE_AI_RT_VOICE);
     } else {
@@ -1248,7 +1261,7 @@ static void session_task(void *arg)
             set_state(AI_LISTENING);
             struct ks_asr_cfg acfg = {
                 .url = AI_DASHSCOPE_URL,
-                .api_key = key_resolve(),
+                .api_key = voice_key_resolve(),   /* T17+B-6a: 语音键 */
                 .model = CONFIG_ESP_CUBE_AI_ASR_MODEL,
                 .sample_rate = AI_MIC_RATE,
             };

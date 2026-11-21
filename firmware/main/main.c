@@ -170,6 +170,7 @@ void app_main(void)
     register_ai_skills();                   /* L5 技能注入(先于会话启动) */
     /* T17: LLM 密钥经配对管理通道(credstore)优先, Kconfig 兜底 */
     ai_session_set_api_key_provider(pair_server_llm_key);
+    ai_session_set_voice_key_provider(pair_server_voice_key);   /* B-6a */
     ai_session_set_profile_provider(pair_server_profile_settings);
     esp_err_t aerr = ai_session_start();
     if (aerr != ESP_OK) {
