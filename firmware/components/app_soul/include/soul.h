@@ -61,6 +61,11 @@ void soul_on_voice(void);            /* 内置 ≥5s 限频(总线回调可直�
  * 缺席轮=无剂量(引擎规则表不受影响)。 */
 void soul_appraisal_submit(const struct soul_appraisal *a);
 
+/* 深思结算漏斗(B-6c, §14.2-1 收口): think_task 以此回灌 kf/ku
+ * (enum sm_settle 值+秒时基), soul tick 单写者执法 sm_settle。
+ * 取代跨任务直调 sm_settle(单字段竞态 v1 偏差)。 */
+void soul_settle_post(uint8_t s, uint32_t now_s);
+
 /* ---- trait 慢变量注入(S2.5b persona 持久化; act_gate 调用) ----
  * 建角色(genesis)/角色加载后由 persona owner 推入; 内部 trait_set
  * (band 钳位+调制面重算)。越界维拒绝整包(false)。 */

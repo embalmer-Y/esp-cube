@@ -106,6 +106,11 @@ static volatile uint32_t s_mood_seq;      /* 奇数=待施 */
 static struct soul_appraisal s_appr;
 static volatile uint32_t s_appr_seq;      /* 奇数=待施 */
 
+/* B-6c 深思结算漏斗(§14.2-1 收口: sm_settle 收敛回 soul tick 单写者;
+ * 值=sm_settle+1, 0=无 pending) */
+static volatile uint8_t s_settle_pend;
+static volatile uint32_t s_settle_s;
+
 /* ---- 快照(读写短临界区) ---- */
 struct soul_snap {
     struct kd_output drive;
@@ -291,6 +296,13 @@ void soul_appraisal_submit(const struct soul_appraisal *a)
     s_appr = *a;                    /* 单飞单写者: 序号升奇前写完 */
     s_appr_seq++;                   /* 奇数槽=待施(单写者序, 同 mood 槽) */
     if ((s_appr_seq & 1) == 0) s_appr_seq++;
+}
+
+/* ---- 深思结算漏斗(B-6c, §14.2-1 收口; think_task 调, tick 消费) ---- */
+void soul_settle_post(uint8_t s, uint32_t now_s)
+{
+    s_settle_s = now_s;
+    s_settle_pend = (uint8_t)(s + 1);   /* 0=无 pending(编码错开) */
 }
 
 /* ---- 消费出口 ---- */
@@ -558,6 +570,13 @@ static void soul_task(void *arg)
         } else if (p & PEND_VOICE) {
             s_pend &= ~PEND_VOICE;
             evt = KD_EVT_VOICE;
+        }
+
+        /* 2.5) 深思结算漏斗消费(B-6c: sm_settle 同任务执法, §14.2-1
+         * 收口——kf/ku 回灌不再跨任务直写) */
+        if (s_settle_pend) {
+            sm_settle((enum sm_settle)(s_settle_pend - 1), s_settle_s);
+            s_settle_pend = 0;
         }
 
         /* 3) 驱力: quiet = AI idle 且播放器停/电台待机(rest 恢复口径) */

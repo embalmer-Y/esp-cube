@@ -104,7 +104,9 @@ struct sm_state {
     float avail;            /* kb 可用度[0,1](DND=0)            */
     float e_frustrate;      /* max(0, 0.55−kf)                  */
     float s_kl;             /* 最近一次交互间隔 KL 惊奇[0,1]    */
-    uint8_t tokens;         /* 令牌桶余量                       */
+    uint8_t tokens;         /* 令牌桶余量(钳 0; 债不显)         */
+    float tokens_raw;       /* B-6c: 真实桶值(透支债为负, §14.2-6
+                             * "透支债遥测钳显 0"收口——债可见) */
 };
 
 /* 复位(中性: 桶满/台账空/kf=0.5) */

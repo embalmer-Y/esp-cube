@@ -415,6 +415,7 @@ void sm_snapshot(struct sm_state *out)
                            : 0.0f;
     out->s_kl = s_skl;
     out->tokens = (uint8_t)clampf(s_tb.tokens, 0.0f, 255.0f);
+    out->tokens_raw = s_tb.tokens;   /* 透支债为负(遥测可见, §14.2-6) */
 }
 
 /* ---- 仲裁器 + 令牌桶(docs/24 §4.2) ----

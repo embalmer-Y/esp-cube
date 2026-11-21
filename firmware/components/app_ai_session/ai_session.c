@@ -168,11 +168,6 @@ static uint64_t now_ms_v(void)
 {
     return (uint64_t)(esp_timer_get_time() / 1000);
 }
-static sg_epochs_t cur_epochs(void)
-{
-    sg_epochs_t e = { cact_persona_epoch(cact_default()), 0 };
-    return e;
-}
 static bool profile_resolve(void)
 {
     s_prof_valid = false;

@@ -488,7 +488,7 @@ static void think_task(void *arg)
         if (s_brain(prompt, reply, sizeof(reply)) != 0 || !reply[0]) {
             ESP_LOGW(TAG, "LLMFAIL deliberation");
             ki_settle2(KI_SETTLE_SILENT);
-            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+            soul_settle_post((uint8_t)SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
                                                        / 1000000LL));
             s_last_silent = true;
             goto out;
@@ -502,7 +502,7 @@ static void think_task(void *arg)
                            &fixed_len)) {
             ESP_LOGW(TAG, "JSONFIX fail → silent");
             ki_settle2(KI_SETTLE_SILENT);
-            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+            soul_settle_post((uint8_t)SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
                                                        / 1000000LL));
             s_last_silent = true;
             goto out;
@@ -520,7 +520,7 @@ static void think_task(void *arg)
         if (pe != KI_PARSE_OK && pe != KI_PARSE_CONTENT_LONG) {
             ESP_LOGW(TAG, "REJECT parse=%d", (int)pe);   /* 拒非降级 */
             ki_settle2(KI_SETTLE_SILENT);
-            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+            soul_settle_post((uint8_t)SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
                                                        / 1000000LL));
             s_last_silent = true;
             goto out;
@@ -530,7 +530,7 @@ static void think_task(void *arg)
             ESP_LOGI(TAG, "SILENT conf=%.2f reason=%.32s",
                      intent.confidence, intent.reason);
             ki_settle2(KI_SETTLE_SILENT);
-            sm_settle(SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
+            soul_settle_post((uint8_t)SM_SETTLE_SILENT, (uint32_t)(esp_timer_get_time()
                                                        / 1000000LL));
             s_last_silent = true;
             s_last_silent_score = s_trig_score;
@@ -634,12 +634,12 @@ static void think_task(void *arg)
         }
         if (s_voice_seen) {
             ki_settle2(KI_SETTLE_RESPONDED);
-            sm_settle(SM_SETTLE_RESPONDED, (uint32_t)(esp_timer_get_time()
+            soul_settle_post((uint8_t)SM_SETTLE_RESPONDED, (uint32_t)(esp_timer_get_time()
                                                           / 1000000LL));
             ESP_LOGI(TAG, "SETTLE responded");
         } else {
             ki_settle2(KI_SETTLE_IGNORED);
-            sm_settle(SM_SETTLE_IGNORED, (uint32_t)(esp_timer_get_time()
+            soul_settle_post((uint8_t)SM_SETTLE_IGNORED, (uint32_t)(esp_timer_get_time()
                                                         / 1000000LL));
             /* ku 遗留意图武装(B-6a): 说了没人应=意图挂账, 老化增势
              * (×1.02^Δmin)至下次冲动窗; 用户再回应即清(R2) */
