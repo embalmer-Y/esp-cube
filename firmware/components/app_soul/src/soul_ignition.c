@@ -138,52 +138,9 @@ uint16_t ki_cooldown_current(void)
 	return s_cooldown;
 }
 
-/* ---- W3：思维触发闸（纯函数；全部状态由 ctx 供给，评审 C3 纪律） ---- */
-
-#ifndef KI_MEM_HOOK_T
-#define KI_MEM_HOOK_T	0.5f	/* km 检索 top1 触发阈（分数≤1.0：
-				 * recency 0.5 + strength 0.3 + 命中 0.2） */
-#endif
-
-void ki_think_gate(const struct ki_think_ctx *ctx,
-		   struct ki_think_gate *out)
-{
-	bool idle, low_ar, salient;
-
-	if (!ctx || !out)
-		return;
-	memset(out, 0, sizeof(*out));
-
-	idle = ctx->urgency_max <= 0.0f && !ctx->pending_command;
-	low_ar = ctx->arousal < 0.1f;       /* 2σ 带锚（p4_beta 冻结） */
-	salient = ctx->score >= KI_SALIENT_T;
-
-	out->reason_mask =
-		(idle ? 1u << 0 : 0) | (low_ar ? 1u << 1 : 0) |
-		(ctx->bin_changed ? 1u << 2 : 0) |
-		(salient ? 1u << 3 : 0) |
-		(ctx->new_event ? 1u << 4 : 0) |
-		(ctx->mem_hook >= KI_MEM_HOOK_T ? 1u << 5 : 0);
-	out->trigger = idle || low_ar || ctx->bin_changed || salient ||
-		       ctx->new_event ||
-		       ctx->mem_hook >= KI_MEM_HOOK_T;
-	if (!out->trigger)
-		return;
-
-	if (ctx->quiet_hours)
-		out->blocked_mask |= 1u << 0;
-	if (ctx->now_min - ctx->last_think_min < KI_THINK_GAP_MIN)
-		out->blocked_mask |= 1u << 1;
-	if (ctx->thought_today >= KI_THINK_DAILY_MAX)
-		out->blocked_mask |= 1u << 2;
-	/* 新意门：上轮沉默后，无跃迁/新事件、分数无起色 → 不再想 */
-	if (ctx->last_was_silent && !ctx->bin_changed &&
-	    !ctx->new_event && ctx->score <= ctx->last_silent_score)
-		out->blocked_mask |= 1u << 3;
-
-	if (out->blocked_mask)
-		out->trigger = false;
-}
+/* [S5→B-6a 退役] W3 思维触发闸 ki_think_gate 已删: 触发面由 soul_motiv
+ * sm_gate 六维显著性仲裁取代(docs/24 §4.2/§14)。本文件保留意图解析
+ * (ki_intent_parse)+决策门(ki_intent_fire)+结算(ki_settle2)。 */
 
 /* ---- 意图解析（拒非降级；零依赖手解固定 schema） ---- */
 

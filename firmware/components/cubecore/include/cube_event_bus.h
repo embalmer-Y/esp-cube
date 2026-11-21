@@ -36,6 +36,8 @@ typedef enum {
     CUBE_EVT_STREAM_TITLE,   /* ICY StreamTitle, payload: char*(临时) */
     /* 音频 */
     CUBE_EVT_VOLUME_CHANGED, /* payload: int(0-100) */
+    /* 触摸(B-6a 喂点: 按下边沿发一次, payload: NULL; soul 桥 sm_event) */
+    CUBE_EVT_TOUCH,
     /* 语音 AI */
     CUBE_EVT_WAKE_DETECTED,  /* 唤醒词命中 */
     CUBE_EVT_VOICE_CMD,      /* 本地命令词, payload: int(app_voice_cmd_t) */

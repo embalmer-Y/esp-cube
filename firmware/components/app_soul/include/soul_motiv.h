@@ -121,6 +121,11 @@ void sm_settle(enum sm_settle s, uint32_t now_s);
 bool sm_question_open(uint8_t slot, float w, uint32_t open_t0_s);
 void sm_question_close(uint8_t slot);
 
+/* kb net 方程(B-6a): speak 硬门=说话中/勿扰(其余模型自决, §55.29);
+ * net=ku×avail−cost 仅遥测(冲动经济学观察值) */
+bool sm_speak_allow(void);
+float sm_speak_net(void);
+
 /* ku 遗留意图槽武装(B-6: 深思产出的未执行意图; s=意图强[0,1])。
  * IGNORED 结算即清仓(R2 被忽即清仓, docs/24 §4.1) */
 void sm_intent_arm(float s, uint32_t now_s);

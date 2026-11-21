@@ -23,6 +23,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,6 +42,10 @@ typedef struct {
     char tts_model[LP_MODEL_MAX];
     char tts_voice[LP_VOICE_MAX];
     bool tools;                    /* false=纯文本(工具安全降级) */
+    int8_t no_think;               /* B-6a: -1=未设(回退 Kconfig 全局默认)
+                                    * 0=开思考 1=关思考(sp_llm no_think 字段;
+                                    * MiniMax M3.1 关思考=空输出, 板上实测
+                                    * §55.30 —— 思考型模型必须显式开) */
 } llm_profile_t;
 
 /* 解析 settings blob; 返回有效 profile 数(0=无有效, 负=JSON 根错误);

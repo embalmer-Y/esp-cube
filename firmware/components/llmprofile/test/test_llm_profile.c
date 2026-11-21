@@ -50,6 +50,9 @@ static void scenario_two_profiles(void)
     CHECK(strcmp(ps[1].id, "mock2") == 0 && !ps[1].tools,
           "profile1 tools=false");
     CHECK(ps[1].tts_model[0] == '\0', "optional tts omitted");
+    /* B-6a: no_think 三态(缺省 -1=回退全局; 显式 true/false) */
+    CHECK(ps[0].no_think == -1 && ps[1].no_think == -1,
+          "no_think unset → -1");
 
     /* 切换: active=mock2 → 命中 #1 */
     CHECK(llm_profiles_pick(ps, n, active) == 1, "pick active #1");
@@ -62,6 +65,20 @@ static void scenario_two_profiles(void)
 
 static void scenario_invalid_items(void)
 {
+    /* B-6a: no_think 显式解析 */
+    const char *nt =
+        "{\"active\":\"a\",\"profiles\":["
+        "{\"id\":\"a\",\"llm_url\":\"https://x\",\"llm_model\":\"m\","
+        "\"no_think\":false},"
+        "{\"id\":\"b\",\"llm_url\":\"https://y\",\"llm_model\":\"m\","
+        "\"no_think\":true}]}";
+    llm_profile_t ps[LP_PROFILE_MAX];
+    char active[LP_ID_MAX];
+    int n = llm_profiles_parse(nt, ps, LP_PROFILE_MAX, active);
+    CHECK(n == 2, "no_think profiles parsed");
+    CHECK(ps[0].no_think == 0 && ps[1].no_think == 1,
+          "no_think explicit 0/1");
+
     /* 无效条目剔除: url 非法 / id 缺失 / 模型缺失 */
     const char *json =
         "{\"active\":\"bad\",\"profiles\":["
@@ -69,13 +86,13 @@ static void scenario_invalid_items(void)
         "{\"id\":\"\",\"llm_url\":\"https://x\",\"llm_model\":\"m\"},"
         "{\"id\":\"good1\",\"llm_url\":\"https://x\",\"llm_model\":\"m\"},"
         "{\"id\":\"bad2\",\"llm_url\":\"https://x\"}]}";
-    llm_profile_t ps[LP_PROFILE_MAX];
-    char active[LP_ID_MAX];
-    int n = llm_profiles_parse(json, ps, LP_PROFILE_MAX, active);
+    llm_profile_t pi[LP_PROFILE_MAX];
+    char iactive[LP_ID_MAX];
+    n = llm_profiles_parse(json, pi, LP_PROFILE_MAX, iactive);
     CHECK(n == 1, "only valid survives");
-    CHECK(strcmp(ps[0].id, "good1") == 0, "survivor is good1");
+    CHECK(strcmp(pi[0].id, "good1") == 0, "survivor is good1");
     /* active 指向被剔除条目 → 回退 */
-    CHECK(llm_profiles_pick(ps, n, active) == 0, "pruned-active fallback");
+    CHECK(llm_profiles_pick(pi, n, iactive) == 0, "pruned-active fallback");
     CHECK(llm_profile_validate(NULL) < 0, "validate NULL");
 }
 

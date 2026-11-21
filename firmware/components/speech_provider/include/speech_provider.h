@@ -157,6 +157,11 @@ struct ks_llm_cfg_v2 {
 				 * 不含 system(v2 内部前置);
 				 * 含工具轮回传的 role:"tool" 项      */
 	cJSON *tools;		/* OpenAI tools 数组, 可 NULL(纯文本)   */
+	cJSON *response_format;	/* 结构化输出(B-6a): json_schema/
+				 * json_object 对象, 调用方持有且
+				 * 只读(v2 不改), 可 NULL(纯文本;
+				 * provider 不支持时 HTTP 4xx 由
+				 * 调用方探测降级) */
 	bool cut_clauses;
 	bool no_think;
 	/* 工具参数流式提示(可 NULL): 模型吐 tool_calls 的 arguments 期间,

@@ -27,7 +27,8 @@ extern "C" {
 #endif
 
 #define CRED_NAME_MAX   32
-#define CRED_VALUE_MAX  512
+#define CRED_VALUE_MAX  1024 /* B-6a: MiniMax JWT 实测 690B, 512 装不下
+                              * (凭据通道扩容; NVS blob 上限 ~4KB 内) */
 #define CRED_COUNT_MAX  8
 
 /* 结果码 */

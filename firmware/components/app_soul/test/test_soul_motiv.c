@@ -273,6 +273,26 @@ static void golden_p_gate(void)
 	TEST_ASSERT_EQUAL_INT(0, g.reason_mask);
 }
 
+/* B-6a: kb net 硬门(说话中/勿扰拒, 其余模型自决; net 仅遥测) */
+static void golden_speak_net(void)
+{
+	sm_reset();
+	/* 说话中(ai_active)=∞ 硬门 */
+	sm_ctx(false, true, false);
+	TEST_ASSERT_FALSE(sm_speak_allow());
+	/* 勿扰态拒 */
+	sm_ctx(true, false, false);
+	sm_tick(60);
+	TEST_ASSERT_FALSE(sm_speak_allow());
+	/* 平静空闲: 模型自决(ku 低也放行, §55.29 自由度) */
+	sm_ctx(false, false, false);
+	sm_tick(120);
+	TEST_ASSERT_TRUE(sm_speak_allow());
+	/* net 遥测值域 sanity: 无用户态 cost=0 → net=ku ∈ [0,1.5] */
+	float net = sm_speak_net();
+	TEST_ASSERT_TRUE(net >= -1.0f && net <= 1.5f);
+}
+
 void motiv_tests_main(void)
 {
 	UNITY_BEGIN();
@@ -283,5 +303,6 @@ void motiv_tests_main(void)
 	RUN_TEST(golden_arbiter_tokens);
 	RUN_TEST(golden_gate_channels);
 	RUN_TEST(golden_p_gate);
+	RUN_TEST(golden_speak_net);
 	UNITY_END();
 }

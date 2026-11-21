@@ -93,6 +93,7 @@ static char s_round_reply[96];
 /* ---- L0 环境感知漏斗(总线回调置位, tick 消费) ---- */
 static volatile bool s_evt_net_up, s_evt_net_down;
 static volatile bool s_evt_sd, s_evt_timesync, s_evt_player_chg;
+static volatile bool s_evt_wake, s_evt_touch;   /* B-6a 喂点桥 */
 static bool s_time_synced;             /* SNTP 后才有"勿扰时段"裁决权 */
 static int  s_prev_playing;            /* 上一拍播放位(跃迁检测) */
 
@@ -119,6 +120,9 @@ static uint64_t s_last_active_tick;        /* 最近非 IDLE 拍(idle 计时) */
 /* soul_mem record/boot 声明已收进 soul.h(批次 44, 免手写 extern 漂移) */
 /* soul_think 弱耦合(同上) */
 extern bool soul_think_fire(uint8_t reason, bool forced, float score);
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+extern void soul_think_round_answered(void);   /* B-6a: kc 问句闭合 */
+#endif
 
 /* ---- 灵魂 2.0: 表情三层决策(Phase1 实装; S2 升级 docs/24 §2.3) ----
  * L0 快反射: 会话事件拍 → 瞬态段(播完回底色, ui 侧 8s 回拉);
@@ -203,6 +207,11 @@ static void soul_evt_cb(cube_evt_id_t id, const void *data, size_t len,
         s_evt_net_up = true;             /* 边沿去重在 tick 消费侧 */
     } else if (id == CUBE_EVT_WIFI_DISCONNECTED) {
         s_evt_net_down = true;
+    } else if (id == CUBE_EVT_WAKE_DETECTED) {
+        /* B-6a 喂点: 唤醒词命中(U=1.0 最高突发事件, docs/24 §14.2-6) */
+        s_evt_wake = true;
+    } else if (id == CUBE_EVT_TOUCH) {
+        s_evt_touch = true;
     } else if (id == CUBE_EVT_SD_READY) {
         s_evt_sd = true;
     } else if (id == CUBE_EVT_TIME_SYNCED) {
@@ -406,6 +415,18 @@ static void perception_consume(void)
         s_evt_sd = false;
         soul_bb_salience(0.4f);
     }
+    /* B-6a 喂点: WAKE(U=1.0 最高突发, ku 余辉 0.6) / TOUCH(U=0.35,
+     * ku 余辉 0.2; docs/24 §14.2-6 板上未活两源接通) */
+    if (s_evt_wake) {
+        s_evt_wake = false;
+        sm_event(SM_EVT_WAKE, (uint32_t)s_ticks);
+        soul_bb_salience(0.8f);
+    }
+    if (s_evt_touch) {
+        s_evt_touch = false;
+        sm_event(SM_EVT_TOUCH, (uint32_t)s_ticks);
+        soul_bb_set(SOUL_BB_TOUCH, 1.0f);   /* 黑板触摸因子(τ60s 衰减) */
+    }
     if (s_evt_timesync) {
         s_evt_timesync = false;
         s_time_synced = true;          /* 此后勿扰时段才有裁决权 */
@@ -504,6 +525,9 @@ static void soul_task(void *arg)
             evt = KD_EVT_ROUND_OK;
             face_evt_transient(KD_EVT_ROUND_OK);
             sm_event(SM_EVT_ROUND_OK, (uint32_t)s_ticks);
+#if CONFIG_ESP_CUBE_SOUL_PROACTIVE
+            soul_think_round_answered();   /* B-6a: 轮答=深思遗留问句闭合 */
+#endif
             round_now = round_ok = true;
             strlcpy(ru, s_round_user, sizeof(ru));
             strlcpy(rr, s_round_reply, sizeof(rr));

@@ -511,6 +511,12 @@ int ks_llm_chat_v2(const struct ks_llm_cfg_v2 *cfg, ks_llm_sent_cb cb,
 		cJSON_AddStringToObject(root, "tool_choice", "auto");
 		cJSON_AddBoolToObject(root, "parallel_tool_calls", false);
 	}
+	/* 结构化输出(B-6a): response_format 透传(调用方持有;
+	 * json_schema strict / json_object 两种, provider 不支持时
+	 * HTTP 4xx 由调用方探测降级) */
+	if (cfg->response_format)
+		cJSON_AddItemReferenceToObject(root, "response_format",
+					       cfg->response_format);
 	s = cJSON_PrintUnformatted(root);
 	cJSON_Delete(root);
 	if (!s)

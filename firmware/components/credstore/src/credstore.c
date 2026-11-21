@@ -188,7 +188,7 @@ int credstore_get(credstore_t *c, const char *name,
     char rel[CRED_NAME_MAX + 8];
     snprintf(rel, sizeof(rel), "cred/%s", name);
     size_t n = 0;
-    char buf[CRED_VALUE_MAX + 1];               /* 写侧含 NUL 最长 513B, cap 给满 */
+    char buf[CRED_VALUE_MAX + 1];               /* 写侧含 NUL 最长 1025B(B-6a 扩容), cap 给满 */
     int rc = store_crypt_read(&c->crypt, rel, buf, sizeof(buf), &n);
     if (rc == 1) return CRED_RES_NOTFND;        /* 无 blob */
     if (rc == -1) return CRED_RES_ERR;          /* 批次 44: IO/cap 不足 ≠ AUTH, 不得摘目录(512B 值曾被误删) */

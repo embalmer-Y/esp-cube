@@ -313,6 +313,29 @@ static void kb_derive(uint32_t now_s)
     }
 }
 
+/* kb net 方程(B-6a 落地, docs/24 §4.1 + §55.29 自由度裁决修订):
+ * net = ku×avail − cost(FREE=1/ATTENDED=0.6/其他 0)。
+ * **执法面按用户裁决收窄**: 说话中(∞ 硬门)与勿扰态才拒 speak——
+ * 成本阈值不拦截(多说少说由模型自决, §55.29), net 仅作遥测观察
+ * 值随 EXEC 日志留痕(冲动经济学数据积累, 供后续反思轮/校准用)。 */
+bool sm_speak_allow(void)
+{
+    if (!s_inited)
+        sm_reset();
+    if (s_kb_in.ai_active)
+        return false;                    /* 说话中=∞ 硬门 */
+    return s_kb != SM_KB_DND;            /* 勿扰拒; 其余态模型自决 */
+}
+
+float sm_speak_net(void)
+{
+    if (!s_inited)
+        sm_reset();
+    float cost = s_kb == SM_KB_FREE ? s_cfg.kb_cost_free
+                : s_kb == SM_KB_ATTENDED ? s_cfg.kb_cost_attended : 0.0f;
+    return s_ku_cache * s_avail - cost;  /* 遥测观察值(不执法) */
+}
+
 void sm_tick(uint32_t now_s)
 {
     if (!s_inited)

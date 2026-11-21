@@ -300,6 +300,10 @@ static void tp_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     if (pressed) {
         s_last_x = pt[0].x;
         s_last_y = pt[0].y;
+        /* 按下边沿发触摸事件(B-6a 喂点: soul sm_event TOUCH 桥;
+         * 30fps 轮询去抖=按住只发一次) */
+        if (!s_tp_down)
+            cube_event_publish(CUBE_EVT_TOUCH, NULL, 0);
         s_tp_down = true;
     } else if (s_tp_down) {
         s_tp_down = false;

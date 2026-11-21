@@ -93,9 +93,11 @@ enum ki_act {
 
 #define KI_CONTENT_MAX	80	/* UTF-8 字节钳位（超长截断+留痕）    */
 #define KI_CONF_FLOOR	0.5f	/* 置信下限：<0.5 → stay_silent      */
-#define KI_THINK_GAP_MIN	10u	/* 思维最小间隔（分钟；云钱节流） */
-#define KI_THINK_DAILY_MAX	12u	/* 日思维帽                    */
-#define KI_SALIENT_T	0.50f	/* salient 判据线（=t_low 锚）        */
+
+/* [S5→B-6a 退役] ki_think_gate/ki_think_ctx/ki_think_gate 结构与
+ * KI_THINK_GAP_MIN/KI_THINK_DAILY_MAX/KI_SALIENT_T 宏已删——触发面
+ * 由 soul_motiv sm_gate 六维显著性仲裁取代(docs/24 §4.2/§14)。
+ * 深思节流(间隔/日帽)现由 sm 令牌桶与 ki_fire 门承担。 */
 
 /* 深思产出（29 号 §9.5；单槽意图=OwnedGoal 退化版） */
 struct ki_intent {
@@ -107,40 +109,6 @@ struct ki_intent {
 					 * 3 dialog 4 bin（C-5 移植）      */
 	char reason[64];                /* 叙事锚："它为什么开口"          */
 };
-
-/* 思维触发闸输入（全部调用方供给 → 纯函数零静态，评审 C3 纪律） */
-struct ki_think_ctx {
-	float arousal;          /* ke 九维感受态 arousal                */
-	float urgency_max;      /* kd error_max（W0-1 供给）            */
-	bool pending_command;   /* 会话进行中/待处理（pending 只挡 idle）*/
-	bool quiet_hours;       /* 勿扰（思维也省云）                   */
-	bool bin_changed;       /* 影响分箱跃迁沿（SELF_REPORT 范本）   */
-	bool new_event;         /* 上轮后新事件（充电/承诺/新记忆）     */
-	uint32_t now_min;       /* 单调分钟（W3 用 uptime；SNTP 后换钟）*/
-	uint32_t last_think_min;
-	uint8_t thought_today;
-	float score;            /* ki_step 五因子分（salient 输入）     */
-	float last_silent_score;/* 上轮沉默时分数（"新意"门基准）       */
-	bool last_was_silent;
-	float mem_hook;         /* W4 记忆钩子：km 语境 top1 分数（0=无库
-				 * /未接；>KI_MEM_HOOK_T 触发，plan §5R.5.6） */
-};
-
-struct ki_think_gate {
-	bool trigger;           /* 进思维轮（唯一"点火"语义）           */
-	uint8_t reason_mask;    /* bit0 idle 1 low_arousal 2 bin 3 salient
-				 * 4 new_event 5 mem_hook              */
-	uint8_t blocked_mask;   /* bit0 quiet 1 interval 2 daily_cap
-				 * 3 no_new_info                       */
-};
-
-/* 触发判据（slow_clock 平移）：驱力空闲（urgency≤0∧无 pending）∨
- * 低唤起（arousal<0.1）∨ 分箱跃迁 ∨ salient ∨ 新事件；
- * 预算：间隔 10min/日帽 12（思维=云调用，Galatea 无此件、产品必需）；
- * 新意门：上轮沉默后，无跃迁/新事件/显著分变化 → 不再想（治"反复
- * 自愿沉默但云钱照花"，thought.py 收敛判据移植）。 */
-void ki_think_gate(const struct ki_think_ctx *ctx,
-		   struct ki_think_gate *out);
 
 /* LLM 意图解析：机械校验+钳位，**拒非降级**（schema 违例绝不猜）。
  * 期望单行 JSON：{"act":"speak","content":"…","confidence":0.8,

@@ -3,6 +3,13 @@
 # (IDF 按 IDF_TARGET 自动加载); 板卡选择见 Kconfig ESP_CUBE_BOARD。
 # 说明: 若个别选项名在 v6.1 中有变化, 编译时会以警告忽略, 届时按 menuconfig 实际项修正。
 
+# ---- TLS 记录缓冲(禁止下调, §55.30 案 2) ----
+# 入站记录缓冲必须 ≥16384(TLS 最大记录长): 出站客户端要整收服务器
+# 证书链记录(实测 MiniMax/DashScope 4324B)。历史 IN=1536 手工缩水曾致
+# 出站 TLS 客户端全灭(-0x0087 BUFFER_TOO_SMALL), 入站短证书链不暴露。
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
+
 # ---- 主频/系统(主频值在分目标文件) ----
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
@@ -41,3 +48,5 @@ CONFIG_LV_FONT_MONTSERRAT_28=y
 
 # ---- 配对通道(T15): 客户端证书可选模式(配对阶段无证书) ----
 CONFIG_ESP_TLS_SERVER_MIN_AUTH_MODE_OPTIONAL=y
+
+

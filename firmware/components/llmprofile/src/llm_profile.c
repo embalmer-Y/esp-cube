@@ -58,6 +58,11 @@ int llm_profiles_parse(const char *json, llm_profile_t out[], int max,
             const cJSON *tl = cJSON_GetObjectItem(it, "tools");
             p.tools = (tl == NULL || !cJSON_IsBool(tl)) ? true
                       : cJSON_IsTrue(tl);
+            /* B-6a: no_think 三态(缺省 -1=回退 Kconfig 全局默认) */
+            const cJSON *nt = cJSON_GetObjectItem(it, "no_think");
+            p.no_think = (nt == NULL || !cJSON_IsBool(nt))
+                             ? -1
+                             : (cJSON_IsTrue(nt) ? 1 : 0);
             if (llm_profile_validate(&p) != 0) continue;   /* 剔除无效条目 */
             if (n < max) {
                 out[n++] = p;

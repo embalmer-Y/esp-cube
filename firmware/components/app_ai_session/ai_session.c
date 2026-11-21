@@ -299,26 +299,129 @@ static bool deliberate_cb(void *user, const char *sent, bool final)
     return true;
 }
 
+/* B-6a: no_think 三态解析(profile 显式 > Kconfig 全局默认;
+ * MiniMax M3.1 思考型关思考=空输出板上实测 §55.30) */
+static bool prof_no_think(void)
+{
+    if (s_prof_valid && s_prof.no_think >= 0)
+        return s_prof.no_think == 1;
+#if CONFIG_ESP_CUBE_AI_LLM_DISABLE_THINKING
+    return true;
+#else
+    return false;
+#endif
+}
+
+/* ---- 深思结构化输出模式状态机(B-6a, docs/24 §5.2) ----
+ * 探测梯: json_schema strict → json_object → plain+容错(soul_jsonfix)。
+ * 模式静态缓存(探测一次, HTTP 4xx/空 content 即降级; 板上
+ * qwen3.8-flash 属 json_schema 支持系)。v1 边界: 判据=HTTP 成功且
+ * content 非空, 深思侧解析失败不回流降级(jsonfix 兜底, 99.9% 实测)。 */
+enum deliberate_mode { DM_SCHEMA = 0, DM_JSON_OBJ, DM_PLAIN, DM_CNT };
+
+static cJSON *s_think_schema;        /* 思思输出 json_schema(常驻) */
+
+static cJSON *think_schema_get(void)
+{
+    if (s_think_schema != NULL) return s_think_schema;
+    cJSON *rf = cJSON_CreateObject();
+    cJSON *js = cJSON_AddObjectToObject(rf, "json_schema");
+    cJSON_AddStringToObject(js, "name", "think_action");
+    cJSON *sch = cJSON_AddObjectToObject(js, "schema");
+    cJSON_AddStringToObject(sch, "type", "object");
+    cJSON *props = cJSON_AddObjectToObject(sch, "properties");
+    cJSON *a = cJSON_AddObjectToObject(props, "act");
+    cJSON_AddStringToObject(a, "type", "string");
+    cJSON *aenum = cJSON_AddArrayToObject(a, "enum");
+    const char *acts[] = { "speak", "stay_silent", "face", "music" };
+    for (int i = 0; i < 4; i++) {
+        cJSON *e = cJSON_CreateString(acts[i]);
+        cJSON_AddItemToArray(aenum, e);
+    }
+    cJSON *ct = cJSON_AddObjectToObject(props, "content");
+    cJSON_AddStringToObject(ct, "type", "string");
+    cJSON *cf = cJSON_AddObjectToObject(props, "confidence");
+    cJSON_AddStringToObject(cf, "type", "number");
+    cJSON *ev = cJSON_AddObjectToObject(props, "evidence");
+    cJSON_AddStringToObject(ev, "type", "array");
+    cJSON *evi = cJSON_AddObjectToObject(ev, "items");
+    cJSON_AddStringToObject(evi, "type", "string");
+    cJSON *rs = cJSON_AddObjectToObject(props, "reason");
+    cJSON_AddStringToObject(rs, "type", "string");
+    cJSON *req = cJSON_AddArrayToObject(sch, "required");
+    const char *reqs[] = { "act", "content", "confidence",
+                           "evidence", "reason" };
+    for (int i = 0; i < 5; i++) {
+        cJSON *e = cJSON_CreateString(reqs[i]);
+        cJSON_AddItemToArray(req, e);
+    }
+    cJSON_AddBoolToObject(sch, "additionalProperties", false);
+    cJSON_AddBoolToObject(js, "strict", true);
+    s_think_schema = rf;
+    return rf;
+}
+
 int ai_session_deliberate(const char *system_prompt, char *reply, size_t cap)
 {
     if (system_prompt == NULL || reply == NULL || cap == 0) return -1;
     reply[0] = '\0';
-    struct deliberate_ctx c = { .buf = reply, .off = 0, .cap = cap };
-    struct ks_llm_cfg cfg = {
-        .url = CONFIG_ESP_CUBE_AI_LLM_URL,
-        .api_key = key_resolve(),
-        .model = CONFIG_ESP_CUBE_AI_LLM_MODEL,
-        .system = system_prompt,
-        .user_msg = "(内心思考)",
-        .cut_clauses = false,
-#if CONFIG_ESP_CUBE_AI_LLM_DISABLE_THINKING
-        .no_think = true,
-#else
-        .no_think = false,
-#endif
-    };
-    int rc = ks_llm_chat(&cfg, deliberate_cb, &c, NULL);
-    return (rc == 0 && reply[0]) ? 0 : -1;
+    /* llmprofile 同源(B-6a: 深思与对话轮同配置, persona 级 LLM 生效) */
+    const char *url = CONFIG_ESP_CUBE_AI_LLM_URL;
+    const char *model = CONFIG_ESP_CUBE_AI_LLM_MODEL;
+    if (profile_resolve() && s_prof_valid) {
+        if (s_prof.llm_url[0]) url = s_prof.llm_url;
+        if (s_prof.llm_model[0]) model = s_prof.llm_model;
+    }
+    /* 模式梯: 静态缓存, 自当前档起试, 失败即降(降后缓存) */
+    static enum deliberate_mode mode = DM_SCHEMA;
+    for (int attempt = 0; attempt < DM_CNT; attempt++) {
+        struct deliberate_ctx c = { .buf = reply, .off = 0, .cap = cap };
+        if (mode >= DM_PLAIN) {
+            struct ks_llm_cfg cfg = {
+                .url = url,
+                .api_key = key_resolve(),
+                .model = model,
+                .system = system_prompt,
+                .user_msg = "(内心思考)",
+                .cut_clauses = false,
+                .no_think = prof_no_think(),
+            };
+            int rc = ks_llm_chat(&cfg, deliberate_cb, &c, NULL);
+            return (rc == 0 && reply[0]) ? 0 : -1;
+        }
+        /* json_schema / json_object 档: v2 + response_format */
+        static cJSON *json_obj_fmt;     /* {"type":"json_object"} 常驻 */
+        if (mode == DM_JSON_OBJ && json_obj_fmt == NULL) {
+            json_obj_fmt = cJSON_CreateObject();
+            cJSON_AddStringToObject(json_obj_fmt, "type", "json_object");
+        }
+        cJSON *msgs = cJSON_CreateArray();
+        cJSON *m = cJSON_CreateObject();
+        cJSON_AddStringToObject(m, "role", "user");
+        cJSON_AddStringToObject(m, "content", "(内心思考)");
+        cJSON_AddItemToArray(msgs, m);
+        struct ks_llm_cfg_v2 cfg = {
+            .url = url,
+            .api_key = key_resolve(),
+            .model = model,
+            .system = system_prompt,
+            .messages = msgs,
+            .response_format = mode == DM_SCHEMA
+                                   ? think_schema_get() : json_obj_fmt,
+            .cut_clauses = false,
+            .no_think = prof_no_think(),
+        };
+        int rc = ks_llm_chat_v2(&cfg, deliberate_cb, NULL, &c);
+        cJSON_Delete(msgs);
+        if (rc == 0 && reply[0])
+            return 0;
+        /* 降档(HTTP 4xx/空 content; content 空坑=thinking+schema 已知) */
+        mode = (enum deliberate_mode)(mode + 1);
+        ESP_LOGW(TAG, "deliberate mode -> %d (rc=%d empty=%d)",
+                 (int)mode, rc, reply[0] == '\0');
+        reply[0] = '\0';
+    }
+    return -1;
 }
 
 /* TTS 音色热切(音色甄选台调 CLI / persona 配置): 断当前会话令下轮
@@ -874,11 +977,7 @@ static void run_round(const char *user_text)
             .tools = prof_tools ? tools : NULL,
             .args_cb = on_llm_args,             /* 流式参数: filler+预取 */
             .cut_clauses = true,
-            #if CONFIG_ESP_CUBE_AI_LLM_DISABLE_THINKING
-            .no_think = true,
-#else
-            .no_think = false,
-#endif
+            .no_think = prof_no_think(),
         };
         int rc = ks_llm_chat_v2(&lcfg, on_llm_sent, on_llm_tool, &tc);
         if (s_abort_req) break;

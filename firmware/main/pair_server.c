@@ -361,7 +361,8 @@ static void unload_certs(void)
 typedef struct {
     char path[48];
     char method[8];                    /* 请求行动词(GET/PUT/DELETE/POST) */
-    char body[900];
+    char body[2048];                   /* B-6a: hex 编码值翻倍, 900 装
+                                         * 不下 690B JWT(→1380 hex) */
     int body_len;
 } pair_req_t;
 

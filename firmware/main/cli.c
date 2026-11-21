@@ -46,6 +46,9 @@
 #include "mem_budget.h"
 #include "nvs.h"
 #include "esp_http_client.h"
+#include "esp_crt_bundle.h"
+#include "mbedtls/error.h"
+#include "mbedtls/ssl.h"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
@@ -218,7 +221,8 @@ static void cmd_wget(const char *arg)
     if (n < 2 && slash != NULL) {
         snprintf(rel, sizeof(rel), "face/%s", slash + 1);
     }
-    esp_http_client_config_t hc = { .url = url, .timeout_ms = 15000 };
+    esp_http_client_config_t hc = { .url = url, .timeout_ms = 15000,
+                                    .crt_bundle_attach = esp_crt_bundle_attach };
     esp_http_client_handle_t c = esp_http_client_init(&hc);
     if (c == NULL) { printf("  http init fail\n"); return; }
     esp_err_t e = esp_http_client_open(c, 0);
@@ -734,6 +738,16 @@ static void handle_line(char *line)
     } else if (strcmp(line, "pairstop") == 0) {
         pair_server_stop();
         printf("  pair server stopped\n");
+    } else if (strncmp(line, "tlserr", 6) == 0) {
+        /* B-6a TLS 排障: mbedtls 错误码人话解码(tlserr 87 -> -0x0087) */
+        int code = arg != NULL ? (int)strtol(arg, NULL, 16) : 0;
+        if (code > 0) {
+            char eb[120];
+            mbedtls_strerror(-code, eb, sizeof(eb));
+            printf("  tlserr -0x%04X: %s\n", code, eb);
+        } else {
+            printf("  用法: tlserr <hex 不带负号与 0x>\n");
+        }
     } else if (strcmp(line, "baseline") == 0) {
         /* T44 基线采集: N×500ms 采样内存/任务水位 → P50/P95/P99 */
         int n = arg != NULL ? atoi(arg) : 20;

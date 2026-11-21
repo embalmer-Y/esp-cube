@@ -58,6 +58,7 @@ static esp_err_t (*s_speak)(const char *text);
 
 static volatile bool s_busy;
 static volatile bool s_voice_seen;
+static uint8_t s_q_opened;      /* B-6a: 深思问句已开槽位图(kc 台账) */
 static uint8_t  s_reason;
 static bool     s_forced;
 static float    s_trig_score;
@@ -184,6 +185,8 @@ static const char *const s_face_vocab[] = {
     "sigh", "yawn", "asleep", "ponder", "question", "music", "leisure",
     "mock", "snigger", "confident", "investigate", "yummy", "mute",
     "badminton",
+    NULL,                    /* 哨兵(板验 P0: 缺席=越界读 rodata 垃圾
+                              * 进 vfprintf %s → Load access fault) */
 };
 
 static const struct cap_param s_p_speak[] = {
@@ -205,38 +208,52 @@ static const struct cap_cmd s_caps[] = {
 #define CAP_N (sizeof(s_caps) / sizeof(s_caps[0]))
 
 /* act 枚举句: "speak(说一句话)/stay_silent(什么都不做)/…" */
+/* 板验 P0 教训(§55.30): 词表数组必须 NULL 哨兵收尾; 组装器的
+ * snprintf 返回值(截断时=全文长度)可推 o 越过 n → n-o 下溢→越界
+ * 写。两处防线: 每次写入前 clamp 到 n-1, 写后 o 超 n-1 即止。 */
+static size_t sn_cat(char *out, size_t n, size_t o, const char *fmt,
+                     const char *a1)
+{
+    if (o >= n - 1 || n == 0)
+        return o;
+    int w = snprintf(out + o, n - o, fmt, a1);
+    if (w < 0)
+        return o;
+    return o + (size_t)w;
+}
+
 static void caps_act_line(char *out, size_t n)
 {
     size_t o = 0;
-    for (size_t i = 0; i < CAP_N && o + 1 < n; i++)
-        o += (size_t)snprintf(out + o, n - o, "%s%s(%s)",
-                              i ? "/" : "", s_caps[i].id, s_caps[i].desc);
+    for (size_t i = 0; i < CAP_N && o + 1 < n; i++) {
+        o = sn_cat(out, n, o, "%s", i ? "/" : "");
+        o = sn_cat(out, n, o, "%s", s_caps[i].id);
+        o = sn_cat(out, n, o, "(%s)", s_caps[i].desc);
+    }
 }
 
 /* 参数规则句: "speak=那句话; face=段名(smile|…); music=next(切台)…" */
 static void caps_rule_line(char *out, size_t n)
 {
-    char voc[176];
+    char voc[192];
     size_t o = 0;
     bool first = true;
     for (size_t i = 0; i < CAP_N && o + 1 < n; i++) {
         const struct cap_cmd *c = &s_caps[i];
         if (c->n_params == 0 || c->params == NULL)
             continue;                  /* stay_silent 无参数规则 */
-        o += (size_t)snprintf(out + o, n - o, "%s%s=",
-                              first ? "" : "; ", c->id);
+        o = sn_cat(out, n, o, first ? "%s=" : "; %s=", c->id);
         first = false;
         for (uint8_t k = 0; k < c->n_params && o + 1 < n; k++) {
             const struct cap_param *p = &c->params[k];
             if (p->vocab != NULL) {
                 size_t v = 0;
                 for (size_t w = 0; p->vocab[w] != NULL && v + 1 < sizeof(voc); w++)
-                    v += (size_t)snprintf(voc + v, sizeof(voc) - v,
-                                          "%s%s", w ? "|" : "",
-                                          p->vocab[w]);
-                o += (size_t)snprintf(out + o, n - o, p->desc, voc);
+                    v = sn_cat(voc, sizeof(voc), v, w ? "|%s" : "%s",
+                               p->vocab[w]);
+                o = sn_cat(out, n, o, p->desc, voc);  /* desc 含 %s 吃 voc */
             } else {
-                o += (size_t)snprintf(out + o, n - o, "%s", p->desc);
+                o = sn_cat(out, n, o, "%s", p->desc);
             }
         }
     }
@@ -413,6 +430,17 @@ static void act_normalize(char *reply, size_t cap)
     }
 }
 
+/* B-6a: 用户轮答=深思遗留问句闭合(kc 台账清源, soul.c ROUND_OK 拍调) */
+void soul_think_round_answered(void)
+{
+    for (uint8_t q = 0; q < 8; q++) {
+        if (s_q_opened & (1u << q)) {
+            sm_question_close(q);
+            s_q_opened &= (uint8_t)~(1u << q);
+        }
+    }
+}
+
 /* ---- 深思任务(常驻, notify 门控, 单飞) ---- */
 static void think_task(void *arg)
 {
@@ -538,6 +566,15 @@ static void think_task(void *arg)
         ESP_LOGI(TAG, "EXEC act=%d %s (%.2f) %s",
                  (int)intent.act, intent.content, intent.confidence,
                  intent.reason);
+        /* kb net 硬门(B-6a): 说话中/勿扰态拒 speak(其余模型自决,
+         * net 遥测留痕); 被拒=本轮回沉默(非降级) */
+        if (intent.act == KI_SPEAK && !sm_speak_allow()) {
+            ESP_LOGW(TAG, "speak: kb net gate(说话中/勿扰), net=%.2f",
+                     sm_speak_net());
+            ki_settle2(KI_SETTLE_GATE_BLOCKED);
+            s_last_silent = true;
+            goto out;
+        }
         bool executed = act_execute(&intent);
         if (executed)
             sb_charge(bcat, now_s);    /* 记账只对真实出口(P1: 拒动词不烧配额) */
@@ -547,6 +584,19 @@ static void think_task(void *arg)
             strlcpy(s_last_content, intent.content, sizeof(s_last_content));
             s_last_content_min = now;
             goto settled;
+        }
+        /* kc 台账喂入(B-6a): speak 以问句收尾=遗留问题开槽(蒸发 τ8h,
+         * 用户下一轮对话即闭合; docs/24 §4.1 待解问题台账) */
+        size_t clen = strlen(intent.content);
+        if (clen > 0 && (intent.content[clen - 1] == '?' ||
+                         strstr(intent.content, "？") != NULL)) {
+            for (uint8_t q = 0; q < 8; q++) {
+                if (sm_question_open(q, 0.2f, now_s)) {
+                    s_q_opened |= 1u << q;
+                    ESP_LOGI(TAG, "kc question slot %u open", q);
+                    break;
+                }
+            }
         }
         /* speak: 播后观察窗 */
         s_voice_seen = false;
@@ -563,6 +613,10 @@ static void think_task(void *arg)
             ki_settle2(KI_SETTLE_IGNORED);
             sm_settle(SM_SETTLE_IGNORED, (uint32_t)(esp_timer_get_time()
                                                         / 1000000LL));
+            /* ku 遗留意图武装(B-6a): 说了没人应=意图挂账, 老化增势
+             * (×1.02^Δmin)至下次冲动窗; 用户再回应即清(R2) */
+            sm_intent_arm(0.5f, (uint32_t)(esp_timer_get_time()
+                                              / 1000000LL));
             ESP_LOGW(TAG, "SETTLE ignored, cooldown=%umin",
                      ki_cooldown_current());
         }
