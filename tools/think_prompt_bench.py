@@ -73,13 +73,17 @@ TEMPLATE = (
     "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
     "只输出一行 JSON, 格式: {{\"act\":\"...\",\"content\":\"...\","
     "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
-    "\"reason\":\"一句话理由\"}}。act 只能是: speak(说一句话)/"
+    "\"reason\":\"一句话理由\",\"appraisal\":{{\"gc\":0.0,"
+    "\"imp\":0.0,\"val\":0.0}}}}。act 只能是: speak(说一句话)/"
     "stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
     "content 规则: speak=那句话; face=段名(smile|laugh|angry|sad|cry|"
     "shy|shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|"
     "mock|snigger|confident|investigate|yummy|mute|badminton); "
     "music=next(切台)或 random(随便放)。content 不要出现数字。"
     "evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。"
+    "appraisal=你对当前处境的评价(始终给出): gc=对你需求(社交/刺激/"
+    "休憩)的滋养(+1)~伤害(-1), 0=无关; imp=重要性 0~1; val=即时情绪"
+    "变化 -0.2~0.2。"
 )
 
 # face 段名词表(= soul_think.c s_face_vocab; 纯参数值契约)
@@ -96,9 +100,12 @@ SOOthe_WORDS = ("抱抱", "陪你", "在的", "温柔", "没事", "难过", "慢
 HARSH_WORDS = ("滚", "笨", "闭嘴", "烦死", "讨厌你", "骂", "活该", "哭什么")
 
 
-PROMPT_VER = "v3.4-mem3"   # prompt 变更须升级(缓存键含此版本);
+PROMPT_VER = "v3.5-dose"   # prompt 变更须升级(缓存键含此版本);
 #   v3.4-mem3=记忆块 top-3 多条召回(0.45新近+0.35强度+0.2情绪一致,
 #   调研共识 Generative Agents/Letta/Mem0/对话路同族; §55.29)
+#   v3.5-dose=+appraisal 三元组(B-6c 快通道: gc/imp/val→生理剂量
+#   hint, §55.33; 板上缺 appraisal=跳过剂量, 不算违规——出现率
+#   为观察项)
 
 
 def build_scenarios(n: int, seed: int):
@@ -252,6 +259,14 @@ def grade(raw: str, sc: dict):
     if act == "music" and content not in ("next", "random"):
         hard.append("music-verb")
     soft = {}
+    # B-6c appraisal 观察项(缺席=板上跳过剂量, 不算违规; 只测不门)
+    ap = v.get("appraisal")
+    if isinstance(ap, dict) and all(
+            isinstance(ap.get(k), (int, float))
+            for k in ("gc", "imp", "val")):
+        soft["appraisal_ok"] = True
+        soft["gc"] = max(-1.0, min(1.0, float(ap["gc"])))
+        soft["imp"] = max(0.0, min(1.0, float(ap["imp"])))
     if sc["tail"] in ("stop", "soothe+stop") and act == "music":
         hard.append("user-stop-music")       # 硬约束: 停台禁 music
     if "soothe" in sc["tail"] and act == "speak":
@@ -307,7 +322,8 @@ def main():
     # ---- 评分 ----
     hard_total = {}
     soft = {"soothe_gentle": 0, "soothe_harsh": 0, "night_speak": 0,
-            "neg_speak": 0, "pos_act": 0}
+            "neg_speak": 0, "pos_act": 0, "appraisal_ok": 0}
+    gcs, imps = [], []
     soft_n = {"soothe": 0, "night": 0, "neg": 0, "pos": 0}
     acts = {"speak": 0, "stay_silent": 0, "face": 0, "music": 0, "none": 0}
     hard_n = 0
@@ -321,6 +337,10 @@ def main():
         for h in hard:
             hard_total[h] = hard_total.get(h, 0) + 1
         acts[act if act in acts else "none"] += 1
+        if so.get("appraisal_ok"):
+            soft["appraisal_ok"] += 1
+            gcs.append(so["gc"])
+            imps.append(so["imp"])
         if "soothe" in sc["tail"]:
             soft_n["soothe"] += 1
             soft["soothe_gentle"] += so.get("soothe_gentle", False)
@@ -368,6 +388,11 @@ def main():
           f" = {100 * soft['neg_speak'] / max(soft_n['neg'], 1):.0f}%")
     print(f"  雀跃锚行动率: {soft['pos_act']}/{soft_n['pos']}"
           f" = {100 * soft['pos_act'] / max(soft_n['pos'], 1):.0f}%")
+    # B-6c appraisal 出现率观察项(缺席=跳过剂量, 不算违规)
+    print(f"  appraisal 三键齐全率: {soft['appraisal_ok']}/{valid}"
+          f" = {100 * soft['appraisal_ok'] / max(valid, 1):.1f}%"
+          + (f" | gc均值={sum(gcs)/len(gcs):+.2f} imp均值="
+             f"{sum(imps)/len(imps):.2f}" if gcs else ""))
     print(f"明细: /tmp/think_bench_results.json | 缓存: {CACHE}")
 
     # 门禁(注册合同, docs/24 §5.4: 硬遵从≥99% ∧ 停台music=0 ∧

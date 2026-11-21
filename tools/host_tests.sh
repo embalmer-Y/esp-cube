@@ -60,6 +60,23 @@ else
     fi
 fi
 
+echo "== [1b-2] 深思 appraisal 快通道(B-6c; 剂量映射=soul_arms dose_of 同构) =="
+CJSON=firmware/managed_components/espressif__cjson/cJSON
+if [ ! -f "$CJSON/cJSON.c" ]; then
+    echo "SKIP: $CJSON/cJSON.c 不在(managed_components 未拉取; 本地 idf.py build 后自动可用)"
+else
+    gcc -std=c11 -g -O1 -fsanitize=address,undefined -Wall -Wextra \
+        -Wno-unused-parameter \
+        -I firmware/components/app_soul/include \
+        -I "$CJSON" \
+        -o /tmp/test_soul_dose \
+        firmware/components/app_soul/test/test_soul_dose.c \
+        firmware/components/app_soul/src/soul_dose.c \
+        "$CJSON/cJSON.c" -lm
+    if [ $? -ne 0 ]; then echo "BUILD FAIL: test_soul_dose"; FAIL=1;
+    else /tmp/test_soul_dose || FAIL=1; fi
+fi
+
 echo "== [1c] R3 表达区分度验收(docs/24 R3/S1; soul_sim 三场景月测; 目标态) =="
 python3 -I tools/soul_accept.py
 rc=$?

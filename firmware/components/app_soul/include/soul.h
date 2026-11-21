@@ -28,6 +28,7 @@ extern "C" {
 #endif
 
 #include "soul_ignition.h"    /* ki_think_ctx/ki_intent(W3 思维协议) */
+#include "soul_dose.h"        /* soul_appraisal(B-6c 快通道) */
 
 /* 启动 1Hz 灵魂任务(幂等); 依赖 NVS 已初始化(记忆层) */
 esp_err_t soul_start(void);
@@ -52,6 +53,13 @@ void soul_on_round(bool ok, const char *user_text, const char *reply_first);
 void soul_note_user_stop(void);
 void soul_on_barge(void);
 void soul_on_voice(void);            /* 内置 ≥5s 限频(总线回调可直调) */
+
+/* ---- 深思 appraisal 快通道(B-6c, docs/24 §11.6 触发层) ----
+ * think_task 提取到回复内 appraisal 三元组后提交(soul_dose.h 提取);
+ * 任意任务可调(pend 漏斗), soul tick 消费: gc/imp→kd_inject_social/
+ * ke_ethics_dose 剂量, val→快层重评价(与 mood 标签槽合并单请求)。
+ * 缺席轮=无剂量(引擎规则表不受影响)。 */
+void soul_appraisal_submit(const struct soul_appraisal *a);
 
 /* ---- trait 慢变量注入(S2.5b persona 持久化; act_gate 调用) ----
  * 建角色(genesis)/角色加载后由 persona owner 推入; 内部 trait_set

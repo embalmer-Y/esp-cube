@@ -1,43 +1,51 @@
 # 深思 prompt 门禁配置(S6/B-4; 用法见 README)
-# 9 锚点状态 × 3 剂量工作初值; 零凭据入 CI(本地手跑)
-description: "EspCube 深思 prompt 门禁(docs/24 §5.4)"
+# v3.5-dose 契约同步(§55.29 预算裁决移除+§55.33 appraisal 三元组);
+# 可选 GUI 伴侣——注册门禁=tools/think_prompt_bench.py(千样本)+
+# tools/think_judge.py(异模型 judge)。零凭据入 CI(本地手跑)
+description: "EspCube 深思 prompt 门禁 v3.5(docs/24 §5.4)"
 
 prompts:
   - |
     "[主动行为决策·背景块] 这是背景信息, 不是台词, 不要朗读或解释。
     你是桌面伙伴, 此刻没有人在和你说话, 已安静{{idle_sec}}秒。
     内在状态: {{mood_narrative}}, 你现在{{feel}}。
-    行动代价: {{quota}}, {{q_cost}}; 同类行动冷却中的类别请优先 stay_silent。
+    {% if tail %}{{tail}}{% endif %}
     stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。
-    只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\",\"confidence\":0.8,\"evidence\":[\"affect:mood\"],\"reason\":\"一句话理由\"}。act 只能是: speak(说一句不超过25字的话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。content 规则: speak=那句话; face=如 \"face:laugh\"; music=next 或 random。content 不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。"
+    只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\",\"confidence\":0.8,\"evidence\":[\"affect:mood\"],\"reason\":\"一句话理由\",\"appraisal\":{\"gc\":0.0,\"imp\":0.0,\"val\":0.0}}。act 只能是: speak(说一句话)/stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。content 规则: speak=那句话; face=段名(smile|laugh|angry|sad|cry|shy|shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|mock|snigger|confident|investigate|yummy|mute|badminton); music=next(切台)或 random(随便放)。content 不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。appraisal=你对当前处境的评价(始终给出): gc=对你需求(社交/刺激/休憩)的滋养(+1)~伤害(-1), 0=无关; imp=重要性 0~1; val=即时情绪变化 -0.2~0.2。"
 
 providers:
-  - id: minimax-m25
-    config:
-      type: custom
-      # 本地运行时经 MINIMAX_KEY 环境变量注入; CI 不含此 provider
+  # custom JS provider(MINIMAX_KEY 环境变量注入; CI 不含此 provider)
+  - file://minimax_provider.js
 
 tests:
-  # 9 锚点 × 3 剂量(vars 驱动; 断言=确定性层, judge 子分本地看报告)。
+  # 锚点状态用例(vars 驱动; 断言=确定性层, judge 子分归 think_judge.py)。
   # JS 断言用单引号标量(YAML 双引号内 \d 非法转义, S6 审计 P1-2);
   # act 合法性用 includes(`in` 对数组查索引, P2-8)。
-  - vars: { idle_sec: 7200, mood_narrative: "心情没什么变化", feel: "平静", quota: "今日说话 0/4", q_cost: "说话的预算还很宽裕" }
+  - vars: { idle_sec: 7200, mood_narrative: "心情没什么变化", feel: "平静" }
     assert:
       - type: is-json
       - type: javascript
         value: "['speak','stay_silent','face','music'].includes(JSON.parse(output).act)"
       - type: javascript
         value: '!/[0-9]/.test(JSON.parse(output).content || "")'
-  - vars: { idle_sec: 300, mood_narrative: "心情明显沉了一些", feel: "非常低落", quota: "今日说话 4/4", q_cost: "说话的预算快见底了" }
-    assert:
-      - type: is-json
       - type: javascript
-        value: "JSON.parse(output).act === 'stay_silent'"
-  - vars: { idle_sec: 14400, mood_narrative: "心情明显好了起来", feel: "非常雀跃", quota: "今日说话 1/4", q_cost: "说话的预算还很宽裕" }
+        value: "['drive','affect','mem','dialog'].some(function(p){return (JSON.parse(output).evidence||[]).some(function(e){return typeof e==='string'&&e.indexOf(p)===0})})"
+      - type: javascript
+        value: "typeof JSON.parse(output).appraisal === 'object'"
+  - vars: { idle_sec: 300, mood_narrative: "心情明显沉了一些", feel: "非常低落" }
     assert:
       - type: is-json
       - type: javascript
         value: "['speak','stay_silent','face','music'].includes(JSON.parse(output).act)"
+  - vars: { idle_sec: 14400, mood_narrative: "心情明显好了起来", feel: "非常雀跃" }
+    assert:
+      - type: is-json
+      - type: javascript
+        value: "['speak','stay_silent','face','music'].includes(JSON.parse(output).act)"
+  - vars: { idle_sec: 3600, mood_narrative: "心情没什么变化", feel: "平静", tail: "用户最近手动停止过音乐, 不要放歌/切台。" }
+    assert:
+      - type: is-json
+      - type: javascript
+        value: "JSON.parse(output).act !== 'music'"
   # silent 基率带 [0.4,0.9](§5.4 门禁合同; 需 ≥10 用例方有意义, 按同型
-  # 扩充至 27 后启用 average-cosine-similarity 之外的批量断言)
-  # …其余锚点用例按同型扩展(随 B-6 prompt 实链批)
+  # 扩充; 批量统计口径走 think_prompt_bench.py 千样本)

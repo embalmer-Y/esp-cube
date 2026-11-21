@@ -10,12 +10,14 @@
 #   tools/genesis.py --describe "角色描述文本" [--out persona.json]
 #   tools/genesis.py --interview [--out persona.json]   # 交互式 3 问
 #
-# 偏差入册(docs/24 §11.5 路B: InCharacter 用异模型 judge 89% 一致):
-#   当前仅有 MiniMax 单供应商密钥 → judge 与面试官同模型但**上下文完全
-#   隔离**(judge 只看画像+锚点表, 不见面试过程)。异模型 judge 待多供
-#   应商接入后升级(B-4/S6 一并)。
+# judge 模型(docs/24 §11.5 路B: InCharacter 用异模型 judge 89% 一致):
+#   **异模型 judge 已接线**(B-6c, §12.2-4 偏差收口): judge 走 DashScope
+#   qwen(第二供应商), 面试官仍 MiniMax——供应商双隔离+上下文隔离双保险。
+#   DashScope key 缺席时回退 MiniMax 同模型隔离上下文(旧偏差形态, 日志
+#   注记)。另见深思输出 judge: tools/think_judge.py(同源异模型)。
 #
 # 密钥: /home/emb/key/minimax.txt(M Plan JWT, 不入库); 端点 api.minimax.cn
+#       /home/emb/key/aliyun.txt(DashScope, judge 侧, 不入库)
 import argparse
 import base64
 import json
@@ -24,12 +26,17 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEY_FILE = "/home/emb/key/minimax.txt"
 HOST = "https://api.minimax.cn/v1/text/chatcompletion_v2"
 MODEL = "MiniMax-M2.5"
+JUDGE_KEY_FILE = "/home/emb/key/aliyun.txt"
+JUDGE_URL = ("https://dashscope.aliyuncs.com/compatible-mode/v1/"
+             "chat/completions")
+JUDGE_MODEL = "qwen-plus"
 
 DIMS = ["好奇", "温情", "活力", "主见", "韧性"]
 KEYS = ["C", "W", "E", "A", "R"]
@@ -66,6 +73,36 @@ ANCHORS = {
 _key = open(KEY_FILE).read().strip()
 _gid = json.loads(base64.urlsafe_b64decode(
     _key.split(".")[1] + "==")).get("GroupID", "")
+
+
+def judge_llm(prompt: str, temperature: float = 0.4) -> str:
+    """异模型 judge 通道(DashScope qwen); key 缺席=回退 MiniMax 隔离"""
+    if os.path.exists(JUDGE_KEY_FILE):
+        jkey = open(JUDGE_KEY_FILE).read().strip()
+        body = json.dumps({"model": JUDGE_MODEL, "messages":
+                           [{"role": "user", "content": prompt}],
+                           "max_tokens": 3000,
+                           "temperature": temperature}).encode()
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    JUDGE_URL, data=body,
+                    headers={"Content-Type": "application/json",
+                             "Authorization": "Bearer " + jkey})
+                d = json.loads(urllib.request.urlopen(req, timeout=120)
+                               .read())
+                content = (d.get("choices") or [{}])[0].get(
+                    "message", {}).get("content", "")
+                if content:
+                    return content
+            except Exception as e:
+                if attempt == 2:
+                    raise SystemExit(f"judge LLM fail: {e}")
+                time.sleep(2 * (attempt + 1))
+        raise SystemExit("judge LLM no-content")
+    print("  注: DashScope key 缺席, judge 回退 MiniMax 同模型隔离上下文"
+          "(偏差形态复现)")
+    return llm(prompt, temperature)
 
 
 def llm(prompt: str, temperature: float = 0.7) -> str:
@@ -116,7 +153,7 @@ def judge_traits(profile: str) -> dict:
         "\n\n只输出一行 JSON:\n"
         '{"好奇": <1-5 整数>, "温情": <1-5>, "活力": <1-5>, '
         '"主见": <1-5>, "韧性": <1-5>, "依据": "<一句话>"}')
-    out = llm(prompt, temperature=0.4)
+    out = judge_llm(prompt, temperature=0.4)
     m = re.search(r"\{[^{}]*\}", out, re.S)
     if not m:
         raise SystemExit(f"judge 无 JSON: {out[:200]}")

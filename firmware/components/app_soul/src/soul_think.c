@@ -297,11 +297,14 @@ static bool act_execute(const struct ki_intent *it)
     return false;   /* KI_STAY_SILENT: 无行动(一等输出) */
 }
 
-/* ---- 深思 prompt v3.3(S6/D1+§55.29 两轮审阅修订, docs/24 §5.1/§5.4):
+/* ---- 深思 prompt v3.5(S6/D1+§55.29 两轮审阅+§55.33 appraisal 契约,
+ * docs/24 §5.1/§5.4/§11.6):
  * 背景块六维=人格一句/时空+时段/环境/情绪三段式/记忆闪回(用户选型),
  * 预算叙事移除(多说少说模型自决, sb 记账不执法); 行动词表/参数规则
- * 由能力注册表生成; content=纯参数值(命令 id 由归一层折入分发)。
- * JSON schema 契约与 v2 一致(容错恢复面=soul_jsonfix)。 */
+ * 由能力注册表生成; content=纯参数值(命令 id 由归一层折入分发);
+ * v3.5 += appraisal 三元组(B-6c 快通道: LLM 评价=dose_hint, 固定映射
+ * 进引擎注入口; 保守形态=规则表剂量主通道不变)。
+ * JSON schema 容错恢复面=soul_jsonfix。 */
 static void think_prompt(char *buf, size_t n)
 {
     soul_state_t st;
@@ -372,9 +375,13 @@ static void think_prompt(char *buf, size_t n)
         "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
         "只输出一行 JSON, 格式: {\"act\":\"...\",\"content\":\"...\","
         "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
-        "\"reason\":\"一句话理由\"}。act 只能是: %s。"
+        "\"reason\":\"一句话理由\",\"appraisal\":{\"gc\":0.0,"
+        "\"imp\":0.0,\"val\":0.0}}。act 只能是: %s。"
         "content 规则: %s。content "
-        "不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。",
+        "不要出现数字。evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。"
+        "appraisal=你对当前处境的评价(始终给出): gc=对你需求(社交/刺激/"
+        "休憩)的滋养(+1)~伤害(-1), 0=无关; imp=重要性 0~1; val=即时情绪"
+        "变化 -0.2~0.2。",
         who,
         st.idle_sec, tod,
         env,
@@ -448,7 +455,7 @@ static void think_reflect_run(void);   /* B-6b: 定义在 fire 区 */
 /* ---- 深思任务(常驻, notify 门控, 单飞) ---- */
 static void think_task(void *arg)
 {
-    static char prompt[1600];
+    static char prompt[2048];   /* v3.5 appraisal 契约扩容(1600 边缘) */
     static char reply[THINK_REPLY_MAX];
 
     (void)arg;
@@ -471,6 +478,11 @@ static void think_task(void *arg)
             goto out;
         }
         think_prompt(prompt, sizeof(prompt));
+        {
+            int pw = (int)strlen(prompt);
+            if (pw >= (int)sizeof(prompt) - 1)
+                ESP_LOGW(TAG, "prompt near/truncated (%d)", pw);
+        }
         ESP_LOGI(TAG, "THINK reason=%u forced=%d score=%.2f",
                  s_reason, s_forced, s_trig_score);
         if (s_brain(prompt, reply, sizeof(reply)) != 0 || !reply[0]) {
@@ -495,6 +507,12 @@ static void think_task(void *arg)
             s_last_silent = true;
             goto out;
         }
+        /* B-6c: appraisal 快通道提取(可缺席=跳过; 评价与行动正交,
+         * parse 拒收轮的评价仍有界生效——剂量映射端钳位兜底) */
+        struct soul_appraisal appr;
+        if (soul_appraisal_extract(fixed, &appr))
+            soul_appraisal_submit(&appr);
+
         act_normalize(fixed, sizeof(fixed));
         fixed_len = strlen(fixed);   /* normalize 改写, 刷新(P2-6) */
 

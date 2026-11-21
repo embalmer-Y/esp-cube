@@ -102,6 +102,10 @@ static int  s_prev_playing;            /* 上一拍播放位(跃迁检测) */
 static volatile float s_mood_req;
 static volatile uint32_t s_mood_seq;      /* 奇数=待施 */
 
+/* B-6c 深思 appraisal 漏斗(think_task 提交, tick 消费剂量) */
+static struct soul_appraisal s_appr;
+static volatile uint32_t s_appr_seq;      /* 奇数=待施 */
+
 /* ---- 快照(读写短临界区) ---- */
 struct soul_snap {
     struct kd_output drive;
@@ -278,6 +282,15 @@ bool soul_strip_mood_tag(char *text)
     s_mood_seq++;                     /* 奇数槽=待施(单写者序) */
     if ((s_mood_seq & 1) == 0) s_mood_seq++;
     return true;
+}
+
+/* ---- 深思 appraisal 快通道(B-6c; think_task 提交, tick 消费) ---- */
+void soul_appraisal_submit(const struct soul_appraisal *a)
+{
+    if (a == NULL) return;
+    s_appr = *a;                    /* 单飞单写者: 序号升奇前写完 */
+    s_appr_seq++;                   /* 奇数槽=待施(单写者序, 同 mood 槽) */
+    if ((s_appr_seq & 1) == 0) s_appr_seq++;
 }
 
 /* ---- 消费出口 ---- */
@@ -559,19 +572,44 @@ static void soul_task(void *arg)
         };
         kd_step(s_ticks, &din, &kd_out);
 
-        /* 4) mood 重评价(先于 ke_step: 本拍情绪即受影响) */
+        /* 4) 快层重评价汇流(mood 标签 D4 通道 ∪ B-6c 深思 appraisal;
+         * ke_reappraisal 单槽——同拍两源合并单请求, 防后写覆盖;
+         * 先于 ke_step: 本拍情绪即受影响) */
+        float reap = 0;
+        uint64_t reap_id = 0;
+        bool mood_hit = false;
         if ((s_mood_seq & 1) && s_mood_req != 0) {
-            struct ke_reappraisal r = {
-                .delta = s_mood_req,
-                .receipt_id = s_mood_seq,
-            };
-            if (ke_reappraisal_request(&r) == 0) {
+            reap = s_mood_req;
+            reap_id = s_mood_seq;
+            mood_hit = true;
+        }
+        if (s_appr_seq & 1) {
+            /* B-6c appraisal 剂量(§11.6 保守形态: 规则表=主通道, LLM
+             * 评价=hint, 经 soul_dose 固定映射走官方注入口) */
+            float soc, eth, val;
+            soul_dose_compute(&s_appr, &soc, &eth, &val);
+            if (soc != 0) kd_inject_social(soc);
+            if (eth > 0) ke_ethics_dose(eth);
+            if (val != 0) {
+                reap += val;
+                if (reap > 0.2f) reap = 0.2f;
+                if (reap < -0.2f) reap = -0.2f;
+                if (reap_id == 0)
+                    reap_id = (uint64_t)s_appr_seq | (1ULL << 32);
+            }
+            s_appr_seq++;             /* 消费完清奇偶(待施槽复位) */
+            ESP_LOGI(TAG, "appraisal dose social=%+.3f ethics=%.3f val=%+.2f",
+                     soc, eth, val);
+        }
+        if (reap_id != 0 && reap != 0) {
+            struct ke_reappraisal r = { .delta = reap, .receipt_id = reap_id };
+            if (ke_reappraisal_request(&r) == 0 && mood_hit) {
                 ESP_LOGI(TAG, "mood reappraisal %+.2f", s_mood_req);
                 soul_moodgate_record(s_mood_req);
             }
-            s_mood_seq++;             /* 消费完清奇偶(待施槽复位) */
         }
-        
+        if (mood_hit)
+            s_mood_seq++;             /* 消费完清奇偶(待施槽复位) */
 
         /* 5) 感受态(S2: 增 mood 慢层输入 drive_sat 与安抚 soothe) */
         struct ke_inputs kin = {

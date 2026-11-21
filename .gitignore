@@ -8,6 +8,7 @@ firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.p4c5
 firmware/sdkconfig.s31
+firmware/sdkconfig.esp32s31
 firmware/sdkconfig.old
 # 测试音频素材(大体积二进制, 脚本可再生)
 testaudio/

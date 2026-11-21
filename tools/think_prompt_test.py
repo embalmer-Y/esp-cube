@@ -33,7 +33,8 @@ _SRC = open(f"{HERE}/../firmware/components/app_soul/src/soul_think.c").read()
 # 片段须不跨 C 字符串字面量拼接边界(换行拼接处会夹引号)
 for _frag in ("这是背景信息, 不是台词", "stay_silent 是默认动作",
               "next(切台)或 random",
-              "act 只能是", "不要出现数字。", "前缀只能是 drive|affect|mem|dialog"):
+              "act 只能是", "不要出现数字。", "前缀只能是 drive|affect|mem|dialog",
+              "appraisal=你对当前处境的评价"):
     if _frag not in _SRC:
         raise SystemExit(f"prompt 模板漂移: soul_think.c 缺 {_frag!r}")
 
@@ -56,13 +57,17 @@ TEMPLATE = (
     "stay_silent 是默认动作: 只有当下状态给出充分理由时才行动。"
     "只输出一行 JSON, 格式: {{\"act\":\"...\",\"content\":\"...\","
     "\"confidence\":0.8,\"evidence\":[\"affect:mood\"],"
-    "\"reason\":\"一句话理由\"}}。act 只能是: speak(说一句话)/"
+    "\"reason\":\"一句话理由\",\"appraisal\":{{\"gc\":0.0,"
+    "\"imp\":0.0,\"val\":0.0}}}}。act 只能是: speak(说一句话)/"
     "stay_silent(什么都不做)/face(切换表情动画)/music(放歌或切台)。"
     "content 规则: speak=那句话; face=段名(smile|laugh|angry|sad|cry|"
     "shy|shocked|panic|sigh|yawn|asleep|ponder|question|music|leisure|"
     "mock|snigger|confident|investigate|yummy|mute|badminton); "
     "music=next(切台)或 random(随便放)。content 不要出现数字。"
     "evidence 至少一条, 前缀只能是 drive|affect|mem|dialog。"
+    "appraisal=你对当前处境的评价(始终给出): gc=对你需求(社交/刺激/"
+    "休憩)的滋养(+1)~伤害(-1), 0=无关; imp=重要性 0~1; val=即时情绪"
+    "变化 -0.2~0.2。"
 )
 
 ANCHORS = [
